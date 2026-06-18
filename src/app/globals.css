@@ -1,0 +1,312 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --screen-height: 100vh;
+    --background: 0 0% 100%;
+    --foreground: 224 71.4% 4.1%;
+    --sidebar-background: 220 13% 96%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 224 71.4% 4.1%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 224 71.4% 4.1%;
+
+    --primary: 26 61% 36%;
+    --primary-foreground: 210 20% 98%;
+
+    --secondary: 220 13% 91%;
+    --secondary-foreground: 220.9 39.3% 11%;
+
+    --muted: 220 14.3% 95.9%;
+    --muted-foreground: 220 8.9% 46.1%;
+
+    --accent: 37 100% 48%;
+    --accent-foreground: 26 61% 20%;
+
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+
+    --border: 220 13% 91%;
+    --input: 220 13% 91%;
+    --ring: 26 61% 36%;
+    --radius: 0.5rem;
+
+    --chart-1: 12 76% 61%;
+    --chart-2: 173 58% 39%;
+    --chart-3: 197 37% 24%;
+    --chart-4: 43 74% 66%;
+    --chart-5: 27 87% 67%;
+  }
+
+  .dark {
+    --background: 224 71.4% 4.1%;
+    --foreground: 210 20% 98%;
+    --sidebar-background: 224 71.4% 6%;
+
+    --card: 224 71.4% 4.1%;
+    --card-foreground: 210 20% 98%;
+
+    --popover: 224 71.4% 4.1%;
+    --popover-foreground: 210 20% 98%;
+
+    --primary: 37 90% 55%;
+    --primary-foreground: 210 20% 98%;
+    
+    --secondary: 215 27.9% 16.9%;
+    --secondary-foreground: 210 20% 98%;
+
+    --muted: 215 27.9% 16.9%;
+    --muted-foreground: 217.9 10.6% 64.9%;
+
+    --accent: 37 90% 55%;
+    --accent-foreground: 210 20% 98%;
+
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 85.7% 97.3%;
+
+    --border: 215 27.9% 16.9%;
+    --input: 215 27.9% 16.9%;
+    --ring: 37 90% 55%;
+    --radius: 0.5rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--primary) / 0.3) transparent;
+  }
+  html {
+    background-color: hsl(var(--background));
+    min-height: 100%;
+    /* No global overflow-x:hidden — overflowing content must remain reachable.
+       Horizontal overflow is contained by the scrollable <main> region and by
+       per-component scroll containers, never clipped at the document level. */
+    font-size: 90%;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    min-height: var(--screen-height);
+  }
+
+  /* For Webkit browsers (Chrome, Safari, etc.) */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--primary) / 0.3);
+    border-radius: 8px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--primary) / 0.5);
+  }
+
+  [data-sidebar='sidebar'] {
+    background-color: hsl(var(--sidebar-background));
+  }
+  .dark [data-sidebar='sidebar'] {
+    background-color: hsl(var(--sidebar-background));
+  }
+}
+
+@layer components {
+    .prose {
+        table {
+            @apply border-collapse w-full my-4;
+        }
+        td, th {
+            @apply border border-border p-2 text-left;
+        }
+        th {
+            @apply bg-muted;
+        }
+        tr:nth-child(even) {
+            @apply bg-muted/50;
+        }
+    }
+
+    .glass-surface {
+      @apply bg-card/60 backdrop-blur-md border border-border/50 shadow-sm;
+    }
+
+    .glass-panel {
+      @apply bg-popover/80 backdrop-blur-lg border border-border/50 shadow-xl;
+    }
+}
+
+@layer utilities {
+    .word-break-break-word {
+      word-break: break-word;
+    }
+
+    .no-scrollbar::-webkit-scrollbar {
+      display: none;
+    }
+    .no-scrollbar {
+      -ms-overflow-style: none;
+      scrollbar-width: none;
+    }
+
+    /* ── Horizontal overflow strategy ─────────────────────────────────────────
+       Reusable scrollable region: content that exceeds the viewport width
+       stays reachable via smooth horizontal scrolling instead of being clipped. */
+    .scroll-x {
+      overflow-x: auto;
+      overflow-y: hidden;
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior-x: contain;
+      scrollbar-width: thin;
+    }
+
+    /* Pure-CSS scroll shadows: subtle fades on the left/right edges that appear
+       only when there is more content to scroll to in that direction. */
+    .scroll-shadow {
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior-x: contain;
+      background:
+        linear-gradient(to right, hsl(var(--card)) 30%, hsl(var(--card) / 0)) left center,
+        linear-gradient(to left, hsl(var(--card)) 30%, hsl(var(--card) / 0)) right center,
+        radial-gradient(farthest-side at 0 50%, hsl(var(--foreground) / 0.12), transparent) left center,
+        radial-gradient(farthest-side at 100% 50%, hsl(var(--foreground) / 0.12), transparent) right center;
+      background-repeat: no-repeat;
+      background-size: 36px 100%, 36px 100%, 14px 100%, 14px 100%;
+      background-attachment: local, local, scroll, scroll;
+    }
+
+    /* Sticky table header for tall data tables inside a vertical scroll region. */
+    .sticky-head thead th {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      background-color: hsl(var(--muted));
+    }
+
+    @media print {
+      body {
+          background-color: white !important;
+          color: black !important;
+          -webkit-print-color-adjust: exact;
+          print-color-adjust: exact;
+      }
+      .printable-memo-container {
+        display: block !important;
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: auto;
+        margin: 0;
+        padding: 2rem;
+      }
+
+      .printable-memo {
+          box-shadow: none !important;
+          border: none !important;
+          padding: 0 !important;
+          margin: 0 !important;
+          font-family: 'Times New Roman', Times, serif !important;
+          font-size: 12pt;
+          color: black !important;
+          background-color: white !important;
+      }
+      .printable-memo-header, .printable-memo-content {
+          padding: 0 !important;
+      }
+      .printable-memo-header div {
+          font-family: 'Times New Roman', Times, serif !important;
+      }
+       .printable-memo .prose {
+          font-family: 'Times New Roman', Times, serif !important;
+          font-size: 12pt;
+          color: black !important;
+      }
+      .printable-memo .prose table, 
+      .printable-memo .prose td, 
+      .printable-memo .prose th {
+          border-color: #000 !important;
+          color: #000 !important;
+      }
+      .printable-memo * {
+        color: black !important;
+        background-color: transparent !important;
+        border-color: black !important;
+      }
+      .no-print {
+        display: none !important;
+      }
+    }
+
+    .paper-plane-loader {
+      width: 50px;
+      height: 50px;
+      position: relative;
+    }
+
+    .paper-plane-loader__plane {
+      fill: hsl(var(--primary));
+      width: 48px;
+      height: 48px;
+      position: absolute;
+      animation: paper-plane-fly 2s ease-in-out infinite;
+    }
+
+    @keyframes paper-plane-fly {
+      0% {
+        transform: translate(-10px, 10px) rotate(-10deg);
+        opacity: 0;
+      }
+      20% {
+        transform: translate(0, 0) rotate(0deg);
+        opacity: 1;
+      }
+      80% {
+        transform: translate(50px, -20px) rotate(15deg);
+        opacity: 1;
+      }
+      100% {
+        transform: translate(60px, -25px) rotate(20deg);
+        opacity: 0;
+      }
+    }
+    
+    .onboarding-highlight {
+      box-shadow: 0 0 0 4px hsl(var(--background)), 0 0 0 6px hsl(var(--primary));
+      border-radius: var(--radius); /* Default, will be overridden by JS */
+      transition: all 0.3s ease-in-out;
+      pointer-events: none;
+      z-index: 9998;
+      position: fixed;
+    }
+
+    .onboarding-pulse {
+        animation: pulse-highlight 2s infinite ease-out;
+    }
+
+    @keyframes pulse-highlight {
+        0% {
+            box-shadow: 0 0 0 4px hsl(var(--background)), 0 0 0 6px hsl(var(--primary) / 0.7);
+        }
+        70% {
+            box-shadow: 0 0 0 4px hsl(var(--background)), 0 0 0 20px hsl(var(--primary) / 0);
+        }
+        100% {
+            box-shadow: 0 0 0 4px hsl(var(--background)), 0 0 0 6px hsl(var(--primary) / 0);
+        }
+    }
+  }

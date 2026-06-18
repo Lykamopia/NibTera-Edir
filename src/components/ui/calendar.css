@@ -1,0 +1,174 @@
+.calendar-surface {
+  padding: 0.75rem;
+}
+
+.calendar-surface .rdrCalendarWrapper {
+  background-color: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.75rem;
+  box-shadow: 0 20px 40px -20px rgba(15, 23, 42, 0.35);
+  color: hsl(var(--foreground));
+}
+
+.calendar-surface .rdrDateDisplayWrapper,
+.calendar-surface .rdrDefinedRangesWrapper {
+  display: none;
+}
+
+.calendar-surface .rdrMonths {
+  gap: 1.5rem;
+}
+
+.calendar-surface .rdrMonth {
+  padding: 0 0.65rem 0.75rem;
+  width: auto !important;
+}
+
+.calendar-surface .rdrMonthAndYearWrapper {
+  align-items: center;
+  padding: 0.25rem 0.75rem 0.5rem;
+  margin-bottom: 0.5rem;
+  border-bottom: 1px solid hsl(var(--border));
+}
+
+.calendar-surface .rdrMonthPicker select,
+.calendar-surface .rdrYearPicker select {
+  border-radius: 0.5rem;
+  border: 1px solid transparent;
+  background-color: hsl(var(--muted));
+  color: hsl(var(--foreground));
+  padding: 0.25rem 0.75rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.calendar-surface .rdrMonthPicker select:focus,
+.calendar-surface .rdrYearPicker select:focus {
+  outline: none;
+  border-color: hsl(var(--primary));
+  box-shadow: 0 0 0 1px hsl(var(--primary) / 0.2);
+}
+
+.calendar-surface .rdrNextPrevButton {
+  background: transparent;
+  border: 0;
+  color: hsl(var(--muted-foreground));
+  width: 2rem;
+  height: 2rem;
+  border-radius: 9999px;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.calendar-surface .rdrNextPrevButton:hover {
+  background-color: hsl(var(--accent) / 0.35);
+  color: hsl(var(--foreground));
+}
+
+.calendar-surface .rdrMonth .rdrWeekDays {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(2.35rem, 1fr));
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
+}
+
+.calendar-surface .rdrMonth .rdrWeekDay {
+  color: hsl(var(--muted-foreground));
+  font-size: 0.8rem;
+  font-weight: 500;
+  text-transform: capitalize;
+}
+
+.calendar-surface .rdrMonth .rdrWeek {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(2.35rem, 1fr));
+  gap: 0.4rem;
+  margin: 0;
+}
+
+.calendar-surface .rdrDay {
+  border-radius: 0.6rem;
+  height: 2.4rem;
+  margin: 0;
+  transition: transform 0.2s ease, background-color 0.2s ease, color 0.2s ease;
+}
+
+.calendar-surface .rdrDayNumber span {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: hsl(var(--foreground));
+}
+
+.calendar-surface .rdrDayDisabled,
+.calendar-surface .rdrDayPassive {
+  opacity: 0.45;
+}
+
+.calendar-surface .rdrDayDisabled .rdrDayNumber span,
+.calendar-surface .rdrDayPassive .rdrDayNumber span {
+  color: hsl(var(--muted-foreground));
+}
+
+.calendar-surface .rdrDay:not(.rdrDayPassive):not(.rdrDayDisabled):hover {
+  transform: translateY(-1px);
+  background-color: hsl(var(--accent) / 0.4);
+}
+
+.calendar-surface .rdrDayToday .rdrDayNumber span {
+  border: 1px solid hsl(var(--primary));
+  background-color: hsl(var(--primary) / 0.1);
+  border-radius: 0.6rem;
+  color: hsl(var(--primary));
+}
+
+.calendar-surface .rdrDay.rdrDaySelected,
+.calendar-surface .rdrDay.rdrInRange,
+.calendar-surface .rdrDay.rdrStartEdge,
+.calendar-surface .rdrDay.rdrEndEdge {
+  background-color: hsl(var(--primary) / 0.25);
+}
+
+.calendar-surface .rdrDay.rdrDaySelected,
+.calendar-surface .rdrDay.rdrStartEdge,
+.calendar-surface .rdrDay.rdrEndEdge {
+  background-color: hsl(var(--primary));
+}
+
+.calendar-surface .rdrDay.rdrDaySelected .rdrDayNumber span,
+.calendar-surface .rdrDay.rdrStartEdge .rdrDayNumber span,
+.calendar-surface .rdrDay.rdrEndEdge .rdrDayNumber span {
+  color: hsl(var(--primary-foreground));
+}
+
+.calendar-surface .rdrDay.rdrInRange:not(.rdrStartEdge):not(.rdrEndEdge) .rdrDayNumber span {
+  color: hsl(var(--primary));
+}
+
+.calendar-surface .rdrDay:focus-visible {
+  outline: 2px solid hsl(var(--primary));
+  outline-offset: 2px;
+}
+
+.calendar-surface[data-range-selected="false"] .rdrDay.rdrDaySelected,
+.calendar-surface[data-range-selected="false"] .rdrDay.rdrStartEdge,
+.calendar-surface[data-range-selected="false"] .rdrDay.rdrEndEdge,
+.calendar-surface[data-range-selected="false"] .rdrDay.rdrInRange {
+  background-color: transparent;
+}
+
+.calendar-surface[data-range-selected="false"] .rdrDay.rdrDaySelected .rdrDayNumber span {
+  color: hsl(var(--foreground));
+}
+
+.dark .calendar-surface .rdrDay.rdrInRange:not(.rdrStartEdge):not(.rdrEndEdge) .rdrDayNumber span {
+  color: hsl(var(--primary-foreground));
+}
+
+.dark .calendar-surface .rdrDay.rdrDaySelected .rdrDayNumber span,
+.dark .calendar-surface .rdrDay.rdrStartEdge .rdrDayNumber span,
+.dark .calendar-surface .rdrDay.rdrEndEdge .rdrDayNumber span {
+    color: hsl(var(--background));
+}
+
+.dark .calendar-surface .rdrDayToday .rdrDayNumber span {
+  color: hsl(var(--primary-foreground));
+}

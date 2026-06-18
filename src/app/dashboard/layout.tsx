@@ -1,0 +1,30 @@
+
+import React, { Suspense } from "react"
+import { getLoggedInUser } from "@/app/actions/auth";
+import { getGeneralSettings } from "@/app/actions/settings";
+import { DashboardLayoutClient } from "./dashboard-layout-client";
+import { SettingsProvider } from "@/components/settings-provider";
+import { HoneycombLoader } from "@/components/honeycomb-loader";
+import { NotificationProvider } from "@/components/notification-provider";
+
+
+export default async function DashboardLayout({
+  children,
+}: {
+  children: React.ReactNode
+}) {
+    const user = await getLoggedInUser();
+    const generalSettings = await getGeneralSettings();
+
+  return (
+    <Suspense fallback={<div className="h-screen w-full flex items-center justify-center bg-background"><HoneycombLoader /></div>}>
+        <NotificationProvider>
+            <SettingsProvider initialSettings={generalSettings}>
+                <DashboardLayoutClient user={user}>
+                    {children}
+                </DashboardLayoutClient>
+            </SettingsProvider>
+        </NotificationProvider>
+    </Suspense>
+  )
+}

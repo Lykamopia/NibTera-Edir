@@ -1,0 +1,1096 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                       String                         @id @default(cuid())
+  name                     String?
+  email                    String?                        @unique
+  title                    String? // Job title from AD
+  emailVerified            DateTime?
+  avatar                   String?
+  hashedPassword           String?
+  status                   String                         @default("active") // active, inactive
+  onboardingCompleted      Boolean                        @default(false)
+  tokenVersion             Int                            @default(0)
+  failedLoginAttempts      Int                            @default(0)
+  lockoutUntil             DateTime?
+  lastIp                   String?
+  lastUserAgent            String?
+  createdAt                DateTime                       @default(now())
+  updatedAt                DateTime                       @updatedAt
+  roleId                   String?
+  officeId                 String?
+  departmentId             String?
+  divisionId               String?
+  districtId               String?
+  branchId                 String?
+  createdPlans             Plan[]                         @relation("CreatedPlans")
+  headOfficeApprovedPlans  Plan[]                         @relation("HeadOfficeApprovedPlans")
+  rejectedPlans            Plan[]                         @relation("RejectedPlans")
+  planAssignments             PlanAssignment[]
+  submittedBranchAllocations  PlanAssignment[]             @relation("BranchAllocSubmittedBy")
+  approvedBranchAllocations   PlanAssignment[]             @relation("BranchAllocApprovedBy")
+  rejectedBranchAllocations   PlanAssignment[]             @relation("BranchAllocRejectedBy")
+  role                        Role?                        @relation(fields: [roleId], references: [id])
+  office                   Office?                        @relation(fields: [officeId], references: [id])
+  department               Department?                    @relation(fields: [departmentId], references: [id])
+  division                 Division?                      @relation(fields: [divisionId], references: [id])
+  district                 District?                      @relation(fields: [districtId], references: [id])
+  branch                   Branch?                        @relation(fields: [branchId], references: [id])
+  securityLogs             SecurityLog[]
+  dailyTargets             SalesOfficerDailyTarget[]
+  submittedAchievements    SalesOfficerDailyAchievement[] @relation("SubmittedAchievements")
+  approvedAchievements     SalesOfficerDailyAchievement[] @relation("ApprovedAchievements")
+  createdLeads             Lead[]                         @relation("LeadCreator")
+  assignedLeads            Lead[]                         @relation("LeadAssignee")
+  leadAssignmentsFrom      LeadAssignmentHistory[]        @relation("LeadAssignmentFrom")
+  leadAssignmentsTo        LeadAssignmentHistory[]        @relation("LeadAssignmentTo")
+  leadAssignmentsBy        LeadAssignmentHistory[]        @relation("LeadAssignmentBy")
+  leadProgressSubmissions  LeadProgressUpdate[]           @relation("LeadProgressSubmissions")
+  leadProgressApprovals    LeadProgressUpdate[]           @relation("LeadProgressApprovals")
+  leadComments             LeadComment[]                  @relation("LeadComments")
+  createdJobs              Job[]                          @relation("JobCreator")
+  jobApprovalHistory       JobApprovalHistory[]
+  createdCustomers         Customer[]                     @relation("CreatedCustomers")
+  customerInteractions     CustomerInteraction[]          @relation("CustomerInteractions")
+  reviewedGPSVerifications GPSVerification[]              @relation("ReviewedGPSVerifications")
+  gamificationProfile      GamificationProfile?           @relation("UserGamification")
+  earnedBadges             EarnedBadge[]                  @relation("UserEarnedBadges")
+  pointTransactions        PointTransaction[]             @relation("UserPointTransactions")
+  leaderboardEntries       LeaderboardEntry[]
+  customerVisits           CustomerVisit[]                @relation("CustomerVisitCreator")
+  staffKpiTargets          StaffKpiTarget[]               @relation("StaffKpiTargets")
+  assignedStaffKpiTargets  StaffKpiTarget[]               @relation("AssignedStaffKpiTargets")
+  kpiProgressSubmissions   StaffKpiProgress[]             @relation("KpiProgressSubmissions")
+  kpiProgressApprovals     StaffKpiProgress[]             @relation("KpiProgressApprovals")
+  notifications            Notification[]
+  createdMonthlyPlans      MonthlyDailyPlan[]             @relation("CreatedMonthlyPlans")
+  assignedMonthlyPlans     MonthlyDailyPlan[]             @relation("AssignedMonthlyPlans")
+  dailyPlanSubmissions     DailyPlanAchievement[]         @relation("DailyPlanSubmissions")
+  dailyPlanApprovals       DailyPlanAchievement[]         @relation("DailyPlanApprovals")
+  kpiAdjustments           KpiAdjustment[]                @relation("KpiAdjustmentsCreated")
+
+  @@index([roleId])
+  @@index([officeId])
+  @@index([departmentId])
+  @@index([divisionId])
+  @@index([districtId])
+  @@index([branchId])
+}
+
+// Lead Management Models
+enum LeadStatus {
+  NEW
+  QUALIFIED
+  IN_PROGRESS
+  PROPOSAL
+  NEGOTIATION
+  WON
+  LOST
+  ON_HOLD
+  PENDING_CLOSURE
+  CLOSED
+}
+
+model Lead {
+  id             String     @id @default(cuid())
+  title          String
+  description    String?
+  targetLocation String?
+  latitude       Decimal?
+  longitude      Decimal?
+  deadline       DateTime?
+  status         LeadStatus @default(NEW)
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+  createdById    String
+  assignedToId   String?
+  branchId       String?
+  districtId     String?
+  customerId     String?
+
+  createdBy       User                    @relation("LeadCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  assignedTo      User?                   @relation("LeadAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  branch          Branch?                 @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  district        District?               @relation("DistrictLeads", fields: [districtId], references: [id], onDelete: SetNull)
+  customer        Customer?               @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  kpis            LeadKpi[]
+  assignments     LeadAssignmentHistory[]
+  progressUpdates LeadProgressUpdate[]
+  comments        LeadComment[]
+  jobs            Job[]
+
+  @@index([createdById])
+  @@index([assignedToId])
+  @@index([branchId])
+  @@index([districtId])
+  @@index([status])
+  @@index([customerId])
+}
+
+model LeadKpi {
+  id                String   @id @default(cuid())
+  leadId            String
+  kpiName           String
+  kpiConfigId       String?
+  staffKpiTargetId  String?  // optional link to a staff KPI target for bi-directional sync
+  targetValue       Decimal
+  totalAmount       Decimal?
+  currency          KpiCurrency?
+  currentValue      Decimal  @default(0)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  lead            Lead            @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  kpiConfig       KpiConfig?      @relation(fields: [kpiConfigId], references: [id], onDelete: SetNull)
+  staffKpiTarget  StaffKpiTarget? @relation("LeadKpiStaffTarget", fields: [staffKpiTargetId], references: [id], onDelete: SetNull)
+  kpiUpdates      LeadKpiUpdate[]
+
+  @@index([leadId])
+  @@index([kpiConfigId])
+  @@index([staffKpiTargetId])
+}
+
+model LeadProgressUpdate {
+  id           String   @id @default(cuid())
+  leadId       String
+  submittedById String
+  notes        String
+  updateType   String   @default("INCREMENTAL") // INCREMENTAL | COMPLETION
+  status       String   @default("PENDING")     // PENDING | APPROVED | REJECTED
+  approvedById String?
+  approvalNote String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  lead                Lead               @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  submittedBy         User               @relation("LeadProgressSubmissions", fields: [submittedById], references: [id], onDelete: Cascade)
+  approvedBy          User?              @relation("LeadProgressApprovals", fields: [approvedById], references: [id], onDelete: SetNull)
+  kpiUpdates          LeadKpiUpdate[]
+  staffProgressEntries StaffKpiProgress[] @relation("LeadSyncedProgress")
+
+  @@index([leadId])
+  @@index([submittedById])
+  @@index([status])
+}
+
+model LeadKpiUpdate {
+  id               String   @id @default(cuid())
+  progressUpdateId String
+  leadKpiId        String
+  value            Decimal
+  createdAt        DateTime @default(now())
+
+  progressUpdate LeadProgressUpdate @relation(fields: [progressUpdateId], references: [id], onDelete: Cascade)
+  leadKpi        LeadKpi            @relation(fields: [leadKpiId], references: [id], onDelete: Cascade)
+
+  @@index([progressUpdateId])
+  @@index([leadKpiId])
+}
+
+model LeadComment {
+  id        String   @id @default(cuid())
+  leadId    String
+  userId    String
+  comment   String
+  createdAt DateTime @default(now())
+
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  user User @relation("LeadComments", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([leadId])
+  @@index([userId])
+}
+
+model LeadAssignmentHistory {
+  id             String   @id @default(cuid())
+  leadId         String
+  assignedFromId String?
+  assignedToId   String?
+  assignedById   String
+  note           String?
+  createdAt      DateTime @default(now())
+
+  lead         Lead  @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  assignedFrom User? @relation("LeadAssignmentFrom", fields: [assignedFromId], references: [id], onDelete: SetNull)
+  assignedTo   User? @relation("LeadAssignmentTo", fields: [assignedToId], references: [id], onDelete: SetNull)
+  assignedBy   User  @relation("LeadAssignmentBy", fields: [assignedById], references: [id], onDelete: Cascade)
+
+  @@index([leadId])
+  @@index([assignedById])
+  @@index([assignedToId])
+}
+
+// KPI Configuration Model
+enum KpiType {
+  COUNT
+  CURRENCY
+}
+
+enum KpiCurrency {
+  ETB
+  USD
+  EUR
+  GBP
+}
+
+// A configurable business grouping for KPIs (e.g. Deposits, Loans, Digital
+// Banking). Stored as a first-class, admin-managed entity so reports, dashboards
+// and target planning can group / filter / summarize KPIs by category without
+// hardcoding the taxonomy. KPIs reference a category via KpiConfig.categoryId.
+model KpiCategory {
+  id          String      @id @default(cuid())
+  name        String      @unique
+  code        String?     @unique // optional stable key, e.g. DEPOSITS
+  description String?
+  color       String? // hex tint for badges / dashboard widgets
+  order       Int         @default(0) // display/sort order across reports
+  isActive    Boolean     @default(true)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  kpis        KpiConfig[]
+
+  @@index([isActive])
+  @@index([order])
+}
+
+model KpiConfig {
+  id                       String        @id @default(cuid())
+  name                     String        @unique
+  description              String?
+  requiresDistrictApproval Boolean       @default(false)
+  isActive                 Boolean       @default(true)
+  allowsManualAdjustment   Boolean       @default(false)
+  type                     KpiType       @default(COUNT)
+  currency                 KpiCurrency?
+  categoryId               String?
+  createdAt                DateTime      @default(now())
+  updatedAt                DateTime      @updatedAt
+  category                 KpiCategory?  @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  kpiValues                JobKpiValue[]
+  leadKpis                 LeadKpi[]
+  monthlyPlans             MonthlyDailyPlan[] @relation("KpiConfigMonthlyPlans")
+  adjustments              KpiAdjustment[]
+
+  @@index([requiresDistrictApproval])
+  @@index([isActive])
+  @@index([categoryId])
+}
+
+// Manual KPI adjustment — records that the reported (system) achievement for a
+// currency/quantity KPI differs from the actual end-of-day value, WITHOUT
+// mutating the original achievement data. Surfaced read-only in the RM Report.
+model KpiAdjustment {
+  id               String    @id @default(cuid())
+  kpiConfigId      String
+  kpiName          String // snapshot of the KPI name (matches plan metric name)
+  branchId         String
+  districtId       String? // snapshot for scope filtering
+  fiscalYear       Int
+  fiscalMonth      Int // 1=July … 12=June
+  originalValue    Decimal // approved achievement at time of entry (snapshot, audit)
+  adjustmentAmount Decimal // positive or negative
+  reason           String
+  createdById      String
+  createdAt        DateTime  @default(now())
+
+  kpiConfig KpiConfig @relation(fields: [kpiConfigId], references: [id], onDelete: Cascade)
+  branch    Branch    @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  createdBy User      @relation("KpiAdjustmentsCreated", fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([branchId, fiscalYear, fiscalMonth])
+  @@index([kpiConfigId])
+  @@index([districtId])
+}
+
+// Job Submission Models
+enum ApprovalStage {
+  BRANCH
+  DISTRICT
+}
+
+model Job {
+  id                       String   @id @default(cuid())
+  title                    String
+  activityType             String
+  notes                    String?
+  customerName             String?
+  customerContact          String?
+  activityDate             DateTime
+  latitude                 Decimal?
+  longitude                Decimal?
+  status                   String   @default("PENDING_BRANCH") // PENDING_BRANCH, APPROVED_BRANCH, PENDING_DISTRICT, APPROVED, REJECTED, RESUBMITTED
+  requiresDistrictApproval Boolean  @default(false)
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+  createdById              String
+  planId                   String?
+  branchId                 String?
+  customerId               String?
+  leadId                   String?
+
+  createdBy        User                  @relation("JobCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  plan             Plan?                 @relation(fields: [planId], references: [id], onDelete: SetNull)
+  branch           Branch?               @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  customer         Customer?             @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  lead             Lead?                 @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  kpiValues        JobKpiValue[]
+  approvalHistory  JobApprovalHistory[]
+  interactions     CustomerInteraction[]
+  gpsVerifications GPSVerification[]
+  customerVisits   CustomerVisit[]       @relation("CustomerVisitJob")
+
+  @@index([createdById])
+  @@index([planId])
+  @@index([branchId])
+  @@index([activityDate])
+  @@index([status])
+  @@index([requiresDistrictApproval])
+  @@index([customerId])
+  @@index([leadId])
+}
+
+model JobKpiValue {
+  id            String   @id @default(cuid())
+  jobId         String
+  kpiName       String
+  kpiConfigId   String?
+  achievedValue Decimal
+  createdAt     DateTime @default(now())
+
+  job       Job        @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  kpiConfig KpiConfig? @relation(fields: [kpiConfigId], references: [id], onDelete: SetNull)
+
+  @@index([jobId])
+  @@index([kpiConfigId])
+}
+
+model JobApprovalHistory {
+  id           String        @id @default(cuid())
+  jobId        String
+  stage        ApprovalStage
+  status       String // APPROVED, REJECTED
+  comment      String?
+  approvedById String
+  createdAt    DateTime      @default(now())
+
+  job        Job  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  approvedBy User @relation(fields: [approvedById], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
+  @@index([approvedById])
+}
+
+// Organizational scope a role is intended for. Governs which managers may
+// assign it: branch managers may assign BRANCH roles only; district managers
+// BRANCH + DISTRICT; head-office managers any scope (still bounded by the
+// permission-subset hierarchy rule). Enforced both in the UI and the API.
+enum RoleScope {
+  BRANCH
+  DISTRICT
+  HEAD_OFFICE
+}
+
+model Role {
+  id          String    @id @default(cuid())
+  name        String    @unique
+  permissions String
+  scope       RoleScope @default(BRANCH)
+  users       User[]
+}
+
+model Office {
+  id          String       @id @default(cuid())
+  name        String       @unique
+  code        String       @unique
+  type        String       @default("branch_office") // branch_office, division_office
+  users       User[]
+  departments Department[]
+  districts   District[]
+}
+
+model Department {
+  id        String     @id @default(cuid())
+  name      String     @unique
+  code      String     @unique
+  officeId  String
+  office    Office     @relation(fields: [officeId], references: [id])
+  divisions Division[]
+  users     User[]
+}
+
+model Division {
+  id           String     @id @default(cuid())
+  name         String     @unique
+  code         String     @unique
+  departmentId String
+  department   Department @relation(fields: [departmentId], references: [id])
+  users        User[]
+}
+
+model District {
+  id              String           @id @default(cuid())
+  name            String           @unique
+  code            String           @unique
+  officeId        String
+  office          Office           @relation(fields: [officeId], references: [id])
+  branches        Branch[]
+  users           User[]
+  planAssignments PlanAssignment[]
+  customers       Customer[]
+  leads           Lead[]           @relation("DistrictLeads")
+}
+
+model Branch {
+  id                String             @id @default(cuid())
+  name              String             @unique
+  code              String             @unique
+  districtId        String
+  district          District           @relation(fields: [districtId], references: [id])
+  users             User[]
+  branchPlanTargets BranchPlanTarget[]
+  leads             Lead[]
+  jobs              Job[]
+  customers         Customer[]
+  customerVisits    CustomerVisit[]    @relation("CustomerVisitBranch")
+  staffKpiTargets   StaffKpiTarget[]
+  monthlyPlans      MonthlyDailyPlan[] @relation("BranchMonthlyPlans")
+  kpiAdjustments    KpiAdjustment[]
+  latitude          Decimal?
+  longitude         Decimal?
+}
+
+// Customer Management Models
+model Customer {
+  id         String   @id @default(cuid())
+  // Basic Info
+  firstName  String
+  lastName   String
+  email      String?
+  phone      String?
+  address    String?
+  city       String?
+  region     String?
+  postalCode String?
+  latitude   Decimal?
+  longitude  Decimal?
+  notes      String?
+
+  // New Fields
+  accountNumber         String?
+  districtId            String?
+  businessSector        String? // Work Area/Sector e.g., Manufacturing, Retail
+  businessType          String? // e.g., Sole Proprietorship, PLC
+  businessLicenseNumber String?
+  annualRevenueRange    String? // e.g., Below 1M ETB, 1M-5M ETB, etc.
+  employeeRange         String? // Number of employees range
+
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
+  branchId     String?
+  createdById  String
+  interactions CustomerInteraction[]
+  jobs         Job[]
+  leads        Lead[]
+  visits       CustomerVisit[]       @relation("CustomerVisitCustomer")
+
+  branch    Branch?   @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  district  District? @relation(fields: [districtId], references: [id], onDelete: SetNull)
+  createdBy User      @relation("CreatedCustomers", fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([branchId])
+  @@index([districtId])
+  @@index([createdById])
+}
+
+model CustomerInteraction {
+  id              String   @id @default(cuid())
+  type            String // "VISIT", "CALL", "EMAIL", "MEETING"
+  summary         String
+  details         String?
+  interactionDate DateTime
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  customerId      String
+  createdById     String
+  jobId           String?
+  visitId         String?
+
+  customer  Customer       @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  createdBy User           @relation("CustomerInteractions", fields: [createdById], references: [id], onDelete: Cascade)
+  job       Job?           @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  visit     CustomerVisit? @relation(fields: [visitId], references: [id], onDelete: SetNull)
+
+  @@index([customerId])
+  @@index([createdById])
+  @@index([jobId])
+  @@index([visitId])
+}
+
+// Customer Visit Tracking Models
+enum VisitOutcome {
+  SUCCESSFUL
+  NO_CONTACT
+  RESCHEDULED
+  NOT_INTERESTED
+  COMPLAINT_RESOLVED
+  OTHER
+}
+
+model CustomerVisit {
+  id             String       @id @default(cuid())
+  visitDate      DateTime
+  startTime      DateTime?
+  endTime        DateTime?
+  latitude       Decimal?
+  longitude      Decimal?
+  locationNotes  String?
+  outcome        VisitOutcome
+  notes          String?
+  followUpNeeded Boolean      @default(false)
+  followUpDate   DateTime?
+  followUpAction String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  customerId     String
+  createdById    String
+  branchId       String?
+  jobId          String?
+
+  customer     Customer              @relation("CustomerVisitCustomer", fields: [customerId], references: [id], onDelete: Cascade)
+  createdBy    User                  @relation("CustomerVisitCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  branch       Branch?               @relation("CustomerVisitBranch", fields: [branchId], references: [id], onDelete: SetNull)
+  job          Job?                  @relation("CustomerVisitJob", fields: [jobId], references: [id], onDelete: SetNull)
+  interactions CustomerInteraction[]
+
+  @@index([customerId])
+  @@index([createdById])
+  @@index([branchId])
+  @@index([jobId])
+  @@index([visitDate])
+  @@index([outcome])
+}
+
+// GPS Verification Models
+enum GPSVerificationStatus {
+  VERIFIED
+  FLAGGED
+  REVIEWED
+}
+
+model GPSVerification {
+  id                  String                @id @default(cuid())
+  jobId               String
+  submissionLatitude  Decimal
+  submissionLongitude Decimal
+  targetLatitude      Decimal?
+  targetLongitude     Decimal?
+  targetType          String? // "CUSTOMER", "LEAD", "BRANCH"
+  targetId            String?
+  distanceMeters      Decimal?
+  status              GPSVerificationStatus @default(VERIFIED)
+  reviewedById        String?
+  reviewComment       String?
+  reviewedAt          DateTime?
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+
+  job        Job   @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  reviewedBy User? @relation("ReviewedGPSVerifications", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@index([jobId])
+  @@index([status])
+  @@index([targetType])
+  @@index([targetId])
+}
+
+model PasswordResetToken {
+  email     String   @id
+  token     String   @unique
+  expires   DateTime
+  createdAt DateTime @default(now())
+}
+
+model Setting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}
+
+model EmailLog {
+  id              String   @id @default(cuid())
+  createdAt       DateTime @default(now())
+  from            String
+  to              String
+  cc              String?
+  subject         String
+  body            String   @db.Text
+  status          String // 'sent' or 'failed'
+  triggerEvent    String?
+  relatedEntityId String?
+  errorMessage    String?
+  messageId       String?
+}
+
+model SecurityLog {
+  id         String   @id @default(cuid())
+  timestamp  DateTime @default(now())
+  actorId    String?
+  event      String
+  severity   String // e.g., INFO, WARN, CRITICAL
+  ipAddress  String?
+  userAgent  String?
+  details    String   @db.Text
+  targetId   String? // ID of the entity being acted upon (e.g., user id, role id)
+  targetType String? // Type of the entity (e.g., 'User', 'Role')
+
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([actorId])
+  @@index([event])
+  @@index([timestamp])
+}
+
+// Plan Management Models
+model Plan {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  type        String // 'annual', 'quarterly', 'custom'
+  quarter     Int? // 1,2,3,4 for quarterly plans
+  startDate   DateTime
+  endDate     DateTime
+  status      String // 'draft', 'pending_head_office_approval', 'active', 'rejected', 'closed'
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Plan approval fields
+  headOfficeApprovedById String?
+  headOfficeApprovedAt   DateTime?
+  rejectionReason        String?
+  rejectedById           String?
+  rejectedAt             DateTime?
+
+  createdBy            User             @relation("CreatedPlans", fields: [createdById], references: [id], onDelete: Cascade)
+  headOfficeApprovedBy User?            @relation("HeadOfficeApprovedPlans", fields: [headOfficeApprovedById], references: [id], onDelete: SetNull)
+  rejectedBy           User?            @relation("RejectedPlans", fields: [rejectedById], references: [id], onDelete: SetNull)
+  metrics              PlanMetric[]
+  assignments          PlanAssignment[]
+  planTargets          PlanTarget[]
+  jobs                 Job[]
+}
+
+model PlanMetric {
+  id        String   @id @default(cuid())
+  name      String
+  unit      String // e.g., 'ETB', 'count', 'percentage'
+  group     String? // Logical category: 'Acquisition', 'Activation', 'Revenue', 'Engagement', etc.
+  order     Int      @default(0)
+  planId    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  plan                Plan                 @relation(fields: [planId], references: [id], onDelete: Cascade)
+  planTargets         PlanTarget[]         @relation("PlanMetricTargets")
+  districtPlanTargets DistrictPlanTarget[] @relation("PlanMetricDistrictTargets")
+}
+
+model PlanTarget {
+  id        String   @id @default(cuid())
+  planId    String
+  metricId  String
+  value     Decimal
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  plan   Plan       @relation(fields: [planId], references: [id], onDelete: Cascade)
+  metric PlanMetric @relation("PlanMetricTargets", fields: [metricId], references: [id], onDelete: Cascade)
+}
+
+model PlanAssignment {
+  id           String   @id @default(cuid())
+  planId       String
+  districtId   String
+  assignedById String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  branchAllocationStatus          String    @default("draft")
+  branchAllocationSubmittedAt     DateTime?
+  branchAllocationSubmittedById   String?
+  branchAllocationApprovedAt      DateTime?
+  branchAllocationApprovedById    String?
+  branchAllocationRejectedAt      DateTime?
+  branchAllocationRejectedById    String?
+  branchAllocationRejectionReason String?
+
+  plan                        Plan                 @relation(fields: [planId], references: [id], onDelete: Cascade)
+  district                    District             @relation(fields: [districtId], references: [id], onDelete: Cascade)
+  assignedBy                  User                 @relation(fields: [assignedById], references: [id], onDelete: Cascade)
+  branchAllocationSubmittedBy User?                @relation("BranchAllocSubmittedBy", fields: [branchAllocationSubmittedById], references: [id], onDelete: SetNull)
+  branchAllocationApprovedBy  User?                @relation("BranchAllocApprovedBy", fields: [branchAllocationApprovedById], references: [id], onDelete: SetNull)
+  branchAllocationRejectedBy  User?                @relation("BranchAllocRejectedBy", fields: [branchAllocationRejectedById], references: [id], onDelete: SetNull)
+  districtTargets             DistrictPlanTarget[]
+}
+
+model DistrictPlanTarget {
+  id           String   @id @default(cuid())
+  assignmentId String
+  metricId     String
+  plannedValue Decimal
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  assignment       PlanAssignment          @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  metric           PlanMetric              @relation("PlanMetricDistrictTargets", fields: [metricId], references: [id], onDelete: Cascade)
+  monthlyTargets   DistrictMonthlyTarget[]
+  branchAllocations BranchPlanTarget[]
+  staffKpiTargets  StaffKpiTarget[]
+}
+
+model DistrictMonthlyTarget {
+  id               String   @id @default(cuid())
+  districtTargetId String
+  month            Int // 1=July, 2=Aug, 3=Sep, 4=Oct, 5=Nov, 6=Dec, 7=Jan, 8=Feb, 9=Mar, 10=Apr, 11=May, 12=Jun (Ethiopian fiscal year)
+  plannedValue     Decimal
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  districtTarget DistrictPlanTarget @relation(fields: [districtTargetId], references: [id], onDelete: Cascade)
+
+  @@unique([districtTargetId, month])
+}
+
+model BranchPlanTarget {
+  id               String   @id @default(cuid())
+  districtTargetId String
+  branchId         String
+  month            Int // 1-12 (Ethiopian fiscal year: 1=July ... 12=June)
+  value            Decimal
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  districtTarget DistrictPlanTarget        @relation(fields: [districtTargetId], references: [id], onDelete: Cascade)
+  branch         Branch                    @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  dailyTargets   SalesOfficerDailyTarget[]
+}
+
+// Public Holiday Model
+model PublicHoliday {
+  id        String   @id @default(cuid())
+  name      String
+  date      DateTime
+  category  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([date])
+  @@index([date])
+  @@index([date, category])
+}
+
+// Sales Officer Daily Target Model
+model SalesOfficerDailyTarget {
+  id                    String   @id @default(cuid())
+  branchPlanTargetId    String
+  userId                String
+  date                  DateTime
+  dailyTarget           Decimal // Daily calculated target
+  backlogCarriedForward Decimal // Backlog from previous days
+  totalRequired         Decimal // dailyTarget + backlogCarriedForward
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  branchPlanTarget BranchPlanTarget               @relation(fields: [branchPlanTargetId], references: [id], onDelete: Cascade)
+  user             User                           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  achievements     SalesOfficerDailyAchievement[]
+
+  @@unique([branchPlanTargetId, userId, date])
+  @@index([userId])
+  @@index([date])
+}
+
+// Sales Officer Daily Achievement Model
+model SalesOfficerDailyAchievement {
+  id                String    @id @default(cuid())
+  dailyTargetId     String
+  achievedValue     Decimal
+  submittedByUserId String
+  status            String    @default("pending_approval") // pending_approval, approved, rejected
+  approvedById      String?
+  approvedAt        DateTime?
+  rejectionFeedback String?
+  submittedAt       DateTime  @default(now())
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  dailyTarget      SalesOfficerDailyTarget @relation(fields: [dailyTargetId], references: [id], onDelete: Cascade)
+  submittedByUser  User                    @relation("SubmittedAchievements", fields: [submittedByUserId], references: [id], onDelete: Cascade)
+  approvedBy       User?                   @relation("ApprovedAchievements", fields: [approvedById], references: [id], onDelete: SetNull)
+  kpiProgressEntry StaffKpiProgress?       @relation("DailyAchievementProgress")
+
+  @@index([dailyTargetId])
+  @@index([submittedByUserId])
+  @@index([status])
+}
+
+// Gamification Models
+model GamificationProfile {
+  id             String    @id @default(cuid())
+  userId         String    @unique
+  totalPoints    Int       @default(0)
+  currentLevel   Int       @default(1)
+  xp             Int       @default(0)
+  rank           Int?
+  streak         Int       @default(0)
+  longestStreak  Int       @default(0)
+  lastActiveDate DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  user User @relation("UserGamification", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Badge {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String
+  icon        String?
+  type        String // "ACHIEVEMENT", "MILESTONE", "SPECIAL"
+  criteria    Json
+  points      Int      @default(0)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  earnedBadges EarnedBadge[]
+}
+
+model EarnedBadge {
+  id        String   @id @default(cuid())
+  userId    String
+  badgeId   String
+  earnedAt  DateTime @default(now())
+  createdAt DateTime @default(now())
+
+  user  User  @relation("UserEarnedBadges", fields: [userId], references: [id], onDelete: Cascade)
+  badge Badge @relation(fields: [badgeId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, badgeId])
+  @@index([userId])
+  @@index([badgeId])
+}
+
+model PointTransaction {
+  id          String   @id @default(cuid())
+  userId      String
+  points      Int
+  type        String // "ACHIEVEMENT", "BADGE", "KPI", "BONUS", "LEVEL_UP"
+  description String
+  relatedId   String?
+  relatedType String? // "JOB", "ACHIEVEMENT", "BADGE"
+  createdAt   DateTime @default(now())
+
+  user User @relation("UserPointTransactions", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+enum LeaderboardPeriod {
+  DAILY
+  WEEKLY
+  MONTHLY
+  QUARTERLY
+  YEARLY
+  ALL_TIME
+}
+
+model LeaderboardSnapshot {
+  id          String            @id @default(cuid())
+  period      LeaderboardPeriod
+  periodStart DateTime
+  periodEnd   DateTime
+  createdAt   DateTime          @default(now())
+
+  entries LeaderboardEntry[]
+
+  @@index([period, periodStart])
+}
+
+model LeaderboardEntry {
+  id          String   @id @default(cuid())
+  snapshotId  String
+  userId      String
+  rank        Int
+  totalPoints Int
+  createdAt   DateTime @default(now())
+
+  snapshot LeaderboardSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+  user     User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([snapshotId, userId])
+  @@index([snapshotId])
+}
+
+// Staff KPI Target — period-based (monthly / quarterly / annual) assignments
+model StaffKpiTarget {
+  id               String   @id @default(cuid())
+  userId           String
+  assignedById     String
+  districtTargetId String
+  branchId         String
+  frequency        String   // 'monthly' | 'quarterly' | 'annual'
+  fiscalYear       Int      // calendar year that starts the fiscal year (July)
+  periodMonth      Int?     // 1-12, populated for monthly frequency
+  periodQuarter    Int?     // 1-4, populated for quarterly frequency
+  // e.g. "2024-M03", "2024-Q2", "2024-Y"  — used for the unique constraint
+  periodKey        String
+  targetValue      Decimal
+  notes            String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  user            User               @relation("StaffKpiTargets", fields: [userId], references: [id], onDelete: Cascade)
+  assignedBy      User               @relation("AssignedStaffKpiTargets", fields: [assignedById], references: [id])
+  districtTarget  DistrictPlanTarget @relation(fields: [districtTargetId], references: [id], onDelete: Cascade)
+  branch          Branch             @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  progressEntries StaffKpiProgress[]
+  linkedLeadKpis  LeadKpi[]          @relation("LeadKpiStaffTarget")
+
+  @@unique([userId, districtTargetId, periodKey])
+  @@index([userId])
+  @@index([branchId])
+  @@index([districtTargetId])
+  @@index([fiscalYear])
+}
+
+// Maker-checker progress submissions against period-based staff KPI targets
+model StaffKpiProgress {
+  id                   String    @id @default(cuid())
+  targetId             String
+  submittedById        String
+  progressDate         DateTime
+  value                Decimal   @db.Decimal(15, 2)
+  notes                String?
+  status               String    @default("pending_approval") // pending_approval | approved | rejected
+  approvedById         String?
+  approvedAt           DateTime?
+  rejectionFeedback    String?
+  submittedAt          DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  leadProgressUpdateId String?   // set when this entry was auto-created from a lead progress approval
+  dailyAchievementId   String?   @unique // set when auto-synced from an approved SalesOfficerDailyAchievement
+
+  target              StaffKpiTarget               @relation(fields: [targetId], references: [id], onDelete: Cascade)
+  submittedBy         User                         @relation("KpiProgressSubmissions", fields: [submittedById], references: [id])
+  approvedBy          User?                        @relation("KpiProgressApprovals", fields: [approvedById], references: [id])
+  leadProgressUpdate  LeadProgressUpdate?          @relation("LeadSyncedProgress", fields: [leadProgressUpdateId], references: [id], onDelete: SetNull)
+  dailyAchievement    SalesOfficerDailyAchievement? @relation("DailyAchievementProgress", fields: [dailyAchievementId], references: [id], onDelete: SetNull)
+
+  @@index([targetId])
+  @@index([submittedById])
+  @@index([status])
+  @@index([progressDate])
+  @@index([leadProgressUpdateId])
+  @@index([dailyAchievementId])
+}
+
+model Notification {
+  id         String    @id @default(cuid())
+  userId     String
+  type       String
+  priority   String    @default("normal")
+  title      String
+  body       String
+  linkUrl    String?
+  entityId   String?
+  entityType String?
+  read       Boolean   @default(false)
+  readAt     DateTime?
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, read, createdAt])
+  @@index([userId, createdAt])
+}
+
+// Daily Target Planning Models
+model MonthlyDailyPlan {
+  id          String   @id @default(cuid())
+  branchId    String
+  createdById String
+  userId      String
+  kpiConfigId String?
+  metricName  String
+  fiscalYear  Int
+  fiscalMonth Int
+  totalTarget Decimal
+  status      String   @default("draft")
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  branch    Branch     @relation("BranchMonthlyPlans", fields: [branchId], references: [id], onDelete: Cascade)
+  createdBy User       @relation("CreatedMonthlyPlans", fields: [createdById], references: [id])
+  user      User       @relation("AssignedMonthlyPlans", fields: [userId], references: [id])
+  kpiConfig KpiConfig? @relation("KpiConfigMonthlyPlans", fields: [kpiConfigId], references: [id], onDelete: SetNull)
+  entries   DailyPlanEntry[]
+
+  @@unique([userId, kpiConfigId, fiscalYear, fiscalMonth])
+  @@index([branchId])
+  @@index([userId])
+  @@index([fiscalYear, fiscalMonth])
+  @@index([status])
+}
+
+model DailyPlanEntry {
+  id          String   @id @default(cuid())
+  planId      String
+  date        DateTime
+  targetValue Decimal
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  plan         MonthlyDailyPlan       @relation(fields: [planId], references: [id], onDelete: Cascade)
+  achievements DailyPlanAchievement[]
+
+  @@unique([planId, date])
+  @@index([planId])
+  @@index([date])
+}
+
+model DailyPlanAchievement {
+  id                String    @id @default(cuid())
+  entryId           String
+  submittedById     String
+  value             Decimal
+  notes             String?
+  status            String    @default("pending")
+  approvedById      String?
+  approvedAt        DateTime?
+  rejectionFeedback String?
+  submittedAt       DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  entry       DailyPlanEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  submittedBy User           @relation("DailyPlanSubmissions", fields: [submittedById], references: [id])
+  approvedBy  User?          @relation("DailyPlanApprovals", fields: [approvedById], references: [id], onDelete: SetNull)
+
+  @@index([entryId])
+  @@index([submittedById])
+  @@index([status])
+}
