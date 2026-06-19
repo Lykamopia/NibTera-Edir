@@ -1,12 +1,15 @@
 import type { Permission } from '@/lib/types';
+import type { ApprovalModule } from '@prisma/client';
 
 // ─── Page-based permission registry ─────────────────────────────────────────
+// Drives route gating (middleware), sidebar/command-palette filtering, and the
+// "first accessible page" resolution after login.
 
 export interface PageAction {
   id: Permission;
   label: string;
   description: string;
-  isAccess?: boolean; // primary page-access permission
+  isAccess?: boolean;
 }
 
 export interface PagePermissionDef {
@@ -15,431 +18,203 @@ export interface PagePermissionDef {
   path: string;
   icon: string; // lucide icon name
   section: string;
-  accessPermissions: Permission[]; // user needs at least one to see the page
+  accessPermissions: Permission[]; // user needs at least one to see/enter the page
   actions: PageAction[];
 }
 
 export const PAGE_SECTIONS = [
-  { id: 'main', label: 'Main Pages' },
-  { id: 'admin-users', label: 'Admin — Users & Access' },
-  { id: 'admin-org', label: 'Admin — Organization Structure' },
-  { id: 'admin-settings', label: 'Admin — Settings & System' },
+  { id: 'main', label: 'Main' },
+  { id: 'operations', label: 'Operations' },
+  { id: 'governance', label: 'Governance' },
+  { id: 'admin', label: 'Administration' },
+  { id: 'system', label: 'System' },
 ] as const;
 
 export const pagePermissions: PagePermissionDef[] = [
-  // ── Main Pages ──────────────────────────────────────────────────────────────
   {
     id: 'dashboard', label: 'Dashboard', path: '/dashboard', icon: 'LayoutDashboard', section: 'main',
     accessPermissions: ['view_dashboard'],
+    actions: [{ id: 'view_dashboard', label: 'View Dashboard', description: 'Access the dashboard', isAccess: true }],
+  },
+  {
+    id: 'members', label: 'Members', path: '/dashboard/members', icon: 'Users', section: 'operations',
+    accessPermissions: ['view_members', 'manage_members'],
     actions: [
-      { id: 'view_dashboard', label: 'View Dashboard', description: 'Can access the main dashboard', isAccess: true },
+      { id: 'view_members', label: 'View Members', description: 'View member profiles and lists', isAccess: true },
+      { id: 'manage_members', label: 'Manage Members', description: 'Create and edit members' },
+      { id: 'remove_members', label: 'Remove Members', description: 'Request member removal (maker)' },
+      { id: 'approve_member_removal', label: 'Approve Member Removal', description: 'Authorize member removals (checker)' },
+      { id: 'review_member_documents', label: 'Review Documents', description: 'Approve/reject relative documents' },
     ],
   },
   {
-    id: 'plans', label: 'Plans & Targets', path: '/dashboard/plans', icon: 'BarChart3', section: 'main',
-    accessPermissions: ['view_plans', 'create_plans', 'approve_plans_head_office', 'edit_active_plans', 'allocate_plans_to_districts', 'approve_district_allocations', 'allocate_district_plans_to_branches', 'approve_branch_allocations'],
+    id: 'payments', label: 'Payments', path: '/dashboard/payments', icon: 'CreditCard', section: 'operations',
+    accessPermissions: ['view_payments', 'record_payment'],
     actions: [
-      { id: 'view_plans', label: 'View Plans', description: 'Can view organizational plans', isAccess: true },
-      { id: 'create_plans', label: 'Create Plans', description: 'Can create new plans' },
-      { id: 'edit_active_plans', label: 'Edit Active Plans', description: 'Can modify plans after they become active' },
-      { id: 'approve_plans_head_office', label: 'Approve (Head Office)', description: 'Can approve plans at head office level' },
-      { id: 'allocate_plans_to_districts', label: 'Allocate to Districts', description: 'Can allocate plans to districts' },
-      { id: 'approve_district_allocations', label: 'Approve District Allocs.', description: 'Can approve plan allocations to districts' },
-      { id: 'allocate_district_plans_to_branches', label: 'Allocate to Branches', description: 'Can allocate district plans to branches' },
-      { id: 'approve_branch_allocations', label: 'Approve Branch Allocs.', description: 'Can approve plan allocations to branches' },
+      { id: 'view_payments', label: 'View Payments', description: 'View payments and contributions', isAccess: true },
+      { id: 'record_payment', label: 'Record Payment', description: 'Record a manual payment (maker)' },
+      { id: 'approve_payment', label: 'Approve Payment', description: 'Authorize recorded payments (checker)' },
+      { id: 'waive_penalty', label: 'Waive Penalty', description: 'Request a penalty waiver (maker)' },
+      { id: 'approve_penalty_waiver', label: 'Approve Penalty Waiver', description: 'Authorize penalty waivers (checker)' },
+      { id: 'void_payment', label: 'Void Payment', description: 'Void a transaction' },
     ],
   },
   {
-    id: 'branch-allocation', label: 'Branch Allocation', path: '/dashboard/branch-allocation', icon: 'Users', section: 'main',
-    accessPermissions: ['allocate_district_plans_to_branches', 'approve_branch_allocations'],
+    id: 'approvals', label: 'Approvals Center', path: '/dashboard/approvals', icon: 'CheckSquare', section: 'operations',
+    accessPermissions: [
+      'view_approvals', 'approve_payment', 'approve_member_removal', 'approve_penalty_waiver',
+      'approve_emergency_claim', 'approve_emergency_disbursement', 'approve_asset_issuance', 'approve_rule_change',
+    ],
+    actions: [{ id: 'view_approvals', label: 'View Approvals', description: 'Access the Approvals Center', isAccess: true }],
+  },
+  {
+    id: 'emergencies', label: 'Emergencies', path: '/dashboard/emergencies', icon: 'Siren', section: 'operations',
+    accessPermissions: ['view_emergencies', 'manage_emergencies'],
     actions: [
-      { id: 'allocate_district_plans_to_branches', label: 'Allocate to Branches', description: 'Can allocate district plans to branch targets', isAccess: true },
-      { id: 'approve_branch_allocations', label: 'Approve Branch Allocations', description: 'Can approve plan allocations to branches', isAccess: true },
+      { id: 'view_emergencies', label: 'View Emergencies', description: 'View emergency claims', isAccess: true },
+      { id: 'manage_emergencies', label: 'Manage Emergencies', description: 'Report and process claims' },
+      { id: 'approve_emergency_claim', label: 'Approve Claim', description: 'Authorize emergency claims (checker)' },
+      { id: 'approve_emergency_disbursement', label: 'Approve Disbursement', description: 'Authorize disbursements (checker)' },
     ],
   },
   {
-    id: 'branch-targets', label: 'Branch Targets', path: '/dashboard/branch-targets', icon: 'Target', section: 'main',
-    accessPermissions: ['view_branch_targets', 'assign_staff_targets'],
+    id: 'events', label: 'Events', path: '/dashboard/events', icon: 'CalendarDays', section: 'operations',
+    accessPermissions: ['view_events', 'manage_events'],
     actions: [
-      { id: 'view_branch_targets', label: 'View Branch Targets', description: 'Can view the branch targets page and allocated KPI overview', isAccess: true },
-      { id: 'assign_staff_targets', label: 'Assign Staff Targets', description: 'Can assign KPI targets to branch staff and bulk-import via Excel' },
+      { id: 'view_events', label: 'View Events', description: 'View events and attendance', isAccess: true },
+      { id: 'manage_events', label: 'Manage Events', description: 'Create and edit events' },
+      { id: 'finalize_attendance', label: 'Finalize Attendance', description: 'Finalize attendance and apply penalties' },
     ],
   },
   {
-    id: 'daily-targets', label: 'Daily Targets', path: '/dashboard/daily-targets', icon: 'CalendarCheck', section: 'main',
-    accessPermissions: ['view_daily_targets'],
+    id: 'assets', label: 'Assets', path: '/dashboard/assets', icon: 'Package', section: 'operations',
+    accessPermissions: ['view_assets', 'manage_assets'],
     actions: [
-      { id: 'view_daily_targets', label: 'View Daily Targets', description: 'Can view daily targets and achievements', isAccess: true },
-      { id: 'view_performance', label: 'View Performance', description: 'Can view performance metrics' },
-      { id: 'import_daily_targets', label: 'Import Daily Targets', description: 'Can import daily targets from Excel files' },
+      { id: 'view_assets', label: 'View Assets', description: 'View asset inventory', isAccess: true },
+      { id: 'manage_assets', label: 'Manage Assets', description: 'Add/edit/issue assets' },
+      { id: 'manage_asset_categories', label: 'Manage Categories', description: 'Manage asset categories' },
+      { id: 'approve_asset_issuance', label: 'Approve Issuance', description: 'Authorize asset issuance (checker)' },
     ],
   },
   {
-    id: 'my-targets', label: 'My Targets', path: '/dashboard/my-targets', icon: 'Crosshair', section: 'main',
-    accessPermissions: ['view_my_targets'],
+    id: 'rules', label: 'Rules & Bylaws', path: '/dashboard/rules', icon: 'Scale', section: 'governance',
+    accessPermissions: ['view_rules', 'manage_rules'],
     actions: [
-      { id: 'view_my_targets', label: 'View My Targets', description: 'Can view own KPI targets and progress', isAccess: true },
-      { id: 'submit_kpi_progress', label: 'Submit Progress', description: 'Can submit progress updates against KPI targets' },
+      { id: 'view_rules', label: 'View Rules', description: 'View rules, tiers, and change log', isAccess: true },
+      { id: 'manage_rules', label: 'Manage Rules', description: 'Propose rule/bylaw changes (maker)' },
+      { id: 'approve_rule_change', label: 'Approve Rule Change', description: 'Authorize rule changes (checker)' },
     ],
   },
   {
-    id: 'approvals', label: 'Approvals Center', path: '/dashboard/approvals', icon: 'CheckSquare', section: 'main',
-    accessPermissions: ['approve_branch_allocations', 'manage_branch_allocations', 'approve_staff_progress', 'manage_jobs', 'manage_leads', 'assign_leads', 'assign_staff_targets', 'manage_general_settings'],
+    id: 'committee', label: 'Committee Oversight', path: '/dashboard/oversight', icon: 'Gauge', section: 'governance',
+    accessPermissions: ['view_committee_oversight'],
+    actions: [{ id: 'view_committee_oversight', label: 'View Oversight', description: 'Read-only committee dashboard', isAccess: true }],
+  },
+  {
+    id: 'audit', label: 'Audit Log', path: '/dashboard/audit', icon: 'ScrollText', section: 'governance',
+    accessPermissions: ['view_audit_log', 'manage_audit_log'],
     actions: [
-      { id: 'approve_branch_allocations', label: 'Approve Branch Allocations', description: 'Can approve plan allocations to branches', isAccess: true },
-      { id: 'manage_branch_allocations', label: 'Manage Branch Allocations', description: 'Can review and manage staff daily achievement approvals', isAccess: true },
-      { id: 'approve_staff_progress', label: 'Approve Staff Progress', description: 'Can review and approve/reject staff KPI progress submissions', isAccess: true },
-      { id: 'manage_jobs', label: 'Manage Jobs', description: 'Can approve/reject job submissions', isAccess: true },
-      { id: 'manage_leads', label: 'Manage Leads', description: 'Can manage leads requiring approval', isAccess: true },
-      { id: 'assign_leads', label: 'Assign Leads', description: 'Can assign leads to staff', isAccess: true },
-      { id: 'assign_staff_targets', label: 'Assign Staff Targets', description: 'Can assign KPI targets requiring approval', isAccess: true },
-      { id: 'manage_general_settings', label: 'Manage Settings', description: 'Admin-level access to approvals', isAccess: true },
+      { id: 'view_audit_log', label: 'View Audit Log', description: 'View the audit trail', isAccess: true },
+      { id: 'manage_audit_log', label: 'Manage Audit Log', description: 'Archive/export audit entries' },
     ],
   },
   {
-    id: 'leads', label: 'Leads', path: '/dashboard/leads', icon: 'TrendingUp', section: 'main',
-    accessPermissions: ['view_leads'],
-    actions: [
-      { id: 'view_leads', label: 'View Leads', description: 'Can view sales leads', isAccess: true },
-      { id: 'create_leads', label: 'Create Leads', description: 'Can create new leads' },
-      { id: 'manage_leads', label: 'Manage Leads', description: 'Can create, edit, and view sales leads' },
-      { id: 'assign_leads', label: 'Assign Leads', description: 'Can assign leads to sales officers' },
-      { id: 'update_assigned_leads', label: 'Update Assigned Leads', description: 'Can update leads assigned to themselves' },
-    ],
+    id: 'payment-log', label: 'Payment Log', path: '/dashboard/payment-log', icon: 'ReceiptText', section: 'governance',
+    accessPermissions: ['view_payment_log'],
+    actions: [{ id: 'view_payment_log', label: 'View Payment Log', description: 'View all transactions', isAccess: true }],
   },
+  // ── Administration (Edir-scoped) ─────────────────────────────────────────
   {
-    id: 'jobs', label: 'Jobs', path: '/dashboard/jobs', icon: 'Briefcase', section: 'main',
-    accessPermissions: ['view_jobs'],
-    actions: [
-      { id: 'view_jobs', label: 'View Jobs', description: 'Can view job submissions', isAccess: true },
-      { id: 'submit_jobs', label: 'Submit Jobs', description: 'Can submit completed sales activities' },
-      { id: 'manage_jobs', label: 'Manage Jobs', description: 'Can approve/reject job submissions and view all jobs' },
-      { id: 'manage_gps_verification', label: 'GPS Verification', description: 'Can review and manage GPS verification for job submissions' },
-    ],
-  },
-  {
-    id: 'customers', label: 'Customers', path: '/dashboard/customers', icon: 'Users2', section: 'main',
-    accessPermissions: ['view_customers'],
-    actions: [
-      { id: 'view_customers', label: 'View Customers', description: 'Can view customer profiles', isAccess: true },
-      { id: 'manage_customers', label: 'Manage Customers', description: 'Can create, edit, and manage customer profiles' },
-    ],
-  },
-  {
-    id: 'customer-visits', label: 'Customer Visits', path: '/dashboard/customer-visits', icon: 'UsersRound', section: 'main',
-    accessPermissions: ['view_customer_visits'],
-    actions: [
-      { id: 'view_customer_visits', label: 'View Customer Visits', description: 'Can view customer visit records', isAccess: true },
-    ],
-  },
-  {
-    id: 'rm-report', label: 'RM Report', path: '/dashboard/rm-report', icon: 'FileBarChart2', section: 'main',
-    accessPermissions: ['view_rm_report'],
-    actions: [
-      { id: 'view_rm_report', label: 'View RM Report', description: 'Can view the district-level RM Report and branch performance rankings', isAccess: true },
-      { id: 'adjust_kpi', label: 'Adjust KPI Values', description: 'Can record manual +/- adjustments (with a reason) for adjustment-enabled KPIs' },
-    ],
-  },
-  {
-    id: 'performance-reports', label: 'Performance Reports', path: '/dashboard/performance-reports', icon: 'BarChart3', section: 'main',
-    accessPermissions: ['view_reports'],
-    actions: [
-      { id: 'view_reports', label: 'View Reports', description: 'Can access and view the performance reporting dashboard', isAccess: true },
-      { id: 'view_all_reports', label: 'View All Reports', description: 'Can view system-wide reporting data and analytics' },
-    ],
-  },
-  // ── Admin — Users & Access ─────────────────────────────────────────────────
-  {
-    id: 'admin-users', label: 'Users', path: '/dashboard/admin/users', icon: 'Users', section: 'admin-users',
+    id: 'admin-users', label: 'Users', path: '/dashboard/admin/users', icon: 'UserCog', section: 'admin',
     accessPermissions: ['view_users', 'manage_users'],
     actions: [
-      { id: 'view_users', label: 'View Users', description: 'Can view user profiles and lists', isAccess: true },
-      { id: 'manage_users', label: 'Manage Users', description: 'Can create, edit, and delete users' },
-      { id: 'import_users', label: 'Import Users', description: 'Can import users from CSV files' },
-      { id: 'lock_user', label: 'Lock Users', description: 'Can lock user accounts' },
-      { id: 'unlock_user', label: 'Unlock Users', description: 'Can unlock user accounts' },
-      { id: 'reset_password', label: 'Reset Password', description: "Can reset another user's password" },
+      { id: 'view_users', label: 'View Users', description: 'View user accounts', isAccess: true },
+      { id: 'manage_users', label: 'Manage Users', description: 'Invite, edit, deactivate users' },
+      { id: 'reset_password', label: 'Reset Password', description: "Reset a user's password" },
+      { id: 'lock_user', label: 'Lock User', description: 'Lock a user account' },
+      { id: 'unlock_user', label: 'Unlock User', description: 'Unlock a user account' },
     ],
   },
   {
-    id: 'admin-roles', label: 'Roles & Permissions', path: '/dashboard/admin/roles', icon: 'ShieldCheck', section: 'admin-users',
+    id: 'admin-roles', label: 'Roles', path: '/dashboard/admin/roles', icon: 'ShieldCheck', section: 'admin',
     accessPermissions: ['view_roles', 'manage_roles'],
     actions: [
-      { id: 'view_roles', label: 'View Roles', description: 'Can view role definitions', isAccess: true },
-      { id: 'manage_roles', label: 'Manage Roles', description: 'Can create, edit, and manage roles and permissions' },
-    ],
-  },
-  // ── Admin — Organization Structure ────────────────────────────────────────
-  {
-    id: 'admin-offices', label: 'Offices', path: '/dashboard/admin/offices', icon: 'Building', section: 'admin-org',
-    accessPermissions: ['view_offices', 'manage_offices'],
-    actions: [
-      { id: 'view_offices', label: 'View Offices', description: 'Can view office information', isAccess: true },
-      { id: 'manage_offices', label: 'Manage Offices', description: 'Can create, edit, and delete offices' },
-      { id: 'import_offices', label: 'Import Offices', description: 'Can import offices from CSV files' },
+      { id: 'view_roles', label: 'View Roles', description: 'View role definitions', isAccess: true },
+      { id: 'manage_roles', label: 'Manage Roles', description: 'Create and edit roles' },
     ],
   },
   {
-    id: 'admin-departments', label: 'Departments', path: '/dashboard/admin/departments', icon: 'Network', section: 'admin-org',
-    accessPermissions: ['view_departments', 'manage_departments'],
+    id: 'admin-settings', label: 'Edir Settings', path: '/dashboard/admin/settings', icon: 'Settings', section: 'admin',
+    accessPermissions: ['manage_edir_settings', 'manage_committee'],
     actions: [
-      { id: 'view_departments', label: 'View Departments', description: 'Can view department information', isAccess: true },
-      { id: 'manage_departments', label: 'Manage Departments', description: 'Can create, edit, and delete departments' },
-      { id: 'import_departments', label: 'Import Departments', description: 'Can import departments from CSV files' },
+      { id: 'manage_edir_settings', label: 'Manage Settings', description: 'Fees, currency, penalties, thresholds', isAccess: true },
+      { id: 'manage_committee', label: 'Manage Committee', description: 'Invite/role/remove committee members' },
     ],
   },
+  // ── System (Super Admin) ─────────────────────────────────────────────────
   {
-    id: 'admin-divisions', label: 'Divisions', path: '/dashboard/admin/divisions', icon: 'Briefcase', section: 'admin-org',
-    accessPermissions: ['view_divisions', 'manage_divisions'],
-    actions: [
-      { id: 'view_divisions', label: 'View Divisions', description: 'Can view division information', isAccess: true },
-      { id: 'manage_divisions', label: 'Manage Divisions', description: 'Can create, edit, and delete divisions' },
-      { id: 'import_divisions', label: 'Import Divisions', description: 'Can import divisions from CSV files' },
-    ],
-  },
-  {
-    id: 'admin-districts', label: 'Districts', path: '/dashboard/admin/districts', icon: 'MapPin', section: 'admin-org',
-    accessPermissions: ['view_districts', 'manage_districts'],
-    actions: [
-      { id: 'view_districts', label: 'View Districts', description: 'Can view district information', isAccess: true },
-      { id: 'manage_districts', label: 'Manage Districts', description: 'Can create, edit, and delete districts' },
-      { id: 'import_districts', label: 'Import Districts', description: 'Can import districts from CSV files' },
-    ],
-  },
-  {
-    id: 'admin-branches', label: 'Branches', path: '/dashboard/admin/branches', icon: 'Store', section: 'admin-org',
-    accessPermissions: ['view_branches', 'manage_branches'],
-    actions: [
-      { id: 'view_branches', label: 'View Branches', description: 'Can view branch information', isAccess: true },
-      { id: 'manage_branches', label: 'Manage Branches', description: 'Can create, edit, and delete branches' },
-      { id: 'import_branches', label: 'Import Branches', description: 'Can import branches from CSV files' },
-    ],
-  },
-  {
-    id: 'admin-kpi-config', label: 'KPI Configuration', path: '/dashboard/admin/kpi-config', icon: 'Target', section: 'admin-org',
-    accessPermissions: ['manage_kpi_config'],
-    actions: [
-      { id: 'manage_kpi_config', label: 'Manage KPI Configurations', description: 'Can create and manage KPI definitions and approval requirements', isAccess: true },
-    ],
-  },
-  // ── Admin — Settings & System ──────────────────────────────────────────────
-  {
-    id: 'admin-general', label: 'General Settings', path: '/dashboard/admin/general', icon: 'Settings', section: 'admin-settings',
-    accessPermissions: ['manage_general_settings'],
-    actions: [
-      { id: 'manage_general_settings', label: 'Manage General Settings', description: 'Can configure system-wide settings, branding, and integrations', isAccess: true },
-    ],
-  },
-  {
-    id: 'admin-email', label: 'Email Settings', path: '/dashboard/admin/email', icon: 'Mail', section: 'admin-settings',
-    accessPermissions: ['manage_email_settings'],
-    actions: [
-      { id: 'manage_email_settings', label: 'Manage Email Settings', description: 'Can configure email server and notification settings', isAccess: true },
-    ],
-  },
-  {
-    id: 'admin-public-holidays', label: 'Public Holidays', path: '/dashboard/admin/public-holidays', icon: 'Calendar', section: 'admin-settings',
-    accessPermissions: ['manage_public_holidays'],
-    actions: [
-      { id: 'manage_public_holidays', label: 'Manage Public Holidays', description: 'Can add, edit, and delete public holidays and configure weekends', isAccess: true },
-    ],
-  },
-  {
-    id: 'admin-security', label: 'Security', path: '/dashboard/admin/security', icon: 'ShieldAlert', section: 'admin-settings',
-    accessPermissions: ['view_security_logs', 'manage_security_logs'],
-    actions: [
-      { id: 'view_security_logs', label: 'View Security Logs', description: 'Can view security logs', isAccess: true },
-      { id: 'manage_security_logs', label: 'Manage Security Logs', description: 'Can manage and clear security logs' },
-    ],
-  },
-  {
-    id: 'admin-gps', label: 'GPS Verifications', path: '/dashboard/admin/gps-verifications', icon: 'Map', section: 'admin-settings',
-    accessPermissions: ['manage_gps_verification'],
-    actions: [
-      { id: 'manage_gps_verification', label: 'Manage GPS Verification', description: 'Can review and manage GPS verification for job submissions', isAccess: true },
-    ],
+    id: 'system-edirs', label: 'Edirs', path: '/dashboard/system/edirs', icon: 'Building2', section: 'system',
+    accessPermissions: ['manage_edirs', 'super_admin'],
+    actions: [{ id: 'manage_edirs', label: 'Manage Edirs', description: 'Create and manage tenant Edirs', isAccess: true }],
   },
 ];
 
-// Any access permission that gates an admin/* page — used to decide whether
-// a user should see the "Admin" entry in the sidebar/bottom navigation.
+// ─── Maker–Checker: module → required checker permission ─────────────────────
+// The single configurable mapping the approval engine consults to decide who may
+// approve a given module's requests.
+export const MODULE_CHECKER_PERMISSION: Record<ApprovalModule, Permission> = {
+  MANUAL_PAYMENT: 'approve_payment',
+  EMERGENCY_CLAIM: 'approve_emergency_claim',
+  EMERGENCY_DISBURSEMENT: 'approve_emergency_disbursement',
+  ASSET_ISSUANCE: 'approve_asset_issuance',
+  MEMBER_REMOVAL: 'approve_member_removal',
+  RULE_CHANGE: 'approve_rule_change',
+  PENALTY_WAIVER: 'approve_penalty_waiver',
+};
+
+export const MODULE_LABEL: Record<ApprovalModule, string> = {
+  MANUAL_PAYMENT: 'Manual Payment',
+  EMERGENCY_CLAIM: 'Emergency Claim',
+  EMERGENCY_DISBURSEMENT: 'Emergency Disbursement',
+  ASSET_ISSUANCE: 'Asset Issuance',
+  MEMBER_REMOVAL: 'Member Removal',
+  RULE_CHANGE: 'Rule Change',
+  PENALTY_WAIVER: 'Penalty Waiver',
+};
+
+// All access permissions that gate an admin/system page — used to decide whether
+// to show the "Admin" grouping in navigation.
 export function getAdminAccessPermissions(): Permission[] {
   return Array.from(new Set(
-    pagePermissions
-      .filter(p => p.section !== 'main')
-      .flatMap(p => p.accessPermissions)
+    pagePermissions.filter(p => p.section === 'admin' || p.section === 'system').flatMap(p => p.accessPermissions),
   ));
 }
 
-// ─── Legacy flat group structure (kept for reference) ────────────────────────
+// ─── Flat permission catalog (for the role editor tree) ──────────────────────
 
 export interface PermissionGroup {
   id: string;
   label: string;
-  icon: string; // Icon name from lucide-react
+  icon: string;
   permissions: { id: Permission; label: string; description: string }[];
 }
 
-export const permissionGroups: PermissionGroup[] = [
-  {
-    id: 'dashboard',
-    label: 'Dashboard',
-    icon: 'LayoutDashboard',
-    permissions: [
-      { id: 'view_dashboard', label: 'View Dashboard', description: 'Can access the main dashboard' }
-    ]
-  },
-  {
-    id: 'user-management',
-    label: 'User Management',
-    icon: 'Users',
-    permissions: [
-      { id: 'view_users', label: 'View Users', description: 'Can view user profiles and lists' },
-      { id: 'manage_users', label: 'Manage Users', description: 'Can create, edit, and delete users' },
-      { id: 'import_users', label: 'Import Users', description: 'Can import users from CSV files' },
-      { id: 'manage_roles', label: 'Manage Roles', description: 'Can create, edit, and manage roles and permissions' },
-      { id: 'lock_user', label: 'Lock Users', description: 'Can lock user accounts' },
-      { id: 'unlock_user', label: 'Unlock Users', description: 'Can unlock user accounts' }
-    ]
-  },
-  {
-    id: 'organization-structure',
-    label: 'Organization Structure',
-    icon: 'Building',
-    permissions: [
-      { id: 'view_offices', label: 'View Offices', description: 'Can view office information' },
-      { id: 'view_branches', label: 'View Branches', description: 'Can view branch information' },
-      { id: 'view_districts', label: 'View Districts', description: 'Can view district information' },
-      { id: 'view_departments', label: 'View Departments', description: 'Can view department information' },
-      { id: 'view_divisions', label: 'View Divisions', description: 'Can view division information' },
-      { id: 'manage_offices', label: 'Manage Offices', description: 'Can create, edit, and delete offices' },
-      { id: 'import_offices', label: 'Import Offices', description: 'Can import offices from CSV files' },
-      { id: 'manage_departments', label: 'Manage Departments', description: 'Can create, edit, and delete departments' },
-      { id: 'import_departments', label: 'Import Departments', description: 'Can import departments from CSV files' },
-      { id: 'manage_divisions', label: 'Manage Divisions', description: 'Can create, edit, and delete divisions' },
-      { id: 'import_divisions', label: 'Import Divisions', description: 'Can import divisions from CSV files' },
-      { id: 'manage_districts', label: 'Manage Districts', description: 'Can create, edit, and delete districts' },
-      { id: 'import_districts', label: 'Import Districts', description: 'Can import districts from CSV files' },
-      { id: 'manage_branches', label: 'Manage Branches', description: 'Can create, edit, and delete branches' },
-      { id: 'import_branches', label: 'Import Branches', description: 'Can import branches from CSV files' }
-    ]
-  },
-  {
-    id: 'plans',
-    label: 'Plans & Targets',
-    icon: 'Target',
-    permissions: [
-      { id: 'view_plans', label: 'View Plans', description: 'Can view organizational plans' },
-      { id: 'create_plans', label: 'Create Plans', description: 'Can create new plans' },
-      { id: 'edit_active_plans', label: 'Edit Active Plans', description: 'Can modify plans after they have become active' },
-      { id: 'approve_plans_head_office', label: 'Approve Plans (Head Office)', description: 'Can approve plans at head office level' },
-      { id: 'allocate_plans_to_districts', label: 'Allocate Plans to Districts', description: 'Can allocate generic plans to districts (percentage or fixed amount)' },
-      { id: 'approve_district_allocations', label: 'Approve District Allocations', description: 'Can approve plan allocations to districts' },
-      { id: 'allocate_district_plans_to_branches', label: 'Allocate District Plans to Branches', description: 'Can allocate cascaded district plans to branches' },
-      { id: 'approve_branch_allocations', label: 'Approve Branch Allocations', description: 'Can approve plan allocations to branches' },
-      { id: 'manage_branch_allocations', label: 'Manage Branch Allocations', description: 'Can review and manage staff daily achievement approvals' },
-      { id: 'import_daily_targets', label: 'Import Daily Targets', description: 'Can import daily targets from Excel files' },
-      { id: 'manage_public_holidays', label: 'Manage Public Holidays', description: 'Can add, edit, and delete public holidays' }
-    ]
-  },
-  {
-    id: 'leads',
-    label: 'Leads',
-    icon: 'TrendingUp',
-    permissions: [
-      { id: 'view_leads', label: 'View Leads', description: 'Can view sales leads' },
-      { id: 'create_leads', label: 'Create Leads', description: 'Can create new leads' },
-      { id: 'manage_leads', label: 'Manage Leads', description: 'Can create, edit, and view sales leads' },
-      { id: 'assign_leads', label: 'Assign Leads', description: 'Can assign leads to sales officers' },
-      { id: 'update_assigned_leads', label: 'Update Assigned Leads', description: 'Can update leads assigned to themselves' }
-    ]
-  },
-  {
-    id: 'jobs',
-    label: 'Jobs',
-    icon: 'Briefcase',
-    permissions: [
-      { id: 'view_jobs', label: 'View Jobs', description: 'Can view job submissions' },
-      { id: 'submit_jobs', label: 'Submit Jobs', description: 'Can submit completed sales activities' },
-      { id: 'manage_jobs', label: 'Manage Jobs', description: 'Can approve/reject job submissions and view all jobs' },
-      { id: 'manage_gps_verification', label: 'Manage GPS Verification', description: 'Can review and manage GPS verification for job submissions' }
-    ]
-  },
-  {
-    id: 'customers',
-    label: 'Customers',
-    icon: 'User',
-    permissions: [
-      { id: 'view_customers', label: 'View Customers', description: 'Can view customer profiles' },
-      { id: 'view_customer_visits', label: 'View Customer Visits', description: 'Can view customer visit records' },
-      { id: 'manage_customers', label: 'Manage Customers', description: 'Can create, edit, and manage customer profiles and interactions' }
-    ]
-  },
-  {
-    id: 'kpi',
-    label: 'KPIs',
-    icon: 'BarChart3',
-    permissions: [
-      { id: 'manage_kpi_config', label: 'Manage KPI Configurations', description: 'Can create and manage KPI definitions and approval requirements' },
-      { id: 'adjust_kpi', label: 'Adjust KPI Values', description: 'Can record manual +/- adjustments (with a reason) for adjustment-enabled KPIs' }
-    ]
-  },
-  {
-    id: 'reports',
-    label: 'Reports',
-    icon: 'FileText',
-    permissions: [
-      { id: 'view_reports', label: 'View Reports', description: 'Can access and view the reporting dashboard' },
-      { id: 'view_all_reports', label: 'View All Reports', description: 'Can view system-wide reporting data and analytics' },
-      { id: 'view_rm_report', label: 'View RM Report', description: 'Can view the district-level RM Report and branch performance rankings' }
-    ]
-  },
-  {
-    id: 'daily-targets',
-    label: 'Daily Targets',
-    icon: 'CalendarCheck',
-    permissions: [
-      { id: 'view_daily_targets', label: 'View Daily Targets', description: 'Can view daily targets and achievements' },
-      { id: 'view_performance', label: 'View Performance', description: 'Can view performance metrics' },
-      { id: 'view_branch_targets', label: 'View Branch Targets', description: 'Can view the branch targets page and allocated KPI overview' },
-      { id: 'assign_staff_targets', label: 'Assign Staff Targets', description: 'Can assign daily, monthly, quarterly, or annual KPI targets to branch staff, and bulk-import targets via Excel' },
-      { id: 'view_my_targets', label: 'View My Targets', description: 'Can view own assigned KPI targets and progress history' },
-      { id: 'submit_kpi_progress', label: 'Submit KPI Progress', description: 'Can submit daily or custom-date progress updates against own KPI targets' },
-      { id: 'approve_staff_progress', label: 'Approve Staff Progress', description: 'Can review, approve, or reject staff KPI progress submissions' }
-    ]
-  },
-  {
-    id: 'security',
-    label: 'Security & Auditing',
-    icon: 'Shield',
-    permissions: [
-      { id: 'view_roles', label: 'View Roles', description: 'Can view role definitions' },
-      { id: 'view_security_logs', label: 'View Security Logs', description: 'Can view security logs' },
-      { id: 'manage_audit_logs', label: 'Manage Audit Log', description: 'Can view the full audit trail' },
-      { id: 'manage_security_logs', label: 'Manage Security Logs', description: 'Can manage security logs' }
-    ]
-  },
-  {
-    id: 'system-settings',
-    label: 'System Settings',
-    icon: 'Settings',
-    permissions: [
-      { id: 'manage_general_settings', label: 'Manage General Settings', description: 'Can configure system-wide settings, branding, and integrations' },
-      { id: 'manage_email_settings', label: 'Manage Email Settings', description: 'Can configure email server and notification settings' }
-    ]
-  },
-  {
-    id: 'gamification',
-    label: 'Gamification',
-    icon: 'Trophy',
-    permissions: []
-  }
-];
+export const permissionGroups: PermissionGroup[] = pagePermissions.map(p => ({
+  id: p.id,
+  label: p.label,
+  icon: p.icon,
+  permissions: p.actions.map(a => ({ id: a.id, label: a.label, description: a.description })),
+})).filter(g => g.permissions.length > 0);
 
-// Keep original flat array for backward compatibility
-export const permissions = permissionGroups.flatMap(group => group.permissions);
+// Add the Super Admin master switch as its own group.
+permissionGroups.push({
+  id: 'super',
+  label: 'Super Admin',
+  icon: 'Crown',
+  permissions: [{ id: 'super_admin', label: 'Super Admin', description: 'Full cross-tenant access' }],
+});
 
-export const delegationPermissions = [
-  { id: 'delegation:view', label: 'View Plans', description: "Can view the delegator's plans and reports" },
-  { id: 'delegation:manage', label: 'Manage Plans', description: "Can create, edit, and manage plans on behalf of the delegator" },
-] as const;
+export const permissions = permissionGroups.flatMap(g => g.permissions);
+
+// The full list of valid permission ids — used to validate the role editor.
+export const ALL_PERMISSION_IDS: Permission[] = Array.from(new Set(permissions.map(p => p.id)));

@@ -7,8 +7,7 @@ export default async function Home() {
   const session = await getServerSession(authOptions);
 
   if (session) {
-    // Redirect directly to Plans for productivity
-    redirect('/dashboard/plans');
+    redirect('/dashboard');
   } else {
     redirect('/login');
   }

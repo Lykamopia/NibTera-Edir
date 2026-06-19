@@ -9,8 +9,8 @@ import { headers } from 'next/headers';
 import Script from 'next/script';
 
 export const metadata: Metadata = {
-  title: 'NibTera Sales',
-  description: 'Official Sales Management System',
+  title: 'Edir Management Platform',
+  description: 'Manage members, contributions, emergencies, events, and governance for your Edir.',
 };
 
 export default async function RootLayout({

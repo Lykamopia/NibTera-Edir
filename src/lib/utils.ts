@@ -17,6 +17,31 @@ export function normalizeNibEmail(input: string): string {
   return trimmed.includes('@') ? trimmed : `${trimmed}${NIB_DOMAIN}`;
 }
 
+/**
+ * Normalize an Ethiopian phone number to canonical `251XXXXXXXXX` form.
+ * Accepts `09XXXXXXXX`, `9XXXXXXXX`, `+2519XXXXXXXX`, `2519XXXXXXXX` and
+ * strips spaces/dashes. Returns the digits-only canonical string (no `+`).
+ */
+export function normalizeEthiopianPhone(input: string): string {
+  let digits = (input || '').replace(/[^\d]/g, '');
+  if (digits.startsWith('251')) {
+    // already country-coded
+  } else if (digits.startsWith('0')) {
+    digits = '251' + digits.slice(1);
+  } else if (digits.length === 9 && digits.startsWith('9')) {
+    digits = '251' + digits;
+  } else if (digits.startsWith('251')) {
+    // noop
+  }
+  return digits;
+}
+
+/** True when the input is a valid Ethiopian mobile number (251 9XXXXXXXX). */
+export function isValidEthiopianPhone(input: string): boolean {
+  const n = normalizeEthiopianPhone(input);
+  return /^2519\d{8}$/.test(n);
+}
+
 // ─── Ethiopian Fiscal Year Helpers ───────────────────────────────────────────
 // Fiscal year starts July 1. FY2024 = July 2024 – June 2025.
 // Fiscal month: 1=July, 2=August, …, 12=June.

@@ -26,19 +26,12 @@ export async function getFirstAccessiblePage(preferredUrl?: string | null): Prom
   const userPerms = ((user.role?.permissions ?? '').split(',').filter(Boolean)) as Permission[];
 
   const canAccess = (pageDef: (typeof pagePermissions)[0]): boolean => {
-    if (pageDef.id === 'branch-targets') {
-      return !!(user.branchId && pageDef.accessPermissions.some(p => userPerms.includes(p)));
-    }
     return pageDef.accessPermissions.some(p => userPerms.includes(p));
   };
 
   // Validate the preferred URL if provided
   if (preferredUrl && preferredUrl.startsWith('/dashboard')) {
-    if (preferredUrl === '/dashboard/profile') return preferredUrl;
-
-    if (preferredUrl.startsWith('/dashboard/branch-allocation') && user.districtId) {
-      return preferredUrl;
-    }
+    if (preferredUrl === '/dashboard/account') return preferredUrl;
 
     if (preferredUrl.startsWith('/dashboard/admin')) {
       const hasAdmin = pagePermissions
@@ -62,8 +55,8 @@ export async function getFirstAccessiblePage(preferredUrl?: string | null): Prom
     .some(p => canAccess(p));
   if (hasAdmin) return '/dashboard/admin';
 
-  // Profile is always accessible
-  return '/dashboard/profile';
+  // Account self-service is always accessible
+  return '/dashboard/account';
 }
 
 export async function getLoggedInUser(): Promise<User | null> {
@@ -76,38 +69,11 @@ export async function getLoggedInUser(): Promise<User | null> {
         where: { id: session.user.id },
         include: {
             role: true,
-            office: true,
-            department: true,
-            division: true,
-            district: true,
-            branch: true,
+            edir: true,
         }
     });
 
     if (!user) return null;
-
-    // Check if this is a delegated session from the session token
-    if ((session.user as any).isDelegated && (session.user as any).realUser) {
-        const realUser = await prisma.user.findUnique({ 
-            where: { id: (session.user as any).realUser.id },
-            include: {
-                role: true,
-                office: true,
-                department: true,
-                division: true,
-                district: true,
-                branch: true,
-            }
-        });
-        
-        if (realUser) {
-            return {
-                ...realUser,
-                actingUser: user, // The delegate is acting as this user
-                delegationPermissions: (session.user as any).delegationPermissions,
-            } as User;
-        }
-    }
 
     return user as User;
 }

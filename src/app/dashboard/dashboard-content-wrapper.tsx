@@ -1,25 +1,17 @@
-
 'use client';
 
-import { usePathname, useRouter } from 'next/navigation';
-import { useEffect, useState, useMemo } from 'react';
+import { usePathname } from 'next/navigation';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { FilePlus, PanelLeft, Shield, User as UserIcon, ShieldAlert, AlertCircle, Trophy, TrendingUp, CalendarDays, Target, Users, BarChart3, Target as TargetIcon, Briefcase, UsersRound, Users2, BarChart2, Home, FileBarChart2, Crosshair, CheckSquare } from 'lucide-react';
-import { useSession } from 'next-auth/react';
-import { toast } from 'sonner';
+import * as Icons from 'lucide-react';
+import { PanelLeft } from 'lucide-react';
 
-import type { Permission, LoggedInUser } from '@/lib/types';
-import { getAdminAccessPermissions } from '@/lib/permissions';
-import { GlobalSearch } from '@/components/global-search';
+import type { LoggedInUser, Permission } from '@/lib/types';
+import { buildNav } from '@/lib/nav';
+import { getPendingApprovalCount } from '@/app/actions/approvals';
 
 import {
-  Sidebar,
-  SidebarContent,
-  SidebarHeader,
-  SidebarMenu,
-  SidebarMenuItem,
-  SidebarMenuButton,
-  SidebarTrigger,
+  Sidebar, SidebarContent, SidebarHeader, SidebarMenu, SidebarMenuItem, SidebarMenuButton, SidebarTrigger,
 } from '@/components/ui/sidebar';
 import { Button } from '@/components/ui/button';
 import Logo from '@/components/logo';
@@ -31,177 +23,104 @@ import { SessionTimeoutManager } from '@/components/session-timeout-manager';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { Breadcrumb } from '@/components/breadcrumb';
 
-interface DashboardContentWrapperProps {
-  user: LoggedInUser | null;
-  children: React.ReactNode;
+function Icon({ name, className }: { name: string; className?: string }) {
+  const Cmp = (Icons as any)[name] ?? Icons.Circle;
+  return <Cmp className={className} />;
 }
 
-export function DashboardContentWrapper({ user, children }: DashboardContentWrapperProps) {
+export function DashboardContentWrapper({ user, children }: { user: LoggedInUser | null; children: React.ReactNode }) {
   const pathname = usePathname();
   const [isMounted, setIsMounted] = useState(false);
-  const { update: updateSession } = useSession();
+  const [pending, setPending] = useState(0);
 
-  const permissions = useMemo(() => user?.role?.permissions?.split(',') || [], [user?.role?.permissions]);
+  const permissions = useMemo(() => (user?.role?.permissions?.split(',').filter(Boolean) || []) as Permission[], [user?.role?.permissions]);
+  const isSuperAdmin = useMemo(() => (user?.role as any)?.scope === 'SUPER_ADMIN' || permissions.includes('super_admin'), [user?.role, permissions]);
+  const sections = useMemo(() => (user ? buildNav(permissions, isSuperAdmin) : []), [user, permissions, isSuperAdmin]);
 
-  // Any permission that gates an admin/* page grants admin nav access
-  const hasAdminAccess = useMemo(() => {
-    if (!user) return false;
-    const adminPagePerms = getAdminAccessPermissions();
-    return adminPagePerms.some(p => permissions.includes(p));
-  }, [user, permissions]);
-
-  const navItems = useMemo(() => {
-    if (!user) return [];
-    const userPermissions = user.role?.permissions?.split(',') || [];
-    
-    return [
-      { href: "/dashboard", icon: <Home />, label: "Dashboard", active: pathname === '/dashboard', visible: !user.actingUser && userPermissions.includes('view_dashboard') },
-      {
-        href: "/dashboard/branch-targets",
-        icon: <Target />,
-        label: "Branch Targets",
-        active: pathname.startsWith('/dashboard/branch-targets'),
-        visible: !user.actingUser && !!user.branchId && (
-          userPermissions.includes('view_branch_targets') ||
-          userPermissions.includes('assign_staff_targets')
-        ),
-      },
-      {
-        href: "/dashboard/branch-allocation",
-        icon: <Users />,
-        label: "Branch Allocation",
-        active: pathname.startsWith('/dashboard/branch-allocation'),
-        visible: !user.actingUser && (
-          userPermissions.includes('allocate_district_plans_to_branches') ||
-          userPermissions.includes('approve_branch_allocations')
-        ),
-      },
-      { href: "/dashboard/plans", icon: <BarChart3 />, label: "Plans", active: pathname.startsWith('/dashboard/plans'), visible: !user.actingUser && (['view_plans','create_plans','approve_plans_head_office','edit_active_plans','allocate_plans_to_districts','approve_district_allocations','allocate_district_plans_to_branches','approve_branch_allocations'] as const).some(p => userPermissions.includes(p)) },
-      { href: "/dashboard/leads", icon: <TargetIcon />, label: "Leads", active: pathname.startsWith('/dashboard/leads'), visible: !user.actingUser && userPermissions.includes('view_leads') },
-      { href: "/dashboard/jobs", icon: <Briefcase />, label: "Jobs", active: pathname.startsWith('/dashboard/jobs'), visible: !user.actingUser && userPermissions.includes('view_jobs') },
-      { href: "/dashboard/customers", icon: <Users2 />, label: "Customers", active: pathname.startsWith('/dashboard/customers'), visible: !user.actingUser && userPermissions.includes('view_customers') },
-      { href: "/dashboard/customer-visits", icon: <UsersRound />, label: "Customer Visits", active: pathname.startsWith('/dashboard/customer-visits'), visible: !user.actingUser && userPermissions.includes('view_customer_visits') },
-      { href: "/dashboard/daily-targets", icon: <CalendarDays />, label: "Daily Targets", active: pathname.startsWith('/dashboard/daily-targets'), visible: !user.actingUser && userPermissions.includes('view_daily_targets') },
-      {
-        href: "/dashboard/my-targets",
-        icon: <Crosshair />,
-        label: "My Targets",
-        active: pathname.startsWith('/dashboard/my-targets'),
-        visible: !user.actingUser && userPermissions.includes('view_my_targets'),
-      },
-      {
-        href: "/dashboard/approvals",
-        icon: <CheckSquare />,
-        label: "Approvals Center",
-        active: pathname.startsWith('/dashboard/approvals'),
-        visible: !user.actingUser && (
-          userPermissions.includes('approve_branch_allocations') ||
-          userPermissions.includes('manage_branch_allocations') ||
-          userPermissions.includes('approve_staff_progress') ||
-          userPermissions.includes('manage_jobs') ||
-          userPermissions.includes('manage_leads') ||
-          userPermissions.includes('assign_leads') ||
-          userPermissions.includes('assign_staff_targets') ||
-          userPermissions.includes('manage_general_settings')
-        ),
-      },
-      { href: "/dashboard/rm-report", icon: <FileBarChart2 />, label: "RM Report", active: pathname.startsWith('/dashboard/rm-report'), visible: !user.actingUser && userPermissions.includes('view_rm_report') },
-      { href: "/dashboard/performance-reports", icon: <BarChart2 />, label: "Performance Reports", active: pathname.startsWith('/dashboard/performance-reports'), visible: !user.actingUser && userPermissions.includes('view_reports') },
-      { href: "/dashboard/profile", icon: <UserIcon />, label: "Profile", active: pathname === '/dashboard/profile', visible: !user.actingUser },
-      { href: "/dashboard/admin", icon: <Shield />, label: "Admin", active: pathname.startsWith('/dashboard/admin'), visible: hasAdminAccess && !user.actingUser },
-      { href: "/dashboard/access-denied", icon: <ShieldAlert />, label: "Access Denied", active: pathname === '/dashboard/access-denied', visible: true, className: "hidden" },
-    ];
-  }, [user, pathname, hasAdminAccess]);
-  
+  useEffect(() => { setIsMounted(true); }, []);
   useEffect(() => {
-    setIsMounted(true);
-  }, []);
+    let active = true;
+    getPendingApprovalCount().then(c => { if (active) setPending(c); }).catch(() => {});
+    return () => { active = false; };
+  }, [pathname]);
 
   if (!isMounted || !user) {
     return <div className="h-screen w-full flex items-center justify-center bg-background"><HoneycombLoader /></div>;
   }
 
+  const isActive = (path: string) => (path === '/dashboard' ? pathname === path : pathname.startsWith(path));
+
+  const NavLinks = () => (
+    <>
+      {sections.map(section => (
+        <div key={section.id} className="mb-2">
+          <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 group-data-[collapsible=icon]:hidden">{section.label}</div>
+          {section.items.map(item => (
+            <SidebarMenuItem key={item.id}>
+              <Link href={item.path}>
+                <SidebarMenuButton tooltip={item.label} isActive={isActive(item.path)}>
+                  <Icon name={item.icon} />
+                  <span className="flex-1">{item.label}</span>
+                  {item.id === 'approvals' && pending > 0 && (
+                    <span className="ml-auto inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1 text-[11px] font-semibold text-primary-foreground group-data-[collapsible=icon]:hidden">{pending}</span>
+                  )}
+                </SidebarMenuButton>
+              </Link>
+            </SidebarMenuItem>
+          ))}
+        </div>
+      ))}
+    </>
+  );
+
   return (
     <>
-    <SessionTimeoutManager />
-    <div className="grid min-h-screen w-full transition-[grid-template-columns] ease-in-out duration-300 md:grid-cols-[var(--sidebar-width)_1fr]">
-      <Sidebar collapsible="icon" className="hidden md:flex no-print">
-        <SidebarContent>
-          <SidebarHeader className="h-14 lg:h-[60px] border-b justify-center">
-            <div className="flex items-center group-data-[collapsible=icon]:justify-center">
-              <Logo className="group-data-[collapsible=icon]:hidden" />
-              <Logo className="hidden group-data-[collapsible=icon]:flex" hideText />
-            </div>
-          </SidebarHeader>
-          <SidebarMenu className="flex-1 px-3">
-            {navItems.filter(item => item.visible).map(item => (
-              <SidebarMenuItem key={item.label} className={item.className}>
-                <Link href={item.href}>
-                  <SidebarMenuButton tooltip={item.label} isActive={item.active}>
-                    {item.icon}
-                    <span>{item.label}</span>
-                  </SidebarMenuButton>
-                </Link>
-              </SidebarMenuItem>
-            ))}
-          </SidebarMenu>
-        </SidebarContent>
-      </Sidebar>
-      <div className="flex flex-col h-screen">
-        <header className="flex h-14 items-center border-b bg-card no-print shrink-0 lg:h-[60px]">
-          <div className="flex items-center gap-2 sm:gap-4 w-full h-full px-2 sm:px-4 lg:px-6">
-            <Sheet>
-              <SheetTrigger asChild>
-                <Button size="icon" variant="outline" className="md:hidden shrink-0">
-                  <PanelLeft className="h-5 w-5" />
-                  <span className="sr-only">Toggle Menu</span>
-                </Button>
-              </SheetTrigger>
-              <SheetContent side="left" className="sm:max-w-xs">
-                <SheetHeader className="p-4">
-                  <SheetTitle className="sr-only">Main Menu</SheetTitle>
-                   <Link href="/dashboard/plans" className="flex items-center gap-2">
-                      <Logo />
-                  </Link>
-                </SheetHeader>
-                <nav className="grid gap-4 p-4 text-lg font-medium">
-                  {navItems.filter(item => item.visible && !item.className?.includes('hidden')).map(item => (
-                    <Link key={item.label} href={item.href} className={`flex items-center gap-4 px-2.5 ${item.active ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'}`}>
-                      {item.icon}
-                      {item.label}
-                    </Link>
-                  ))}
-                </nav>
-              </SheetContent>
-            </Sheet>
-            <SidebarTrigger className="hidden md:flex" />
-            <div className="md:flex items-center">
-              <Breadcrumb />
-            </div>
-            <div className="w-full flex-1 min-w-0">
-              <div className="md:hidden">
-                <Breadcrumb />
+      <SessionTimeoutManager />
+      <div className="grid min-h-screen w-full transition-[grid-template-columns] ease-in-out duration-300 md:grid-cols-[var(--sidebar-width)_1fr]">
+        <Sidebar collapsible="icon" className="hidden md:flex no-print">
+          <SidebarContent>
+            <SidebarHeader className="h-14 lg:h-[60px] border-b justify-center">
+              <div className="flex items-center group-data-[collapsible=icon]:justify-center">
+                <Logo className="group-data-[collapsible=icon]:hidden" />
+                <Logo className="hidden group-data-[collapsible=icon]:flex" hideText />
               </div>
-            </div>
-            {/* Global search — permission-aware, accessible via Ctrl+K */}
-            {user && !user.actingUser && <GlobalSearch user={user} />}
-            <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+            </SidebarHeader>
+            <SidebarMenu className="flex-1 px-3 py-2">
+              <NavLinks />
+            </SidebarMenu>
+          </SidebarContent>
+        </Sidebar>
+        <div className="flex flex-col h-screen">
+          <header className="sticky top-0 z-30 flex h-14 items-center border-b bg-card/60 backdrop-blur-md no-print shrink-0 lg:h-[60px]">
+            <div className="flex items-center gap-2 sm:gap-4 w-full h-full px-2 sm:px-4 lg:px-6">
+              <Sheet>
+                <SheetTrigger asChild>
+                  <Button size="icon" variant="outline" className="md:hidden shrink-0">
+                    <PanelLeft className="h-5 w-5" />
+                    <span className="sr-only">Toggle Menu</span>
+                  </Button>
+                </SheetTrigger>
+                <SheetContent side="left" className="sm:max-w-xs p-0">
+                  <SheetHeader className="p-4 border-b">
+                    <SheetTitle className="sr-only">Main Menu</SheetTitle>
+                    <Link href="/dashboard" className="flex items-center gap-2"><Logo /></Link>
+                  </SheetHeader>
+                  <nav className="p-3"><SidebarMenu><NavLinks /></SidebarMenu></nav>
+                </SheetContent>
+              </Sheet>
+              <SidebarTrigger className="hidden md:flex" />
+              <div className="hidden md:flex items-center"><Breadcrumb /></div>
+              <div className="w-full flex-1" />
               <ThemeToggle />
               <NotificationBell />
-              {user && <UserNav user={user} />}
+              {user && <UserNav user={user as any} />}
             </div>
-          </div>
-        </header>
-        <main className="flex flex-1 flex-col bg-muted/40 overflow-y-auto overflow-x-auto no-print">
-          <div className="flex-1 p-2 sm:p-4 min-h-0 min-w-0">
-            {children}
-          </div>
-        </main>
-        <div className="hidden print:block">
-          {children}
+          </header>
+          <main className="flex flex-1 flex-col bg-muted/40 overflow-auto no-print">
+            <div key={pathname} className="page-enter mx-auto w-full max-w-7xl flex-1 p-4 min-h-0 min-w-0 sm:p-6">{children}</div>
+          </main>
         </div>
       </div>
-    </div>
     </>
   );
 }

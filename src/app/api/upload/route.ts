@@ -39,8 +39,8 @@ export async function POST(req: NextRequest) {
   const file: File | null = data.get('file') as unknown as File;
   const type = data.get('type') as string;
 
-  // Only allow profile and signature uploads
-  if (type !== 'profile' && type !== 'signatures') {
+  // Only allow profile, signature, member-document, and rules-attachment uploads
+  if (type !== 'profile' && type !== 'signatures' && type !== 'documents' && type !== 'rules') {
     return NextResponse.json({ success: false, error: 'Invalid file type' }, { status: 400 });
   }
 

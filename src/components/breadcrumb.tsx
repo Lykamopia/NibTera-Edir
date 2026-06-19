@@ -2,18 +2,13 @@
 
 import { usePathname } from 'next/navigation';
 import Link from 'next/link';
-import { Home, Inbox, Star, Edit, Send, Archive, Shield, User, Info } from 'lucide-react';
+import { Home, Shield, User, Info } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { cn } from '@/lib/utils';
 import { Fragment } from 'react';
 
 const pathConfig: { [key: string]: { icon: React.ReactNode; label: string } } = {
   dashboard: { icon: <Home className="h-4 w-4" />, label: 'Dashboard' },
-  inbox: { icon: <Inbox className="h-4 w-4" />, label: 'Inbox' },
-  favorites: { icon: <Star className="h-4 w-4 text-yellow-400" />, label: 'Favorites' },
-  drafts: { icon: <Edit className="h-4 w-4 text-blue-400" />, label: 'Drafts' },
-  sent: { icon: <Send className="h-4 w-4 text-green-400" />, label: 'Sent' },
-  archive: { icon: <Archive className="h-4 w-4 text-gray-400" />, label: 'Archive' },
   admin: { icon: <Shield className="h-4 w-4 text-purple-400" />, label: 'Admin' },
   profile: { icon: <User className="h-4 w-4 text-cyan-400" />, label: 'Profile' },
   about: { icon: <Info className="h-4 w-4 text-sky-400" />, label: 'About' },

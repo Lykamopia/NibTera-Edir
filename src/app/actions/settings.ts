@@ -199,40 +199,6 @@ export async function saveGeneralSettings(settings: {
     return { success: true };
 }
 
-// ── Working Days / Weekend Settings ─────────────────────────────────────────
-
-import type { WorkingDaysSettings } from '@/lib/working-days';
-
-const defaultWorkingDaysSettings: WorkingDaysSettings = {
-  saturdayWeekend: true,
-  sundayWeekend: true,
-};
-
-export async function getWorkingDaysSettings(): Promise<WorkingDaysSettings> {
-  try {
-    const setting = await prisma.setting.findUnique({ where: { key: 'working_days' } });
-    if (setting?.value && typeof setting.value === 'object') {
-      const val = setting.value as Partial<WorkingDaysSettings>;
-      return {
-        saturdayWeekend: val.saturdayWeekend ?? true,
-        sundayWeekend:   val.sundayWeekend   ?? true,
-      };
-    }
-  } catch {}
-  return defaultWorkingDaysSettings;
-}
-
-export async function saveWorkingDaysSettings(settings: WorkingDaysSettings) {
-  await hasPermission('manage_public_holidays');
-  await prisma.setting.upsert({
-    where:  { key: 'working_days' },
-    update: { value: settings as any },
-    create: { key: 'working_days', value: settings as any },
-  });
-  revalidatePath('/dashboard/admin/public-holidays');
-  return { success: true };
-}
-
 export async function saveEmailSettings(settings: {
     notificationsEnabled: boolean; 
     headerText: string; 

@@ -130,9 +130,9 @@ export default function LoginClientPage() {
 
 
   const onSubmit = async (data: LoginFormData) => {
-    const normalizedEmail = normalizeNibEmail(data.email);
+    const identifier = data.email.trim();
 
-    await checkLockout(normalizedEmail);
+    await checkLockout(identifier);
     if (lockoutTimeLeft && lockoutTimeLeft > 0) {
         return;
     }
@@ -141,14 +141,14 @@ export default function LoginClientPage() {
 
     const result = await signIn('credentials', {
       redirect: false,
-      email: normalizedEmail,
+      identifier,
       password: data.password,
     });
 
     setLoading(false);
 
     if (result?.error) {
-      await checkLockout(normalizedEmail);
+      await checkLockout(identifier);
       toast.error('Login Failed', {
         description: result.error,
       });
@@ -422,12 +422,12 @@ export default function LoginClientPage() {
                                         <div className="space-y-2">
                                             <div className="flex items-center gap-2 text-foreground/80 dark:text-white/80 ml-1">
                                                 <Mail className="h-4 w-4" />
-                                                <Label htmlFor="email" className="text-sm font-medium tracking-wide">Email</Label>
+                                                <Label htmlFor="email" className="text-sm font-medium tracking-wide">Phone or Email</Label>
                                             </div>
                                             <Input
                                                 id="email"
                                                 type="text"
-                                                placeholder="firstname.lastname or firstname.lastname@nibbank.com.et"
+                                                placeholder="09xxxxxxxx or you@example.com"
                                                 {...register('email')}
                                                 className="h-12 bg-background/50 dark:bg-white/5 border-2 border-primary/30 dark:border-primary/40 text-foreground dark:text-white placeholder:text-muted-foreground/50 dark:placeholder:text-white/30 focus-visible:border-primary focus-visible:ring-0 focus-visible:outline-none transition-all px-4 shadow-sm"
                                             />

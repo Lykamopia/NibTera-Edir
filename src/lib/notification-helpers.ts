@@ -2,36 +2,15 @@ import prisma from "@/lib/prisma";
 
 export type NotificationPriority = "low" | "normal" | "high" | "critical";
 export type NotificationType =
-  | "plan_approved"
-  | "allocation_submitted"
-  | "allocation_approved"
-  | "allocation_rejected"
-  | "kpi_assigned"
-  | "achievement_approved"
-  | "achievement_rejected"
-  // Job workflow
-  | "job_submitted"
-  | "job_approved"
-  | "job_fully_approved"
-  | "job_rejected"
-  | "job_revision_requested"
-  // Lead workflow
-  | "lead_assigned"
-  | "lead_progress_submitted"
-  | "lead_progress_approved"
-  | "lead_progress_rejected"
-  | "lead_deadline_approaching"
-  | "lead_overdue"
-  | "lead_completed"
-  | "lead_pending_closure"
-  | "lead_closed"
-  | "lead_returned_for_work"
-  // Daily plan workflow
-  | "daily_plan_submitted"
-  | "daily_plan_approved"
-  | "daily_plan_rejected"
-  | "daily_plan_overdue"
-  | "general";
+  | "general"
+  | "account"
+  | "security"
+  | "system"
+  | "payment"
+  | "emergency"
+  | "member"
+  | "event"
+  | "approval";
 
 interface CreateNotificationInput {
   userId: string;
@@ -42,6 +21,7 @@ interface CreateNotificationInput {
   linkUrl?: string;
   entityId?: string;
   entityType?: string;
+  edirId?: string | null;
 }
 
 export async function createNotification(input: CreateNotificationInput) {
@@ -55,6 +35,7 @@ export async function createNotification(input: CreateNotificationInput) {
       linkUrl: input.linkUrl,
       entityId: input.entityId,
       entityType: input.entityType,
+      edirId: input.edirId ?? null,
     },
   });
 }

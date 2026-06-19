@@ -86,6 +86,30 @@ export async function GET(req: NextRequest, { params }: { params: { path: string
 
         isAuthorized = true;
     }
+    // Member relative documents: viewable by same-tenant users who manage or review members.
+    else if (fileType === 'documents') {
+        eventTarget = { id: dbPath, type: 'Document' };
+        const [relDoc, memberDoc] = await Promise.all([
+            prisma.relativeDocument.findFirst({ where: { fileUrl: dbPath }, include: { relative: { include: { member: { select: { edirId: true } } } } } }),
+            prisma.memberDocument.findFirst({ where: { fileUrl: dbPath }, include: { member: { select: { edirId: true } } } }),
+        ]);
+        const perms = (user.role?.permissions?.split(',') ?? []).map(p => p.trim());
+        const isSuper = user.role?.scope === 'SUPER_ADMIN' || perms.includes('super_admin');
+        const canView = perms.includes('view_members') || perms.includes('manage_members') || perms.includes('review_member_documents');
+        const docEdirId = relDoc?.relative.member?.edirId ?? memberDoc?.member?.edirId ?? null;
+        const sameTenant = !!docEdirId && docEdirId === (user as any).edirId;
+        if (isSuper || (canView && sameTenant)) isAuthorized = true;
+    }
+    // Rules & bylaws attachments: viewable by same-tenant users who can read rules.
+    else if (fileType === 'rules') {
+        eventTarget = { id: dbPath, type: 'RulesAttachment' };
+        const att = await prisma.rulesAttachment.findFirst({ where: { url: dbPath }, include: { version: { select: { edirId: true } } } });
+        const perms = (user.role?.permissions?.split(',') ?? []).map(p => p.trim());
+        const isSuper = user.role?.scope === 'SUPER_ADMIN' || perms.includes('super_admin');
+        const canView = perms.includes('view_rules') || perms.includes('manage_rules');
+        const sameTenant = !!att?.version.edirId && att.version.edirId === (user as any).edirId;
+        if (isSuper || (canView && sameTenant)) isAuthorized = true;
+    }
     // --- End Authorization Check ---
 
     if (!isAuthorized) {
