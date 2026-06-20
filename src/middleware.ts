@@ -12,6 +12,7 @@ const ROUTE_PERMISSIONS: { path: string; perms: string[] }[] = [
   { path: '/dashboard/members', perms: ['view_members', 'manage_members'] },
   { path: '/dashboard/payments', perms: ['view_payments', 'record_payment'] },
   { path: '/dashboard/approvals', perms: ['view_approvals', 'approve_payment', 'approve_member_removal', 'approve_penalty_waiver', 'approve_emergency_claim', 'approve_emergency_disbursement', 'approve_asset_issuance', 'approve_rule_change'] },
+  { path: '/dashboard/requests', perms: ['handle_member_requests'] },
   { path: '/dashboard/emergencies', perms: ['view_emergencies', 'manage_emergencies'] },
   { path: '/dashboard/events', perms: ['view_events', 'manage_events'] },
   { path: '/dashboard/assets', perms: ['view_assets', 'manage_assets'] },
@@ -56,6 +57,15 @@ export default withAuth(
     const token = (req as any).nextauth?.token;
     const { pathname } = req.nextUrl;
     const framable = FRAMABLE_PREFIXES.some((p) => pathname.startsWith(p));
+
+    // ── First-login mandatory password change ─────────────────────────────────
+    // A member in the "First Login Required" state cannot reach any app feature
+    // until they change their temporary password.
+    if (token?.mustChangePassword && pathname.startsWith('/dashboard')) {
+      const url = req.nextUrl.clone();
+      url.pathname = '/force-password-change';
+      return NextResponse.redirect(url);
+    }
 
     // ── Route-level permission enforcement (dashboard pages) ──────────────────
     if (pathname.startsWith('/dashboard')) {

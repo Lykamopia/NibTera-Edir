@@ -185,7 +185,7 @@ async function generateMemoEmailBody(
                 <td>
                     <div class="container">
                         <div class="header">
-                           <img src="${logoUrl}" alt="NibTera Sales Logo" style="width:60px;height:60px;display:block;margin:0 auto;">
+                           <img src="${logoUrl}" alt="NibTera Edir Logo" style="width:60px;height:60px;display:block;margin:0 auto;">
                         </div>
                         <div class="content">
                             <h2>${headerText}</h2>
@@ -202,7 +202,7 @@ async function generateMemoEmailBody(
                             </div>
                             
                             <p>Thank you,</p>
-                            <p>The NibTera Sales System</p>
+                            <p>The NibTera Edir System</p>
                         </div>
                          <div class="footer">
                             <p>${footerText}</p>
@@ -247,7 +247,7 @@ function generateAuthEmailBody(title: string, content: string): string {
                 <td>
                     <div class="container">
                         <div class="header">
-                           <img src="${logoUrl}" alt="NibTera Sales Logo" style="width:60px;height:60px;display:block;margin:0 auto;">
+                           <img src="${logoUrl}" alt="NibTera Edir Logo" style="width:60px;height:60px;display:block;margin:0 auto;">
                         </div>
                         <div class="content">
                             <h2>${title}</h2>
@@ -269,10 +269,10 @@ export async function sendVerificationEmail({ to, name, token }: VerificationEma
     const verificationLink = `${getBaseUrl()}/set-password?token=${token}`;
     const expirationHours = 1;
 
-    const title = "Welcome to NibTera Sales! Please Verify Your Account";
+    const title = "Welcome to NibTera Edir! Please Verify Your Account";
     const content = `
         <p>Hello ${name},</p>
-        <p>An account has been created for you on the NibTera Sales platform. To get started, please set your password by clicking the link below.</p>
+        <p>An account has been created for you on the NibTera Edir platform. To get started, please set your password by clicking the link below.</p>
         <p>This link is valid for <strong>${expirationHours} hour</strong>.</p>
         <div class="button-container">
             <a href="${verificationLink}" style="background-color: #9A4D1C; color: #ffffff; display: inline-block; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-size: 16px;">Set Your Password</a>
@@ -327,7 +327,7 @@ export async function sendPasswordResetEmail({ to, name, token }: PasswordResetE
     const title = "Your Password Reset Request";
     const content = `
         <p>Hello ${name},</p>
-        <p>We received a request to reset your password for the NibTera Sales platform. You can reset your password by clicking the link below.</p>
+        <p>We received a request to reset your password for the NibTera Edir platform. You can reset your password by clicking the link below.</p>
         <p>This link is valid for <strong>${expirationHours} hour</strong>.</p>
         <div class="button-container">
             <a href="${resetLink}" style="background-color: #9A4D1C; color: #ffffff; display: inline-block; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-size: 16px;">Reset Your Password</a>
@@ -380,7 +380,7 @@ export async function sendEmailChangeVerificationEmail({ to, name, token, userId
     const title = "Confirm Your New Email Address";
     const content = `
         <p>Hello ${name},</p>
-        <p>You requested to change your email address for the NibTera Sales platform to this one. Please confirm this change by clicking the link below.</p>
+        <p>You requested to change your email address for the NibTera Edir platform to this one. Please confirm this change by clicking the link below.</p>
         <p>This link is valid for <strong>${expirationHours} hour</strong>.</p>
         <div class="button-container">
             <a href="${verificationLink}" style="background-color: #9A4D1C; color: #ffffff; display: inline-block; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-size: 16px;">Confirm New Email</a>
@@ -425,10 +425,10 @@ export async function sendEmailChangeVerificationEmail({ to, name, token, userId
 }
 
 export async function sendEmailChangeNotificationEmail({ to, name, newEmail }: EmailChangeNotificationOptions) {
-    const title = "Email Change Request for Your NibTera Sales Account";
+    const title = "Email Change Request for Your NibTera Edir Account";
     const content = `
         <p>Hello ${name},</p>
-        <p>This is a notification that a request has been made to change the email address associated with your NibTera Sales account to <strong>${newEmail}</strong>.</p>
+        <p>This is a notification that a request has been made to change the email address associated with your NibTera Edir account to <strong>${newEmail}</strong>.</p>
         <p>A verification email has been sent to the new address. Your email will not be changed until it is verified.</p>
         <p><strong>If you did not make this request, please change your password immediately and contact an administrator.</strong></p>
     `;
@@ -471,10 +471,10 @@ export async function sendEmailChangeNotificationEmail({ to, name, newEmail }: E
 }
 
 export async function sendConcurrentLoginNotification({ to, name, ipAddress, userAgent }: ConcurrentLoginNotificationOptions) {
-    const title = "New Login Detected for Your NibTera Sales Account";
+    const title = "New Login Detected for Your NibTera Edir Account";
     const content = `
         <p>Hello ${name},</p>
-        <p>This is a security notification that a new login attempt was made for your NibTera Sales account while you have an active session.</p>
+        <p>This is a security notification that a new login attempt was made for your NibTera Edir account while you have an active session.</p>
         <p><strong>Login Details:</strong></p>
         <ul>
             <li><strong>IP Address:</strong> ${ipAddress}</li>
@@ -529,10 +529,10 @@ interface PasswordChangedNotificationOptions {
 
 export async function sendPasswordChangedNotificationEmail({ to, name }: PasswordChangedNotificationOptions) {
     const loginUrl = `${getBaseUrl()}/login`;
-    const title = 'Your NibTera Sales Password Has Been Changed';
+    const title = 'Your NibTera Edir Password Has Been Changed';
     const content = `
         <p>Hello ${name},</p>
-        <p>This is a confirmation that the password for your NibTera Sales account has been successfully changed.</p>
+        <p>This is a confirmation that the password for your NibTera Edir account has been successfully changed.</p>
         <p>If you made this change, no further action is required.</p>
         <p><strong>If you did not change your password, please contact your system administrator immediately and consider your account compromised.</strong></p>
         <div class="button-container">
@@ -571,7 +571,7 @@ export async function sendEmail({ to, subject, memo, sender, type, emailSettings
   if (!htmlBody) return;
   
   const mailOptions = {
-    from: process.env.EMAIL_FROM || '"NibTera Sales System" <noreply@nib.gov.et>',
+    from: process.env.EMAIL_FROM || '"NibTera Edir System" <noreply@nib.gov.et>',
     to: to,
     subject: subject,
     html: htmlBody,

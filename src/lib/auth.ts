@@ -178,10 +178,11 @@ export const authOptions: NextAuthOptions = {
         if (dbUser) {
           await prisma.user.update({
             where: { id: dbUser.id },
-            data: { tokenVersion: { increment: 1 }, lastIp: ipAddress, lastUserAgent: userAgent },
+            data: { tokenVersion: { increment: 1 }, lastIp: ipAddress, lastUserAgent: userAgent, lastLoginAt: new Date() },
           });
           token.tokenVersion = dbUser.tokenVersion + 1;
           token.onboardingCompleted = dbUser.onboardingCompleted;
+          token.mustChangePassword = dbUser.mustChangePassword;
           token.edirId = dbUser.edirId;
         }
         token.id = user.id;
@@ -217,10 +218,11 @@ export const authOptions: NextAuthOptions = {
         if (typeof token.tokenVersion !== 'number') return {};
         const dbUser = await prisma.user.findUnique({
           where: { id: token.id as string },
-          select: { tokenVersion: true, onboardingCompleted: true, edirId: true, role: { select: { permissions: true, scope: true } } },
+          select: { tokenVersion: true, onboardingCompleted: true, mustChangePassword: true, edirId: true, role: { select: { permissions: true, scope: true } } },
         });
         if (!dbUser || dbUser.tokenVersion !== token.tokenVersion) return {};
         token.onboardingCompleted = dbUser.onboardingCompleted;
+        token.mustChangePassword = dbUser.mustChangePassword;
         token.edirId = dbUser.edirId;
         const perms = (dbUser.role?.permissions ?? '').split(',').map(p => p.trim()).filter(Boolean);
         token.permissions = perms;
@@ -236,6 +238,7 @@ export const authOptions: NextAuthOptions = {
         session.user.email = token.email;
         session.user.image = token.picture;
         (session.user as any).onboardingCompleted = token.onboardingCompleted;
+        (session.user as any).mustChangePassword = token.mustChangePassword;
         (session.user as any).edirId = token.edirId;
         (session.user as any).showConcurrentAlert = token.showConcurrentAlert;
         (session.user as any).concurrentDetails = token.concurrentDetails;

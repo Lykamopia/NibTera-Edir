@@ -17,6 +17,7 @@ import {
   getAssets, saveAsset, deleteAsset, getAssetCategories, saveAssetCategory, deleteAssetCategory,
   getIssuances, requestIssuance, recordReturn, getDepreciationReport,
 } from '@/app/actions/assets';
+import { useConfirm } from '@/components/ui/confirm-provider';
 
 const ISSUE_STATUS: Record<string, { label: string; cls: string }> = {
   REQUESTED: { label: 'Requested', cls: 'bg-amber-100 text-amber-800' },
@@ -60,6 +61,7 @@ function InventoryTab() {
   const [editing, setEditing] = useState<any | null | undefined>(undefined);
   const [issuing, setIssuing] = useState<any | null>(null);
   const [managingCats, setManagingCats] = useState(false);
+  const confirm = useConfirm();
 
   const load = useCallback(() => {
     setLoading(true); setError(false);
@@ -70,7 +72,7 @@ function InventoryTab() {
   useEffect(() => { load(); }, [load]);
 
   const onDelete = async (a: any) => {
-    if (!confirm(`Delete "${a.name}"?`)) return;
+    if (!(await confirm({ title: 'Delete asset', description: `Delete "${a.name}"? This cannot be undone.`, destructive: true, confirmText: 'Delete' }))) return;
     const res = await deleteAsset(a.id);
     if (res?.success) { toast.success('Asset deleted.'); load(); }
     else toast.error(res?.error || 'Failed to delete.');
@@ -263,6 +265,7 @@ function IssueDialog({ asset, onClose, onDone }: { asset: any; onClose: () => vo
 function CategoriesDialog({ categories, onClose, onChanged }: { categories: any[]; onClose: () => void; onChanged: () => void }) {
   const [name, setName] = useState('');
   const [saving, setSaving] = useState(false);
+  const confirm = useConfirm();
 
   const add = async () => {
     if (name.trim().length < 2) { toast.error('Name is required.'); return; }
@@ -273,7 +276,7 @@ function CategoriesDialog({ categories, onClose, onChanged }: { categories: any[
     else toast.error(res?.error || 'Failed to add category.');
   };
   const remove = async (c: any) => {
-    if (!confirm(`Delete category "${c.name}"? Assets keep their history.`)) return;
+    if (!(await confirm({ title: 'Delete category', description: `Delete category "${c.name}"? Assets keep their history.`, destructive: true, confirmText: 'Delete' }))) return;
     const res = await deleteAssetCategory(c.id);
     if (res?.success) { toast.success('Category deleted.'); onChanged(); }
     else toast.error(res?.error || 'Failed to delete category.');

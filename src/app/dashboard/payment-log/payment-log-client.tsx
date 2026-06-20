@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Loader2, Search, Download, ReceiptText, Ban } from 'lucide-react';
 import { getPaymentLogs, exportPaymentLogCsv, voidPayment } from '@/app/actions/payments';
+import { usePrompt } from '@/components/ui/confirm-provider';
 
 const STATUS: Record<string, string> = {
   SUCCESS: 'bg-green-100 text-green-800', PARTIAL: 'bg-amber-100 text-amber-800',
@@ -33,6 +34,7 @@ export default function PaymentLogClient() {
   const [page, setPage] = useState(1);
   const [pages, setPages] = useState(1);
   const [total, setTotal] = useState(0);
+  const prompt = usePrompt();
 
   const load = useCallback(() => {
     setLoading(true); setError(false);
@@ -48,7 +50,7 @@ export default function PaymentLogClient() {
     catch { toast.error('Export failed.'); }
   };
   const onVoid = async (l: any) => {
-    const reason = window.prompt(`Void transaction ${l.transactionId}? Optionally add a reason:`);
+    const reason = await prompt({ title: 'Void transaction', description: `Transaction ${l.transactionId}`, label: 'Reason (optional)', multiline: true, confirmText: 'Void payment' });
     if (reason === null) return;
     const res = await voidPayment(l.id, reason || undefined);
     if (res?.success) { toast.success('Payment voided.'); load(); }

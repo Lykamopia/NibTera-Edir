@@ -8,6 +8,8 @@ import { writeAudit } from '@/lib/audit';
 import { submitForApproval } from '@/lib/approval-engine';
 import '@/lib/approval-modules';
 import { normalizeEthiopianPhone, isValidEthiopianPhone } from '@/lib/utils';
+import { generateTempPassword } from '@/lib/temp-password';
+import bcrypt from 'bcrypt';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
 
@@ -114,6 +116,7 @@ export async function getMemberProfile(id: string) {
     where: { id },
     include: {
       paymentStatus: true,
+      user: { select: { id: true, phone: true, email: true, status: true, mustChangePassword: true, onboardingCompleted: true, lastLoginAt: true, lastPasswordResetAt: true, passwordResetCount: true, lockoutUntil: true, role: { select: { name: true } } } },
       relatives: { include: { documents: true }, orderBy: { createdAt: 'asc' } },
       documents: { orderBy: { createdAt: 'desc' } },
       installmentPlans: { include: { installments: { orderBy: { sequence: 'asc' } } } },
@@ -129,6 +132,7 @@ export async function getMemberProfile(id: string) {
     prisma.auditLog.findMany({ where: { edirId: member.edirId, targetId: id }, orderBy: { createdAt: 'desc' }, take: 50 }),
   ]);
 
+  const canManage = actor.isSuperAdmin || actor.permissions.includes('manage_members');
   const num = (v: any) => (v == null ? 0 : Number(v));
   const monthlyFee = num(settings?.monthlyFee);
   const balance = num(member.paymentStatus?.balance);
@@ -143,6 +147,7 @@ export async function getMemberProfile(id: string) {
     }, 0);
 
   return {
+    canManage,
     member: {
       id: member.id, memberId: member.memberId, name: member.name, role: member.role, status: member.status,
       photoUrl: member.photoUrl, occupation: member.occupation, gender: member.gender,
@@ -170,6 +175,18 @@ export async function getMemberProfile(id: string) {
       id: c.id, typeName: c.type?.name ?? null, status: c.status, affectedPerson: c.affectedPerson,
       approvedAmount: num(c.approvedAmount), disbursedAmount: num(c.disbursedAmount), createdAt: c.createdAt,
     })),
+    account: member.user ? {
+      hasLogin: true,
+      username: member.user.phone ?? member.user.email ?? null,
+      status: member.user.status,
+      roleName: member.user.role?.name ?? null,
+      firstLoginRequired: member.user.mustChangePassword === true,
+      onboardingCompleted: member.user.onboardingCompleted,
+      lastLoginAt: member.user.lastLoginAt,
+      passwordResetCount: member.user.passwordResetCount,
+      lastPasswordResetAt: member.user.lastPasswordResetAt,
+      locked: !!member.user.lockoutUntil && new Date(member.user.lockoutUntil) > new Date(),
+    } : { hasLogin: false },
     audit: audit.map(a => ({ id: a.id, action: a.action, details: a.details, createdAt: a.createdAt })),
     rules: settings ? {
       currency: settings.currency, monthlyFee, registrationFee: num(settings.registrationFee),
@@ -400,10 +417,18 @@ export async function createMember(input: MemberInput) {
     const settings = await prisma.edirSettings.findUnique({ where: { edirId } });
     const registrationFee = settings?.registrationFee ?? new Prisma.Decimal(0);
 
+    // Default member login role (least privilege) for the tenant.
+    const memberLoginRole = await prisma.role.findFirst({ where: { edirId, name: 'Member' }, select: { id: true } });
+
+    let tempPassword: string | null = null;
+    let loginCreated = false;
+
     const member = await prisma.$transaction(async (tx) => {
       const memberId = await nextMemberId(edirId);
 
-      // Find-or-create the linked login user (INVITED) by phone/email.
+      // Find-or-create the member's login account. New members authenticate with
+      // their phone number and a generated temporary password, and are activated
+      // immediately in a "first login required" state (mustChangePassword).
       let userId: string | null = null;
       if (phone || email) {
         const existing = await tx.user.findFirst({
@@ -412,10 +437,21 @@ export async function createMember(input: MemberInput) {
         if (existing) {
           userId = existing.id;
         } else {
+          tempPassword = generateTempPassword();
+          const hashed = await bcrypt.hash(tempPassword, 12);
           const created = await tx.user.create({
-            data: { name: data.name, phone, email, edirId, status: 'INVITED', mustChangePassword: true },
+            data: {
+              name: data.name, phone, email, edirId,
+              roleId: memberLoginRole?.id ?? null,
+              status: 'ACTIVE',
+              hashedPassword: hashed,
+              mustChangePassword: true,
+              onboardingCompleted: false,
+            },
           });
           userId = created.id;
+          loginCreated = true;
+          await writeAudit({ edirId, userId: actor.id, action: 'MEMBER_LOGIN_CREATED', targetType: 'User', targetId: created.id, details: `Login account created for ${data.name} (username: ${phone ?? email}).` }, tx);
         }
       }
 
@@ -476,7 +512,13 @@ export async function createMember(input: MemberInput) {
     });
 
     revalidatePath('/dashboard/members');
-    return { success: true as const, member: serializeMember(member) };
+    return {
+      success: true as const,
+      member: serializeMember(member),
+      credentials: loginCreated && tempPassword
+        ? { username: phone ?? email ?? '', tempPassword, channel: phone ? 'SMS' : 'email' }
+        : null,
+    };
   } catch (error) {
     return failure(error);
   }
@@ -514,6 +556,58 @@ export async function updateMember(id: string, input: MemberInput) {
     await writeAudit({ edirId: existing.edirId, userId: actor.id, action: 'MEMBER_UPDATED', targetType: 'Member', targetId: id, details: `Updated ${updated.name}.` });
     revalidatePath('/dashboard/members');
     return { success: true as const, member: serializeMember(updated) };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/**
+ * Reset (or issue) a member's login credentials. Generates a fresh temporary
+ * password, forces a change on next login, invalidates existing sessions, and
+ * returns the plaintext exactly once for the admin to share/print. If the member
+ * has no login yet (e.g. registered without one), creates one from their phone.
+ */
+export async function resetMemberPassword(memberId: string) {
+  try {
+    const { actor, edirId } = await requireActor(['manage_members', 'reset_password']);
+    const member = await prisma.member.findUnique({ where: { id: memberId }, include: { user: true } });
+    if (!member) return { success: false as const, error: 'Member not found.' };
+    assertSameTenant(actor, member.edirId);
+
+    const username = member.user?.phone ?? member.phone ?? member.user?.email ?? member.email ?? null;
+    if (!username) return { success: false as const, error: 'This member has no phone or email to use as a login username.' };
+
+    const tempPassword = generateTempPassword();
+    const hashed = await bcrypt.hash(tempPassword, 12);
+    const memberRole = await prisma.role.findFirst({ where: { edirId, name: 'Member' }, select: { id: true } });
+
+    let userId = member.userId;
+    if (member.user) {
+      await prisma.user.update({
+        where: { id: member.user.id },
+        data: {
+          hashedPassword: hashed, mustChangePassword: true, onboardingCompleted: false, status: 'ACTIVE',
+          failedLoginAttempts: 0, lockoutUntil: null,
+          passwordResetCount: { increment: 1 }, lastPasswordResetAt: new Date(),
+          tokenVersion: { increment: 1 }, // invalidate any active sessions
+        },
+      });
+    } else {
+      const phone = member.phone ? normalizeEthiopianPhone(member.phone) : null;
+      const created = await prisma.user.create({
+        data: {
+          name: member.name, phone, email: member.email, edirId, roleId: memberRole?.id ?? null,
+          status: 'ACTIVE', hashedPassword: hashed, mustChangePassword: true, onboardingCompleted: false,
+          passwordResetCount: 1, lastPasswordResetAt: new Date(),
+        },
+      });
+      userId = created.id;
+      await prisma.member.update({ where: { id: memberId }, data: { userId: created.id } });
+    }
+
+    await writeAudit({ edirId, userId: actor.id, action: 'MEMBER_PASSWORD_RESET', targetType: 'User', targetId: userId ?? undefined, details: `Credentials reset for ${member.name}.` });
+    revalidatePath(`/dashboard/members/${memberId}`);
+    return { success: true as const, credentials: { username, tempPassword, channel: member.phone ? 'SMS' : 'email' } };
   } catch (error) {
     return failure(error);
   }

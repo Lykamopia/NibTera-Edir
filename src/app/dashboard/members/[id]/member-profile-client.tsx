@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useRef, useState, useTransition } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -15,11 +15,13 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import {
   ArrowLeft, Upload, Trash2, Check, X, FileText, ExternalLink, Plus, Pencil, ShieldCheck, AlertTriangle,
-  Users, ScrollText, CreditCard, Siren, FolderOpen, Gauge, CircleUser,
+  Users, ScrollText, CreditCard, Siren, FolderOpen, Gauge, CircleUser, KeyRound, RotateCcw, Lock, Loader2,
 } from 'lucide-react';
 import { EmptyState } from '@/components/ui/states';
-import { toUserError } from '@/lib/errors';
-import { getMemberProfile, addRelative, updateRelative, removeRelative, addRelativeDocument, reviewDocument, addMemberDocument, deleteMemberDocument, reviewMemberDocument } from '@/app/actions/members';
+import { CredentialsDialog, type Credentials } from '@/components/credentials-dialog';
+import { useConfirm, usePrompt } from '@/components/ui/confirm-provider';
+import { getMemberProfile, updateMember, addRelative, updateRelative, removeRelative, addRelativeDocument, reviewDocument, addMemberDocument, deleteMemberDocument, reviewMemberDocument, resetMemberPassword } from '@/app/actions/members';
+import { getMemberRoles } from '@/app/actions/rule-config';
 
 type Profile = NonNullable<Awaited<ReturnType<typeof getMemberProfile>>>;
 
@@ -42,7 +44,8 @@ async function uploadFile(file: File, type: 'profile' | 'documents'): Promise<{ 
 
 export default function MemberProfileClient({ initial, memberId }: { initial: Profile; memberId: string }) {
   const [p, setP] = useState<Profile>(initial);
-  const [, startTransition] = useTransition();
+  const [cred, setCred] = useState<Credentials | null>(null);
+  const [editing, setEditing] = useState(false);
   const reload = useCallback(() => { getMemberProfile(memberId).then(r => { if (r) setP(r); }).catch(() => {}); }, [memberId]);
   const cur = p.rules?.currency ?? 'ETB';
   const m = p.member;
@@ -70,12 +73,13 @@ export default function MemberProfileClient({ initial, memberId }: { initial: Pr
               </div>
             </div>
           </div>
-          <div className="flex flex-wrap gap-1.5 sm:ml-auto">
+          <div className="flex flex-wrap items-center gap-1.5 sm:ml-auto">
             {p.compliance.eligibleForBenefits
               ? <Badge variant="outline" className="border-success/20 bg-success/10 text-success"><ShieldCheck className="mr-1 h-3.5 w-3.5" /> Benefit-eligible</Badge>
               : <Badge variant="outline" className="bg-muted text-muted-foreground">Not yet eligible</Badge>}
             {p.compliance.atTerminationRisk && <Badge variant="outline" className="border-destructive/20 bg-destructive/10 text-destructive"><AlertTriangle className="mr-1 h-3.5 w-3.5" /> Termination risk</Badge>}
             {!p.compliance.atTerminationRisk && p.compliance.atSuspensionRisk && <Badge variant="outline" className="border-warning/20 bg-warning/10 text-warning"><AlertTriangle className="mr-1 h-3.5 w-3.5" /> Suspension risk</Badge>}
+            {p.canManage && <Button size="sm" variant="outline" className="ml-1" onClick={() => setEditing(true)}><Pencil className="mr-1.5 h-4 w-4" /> Edit</Button>}
           </div>
         </CardContent>
       </Card>
@@ -125,6 +129,7 @@ export default function MemberProfileClient({ initial, memberId }: { initial: Pr
                 </>) : <p className="text-muted-foreground">No rules configured yet.</p>}
               </CardContent>
             </Card>
+            <AccountCard account={p.account} memberId={memberId} onCredentials={setCred} onChanged={reload} />
           </div>
         </TabsContent>
 
@@ -225,7 +230,142 @@ export default function MemberProfileClient({ initial, memberId }: { initial: Pr
           </Card>
         </TabsContent>
       </Tabs>
+
+      {cred && <CredentialsDialog memberName={m.name} credentials={cred} onClose={() => setCred(null)} />}
+      {editing && <EditMemberDialog member={m} onClose={() => setEditing(false)} onDone={() => { setEditing(false); reload(); }} />}
     </div>
+  );
+}
+
+function EditMemberDialog({ member, onClose, onDone }: { member: any; onClose: () => void; onDone: () => void }) {
+  const [roles, setRoles] = useState<string[]>([member.role || 'Member']);
+  const [form, setForm] = useState({
+    name: member.name ?? '', occupation: member.occupation ?? '',
+    dateOfBirth: member.dateOfBirth ? new Date(member.dateOfBirth).toISOString().slice(0, 10) : '',
+    gender: member.gender ?? '', nationalId: member.nationalId ?? '',
+    phone: member.phone ?? '', email: member.email ?? '', address: member.address ?? '',
+    city: member.city ?? '', subcity: member.subcity ?? '', woreda: member.woreda ?? '',
+    emergencyContactName: member.emergencyContactName ?? '', emergencyContactPhone: member.emergencyContactPhone ?? '',
+    role: member.role ?? 'Member',
+  });
+  const [saving, setSaving] = useState(false);
+  const set = (k: string, v: any) => setForm(f => ({ ...f, [k]: v }));
+
+  useEffect(() => { getMemberRoles().then(r => setRoles(Array.from(new Set([member.role, ...r].filter(Boolean))))).catch(() => {}); }, [member.role]);
+
+  const submit = async () => {
+    if (form.name.trim().length < 2) { toast.error('Name is required.'); return; }
+    setSaving(true);
+    const res = await updateMember(member.id, {
+      name: form.name.trim(), occupation: form.occupation || null,
+      dateOfBirth: form.dateOfBirth || null, gender: form.gender || null, nationalId: form.nationalId || null,
+      phone: form.phone || null, email: form.email || null, address: form.address || null,
+      city: form.city || null, subcity: form.subcity || null, woreda: form.woreda || null,
+      emergencyContactName: form.emergencyContactName || null, emergencyContactPhone: form.emergencyContactPhone || null,
+      role: form.role, registrationInstallmentCount: 1,
+    } as any);
+    setSaving(false);
+    if (res?.success) { toast.success('Member updated.'); onDone(); }
+    else toast.error(res?.error || 'Failed to update member.');
+  };
+
+  const F = ({ label, k, type = 'text', full }: { label: string; k: keyof typeof form; type?: string; full?: boolean }) => (
+    <div className={`space-y-1.5 ${full ? 'sm:col-span-2' : ''}`}>
+      <Label className="text-xs">{label}</Label>
+      <Input type={type} value={(form as any)[k]} onChange={e => set(k as string, e.target.value)} />
+    </div>
+  );
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
+        <DialogHeader><DialogTitle>Edit Member</DialogTitle></DialogHeader>
+        <div className="space-y-3" onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault(); }}>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <F label="Full Name" k="name" />
+            <F label="Occupation" k="occupation" />
+            <F label="Date of Birth" k="dateOfBirth" type="date" />
+            <div className="space-y-1.5">
+              <Label className="text-xs">Gender</Label>
+              <Select value={form.gender || ''} onValueChange={v => set('gender', v)}>
+                <SelectTrigger><SelectValue placeholder="Select…" /></SelectTrigger>
+                <SelectContent><SelectItem value="Male">Male</SelectItem><SelectItem value="Female">Female</SelectItem><SelectItem value="Other">Other</SelectItem></SelectContent>
+              </Select>
+            </div>
+            <F label="National ID" k="nationalId" />
+            <div className="space-y-1.5">
+              <Label className="text-xs">Role</Label>
+              <Select value={form.role} onValueChange={v => set('role', v)}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>{roles.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <F label="Phone" k="phone" />
+            <F label="Email" k="email" />
+            <F label="Address" k="address" full />
+            <F label="City" k="city" />
+            <F label="Sub-city" k="subcity" />
+            <F label="Woreda" k="woreda" />
+            <F label="Emergency Contact Name" k="emergencyContactName" />
+            <F label="Emergency Contact Phone" k="emergencyContactPhone" />
+          </div>
+          <p className="text-xs text-muted-foreground">Editing the contact phone here updates the member record; it does not change an existing login username.</p>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
+          <Button onClick={submit} disabled={saving}>{saving && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />} Save changes</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function AccountCard({ account, memberId, onCredentials, onChanged }: { account: any; memberId: string; onCredentials: (c: Credentials) => void; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const confirm = useConfirm();
+  const reset = async () => {
+    if (!(await confirm({ title: 'Reset password', description: 'Generate a new temporary password? Existing sessions are signed out and the member must change it on next login.', confirmText: 'Generate' }))) return;
+    setBusy(true);
+    const res = await resetMemberPassword(memberId);
+    setBusy(false);
+    if (res?.success && res.credentials) { toast.success('New credentials generated.'); onCredentials(res.credentials as Credentials); onChanged(); }
+    else toast.error(res?.error || 'Failed to reset password.');
+  };
+
+  return (
+    <Card>
+      <CardHeader className="pb-2"><CardTitle className="flex items-center gap-2 text-base"><KeyRound className="h-4 w-4" /> Login Account</CardTitle></CardHeader>
+      <CardContent className="space-y-2 text-sm">
+        {!account.hasLogin ? (
+          <>
+            <p className="text-muted-foreground">No login account yet. Generate credentials so this member can sign in.</p>
+            <Button size="sm" onClick={reset} disabled={busy}>{busy ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <KeyRound className="mr-1.5 h-4 w-4" />} Create login</Button>
+          </>
+        ) : (
+          <>
+            <Row label="Username" value={account.username ?? '—'} />
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">Account status</span>
+              <span className="flex items-center gap-1.5">
+                {account.locked && <Badge variant="outline" className="border-destructive/20 bg-destructive/10 text-destructive"><Lock className="mr-1 h-3 w-3" />Locked</Badge>}
+                <Badge variant="outline" className={account.status === 'ACTIVE' ? 'border-success/20 bg-success/10 text-success' : 'bg-muted text-muted-foreground'}>{account.status}</Badge>
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">Activation</span>
+              {account.firstLoginRequired
+                ? <Badge variant="outline" className="border-warning/20 bg-warning/10 text-warning">First login required</Badge>
+                : <Badge variant="outline" className="border-success/20 bg-success/10 text-success">Activated</Badge>}
+            </div>
+            <Row label="Last login" value={account.lastLoginAt ? new Date(account.lastLoginAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : 'Never'} />
+            <Row label="Password resets" value={account.passwordResetCount > 0 ? `${account.passwordResetCount}${account.lastPasswordResetAt ? ` · last ${new Date(account.lastPasswordResetAt).toLocaleDateString()}` : ''}` : 'None'} />
+            <div className="pt-1">
+              <Button size="sm" variant="outline" onClick={reset} disabled={busy}>{busy ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <RotateCcw className="mr-1.5 h-4 w-4" />} Reset password</Button>
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -266,6 +406,8 @@ function DependentsTab({ profile, onChanged }: { profile: Profile; onChanged: ()
 function RelativeCard({ relative: r, onEdit, onChanged }: { relative: any; onEdit: () => void; onChanged: () => void }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
+  const confirm = useConfirm();
+  const prompt = usePrompt();
 
   const onUpload = async (file: File) => {
     setBusy(true);
@@ -274,12 +416,12 @@ function RelativeCard({ relative: r, onEdit, onChanged }: { relative: any; onEdi
     setBusy(false); if (fileRef.current) fileRef.current.value = '';
   };
   const review = async (docId: string, status: 'APPROVED' | 'REJECTED') => {
-    const notes = status === 'REJECTED' ? (window.prompt('Reason (optional):') ?? undefined) : undefined;
-    if (status === 'REJECTED' && notes === undefined) return;
-    const res = await reviewDocument(docId, status, notes || undefined);
+    let notes: string | undefined;
+    if (status === 'REJECTED') { const r = await prompt({ title: 'Reject document', label: 'Reason (optional)', multiline: true, confirmText: 'Reject' }); if (r === null) return; notes = r || undefined; }
+    const res = await reviewDocument(docId, status, notes);
     if (res?.success) { toast.success(`Document ${status.toLowerCase()}.`); onChanged(); } else toast.error(res?.error || 'Failed.');
   };
-  const remove = async () => { if (!confirm(`Remove ${r.name}?`)) return; const res = await removeRelative(r.id); if (res?.success) { toast.success('Removed.'); onChanged(); } else toast.error(res?.error || 'Failed.'); };
+  const remove = async () => { if (!(await confirm({ title: 'Remove relative', description: `Remove ${r.name}?`, destructive: true, confirmText: 'Remove' }))) return; const res = await removeRelative(r.id); if (res?.success) { toast.success('Removed.'); onChanged(); } else toast.error(res?.error || 'Failed.'); };
 
   return (
     <Card>
@@ -386,6 +528,8 @@ function MemberDocsTab({ profile, memberId, onChanged }: { profile: Profile; mem
   const fileRef = useRef<HTMLInputElement>(null);
   const [category, setCategory] = useState('ID');
   const [busy, setBusy] = useState(false);
+  const confirm = useConfirm();
+  const prompt = usePrompt();
 
   const onUpload = async (file: File) => {
     setBusy(true);
@@ -394,12 +538,12 @@ function MemberDocsTab({ profile, memberId, onChanged }: { profile: Profile; mem
     setBusy(false); if (fileRef.current) fileRef.current.value = '';
   };
   const review = async (id: string, status: 'APPROVED' | 'REJECTED') => {
-    const notes = status === 'REJECTED' ? (window.prompt('Reason (optional):') ?? undefined) : undefined;
-    if (status === 'REJECTED' && notes === undefined) return;
-    const res = await reviewMemberDocument(id, status, notes || undefined);
+    let notes: string | undefined;
+    if (status === 'REJECTED') { const r = await prompt({ title: 'Reject document', label: 'Reason (optional)', multiline: true, confirmText: 'Reject' }); if (r === null) return; notes = r || undefined; }
+    const res = await reviewMemberDocument(id, status, notes);
     if (res?.success) { toast.success(`Document ${status.toLowerCase()}.`); onChanged(); } else toast.error(res?.error || 'Failed.');
   };
-  const del = async (id: string) => { if (!confirm('Delete this document?')) return; const res = await deleteMemberDocument(id); if (res?.success) { toast.success('Deleted.'); onChanged(); } else toast.error(res?.error || 'Failed.'); };
+  const del = async (id: string) => { if (!(await confirm({ title: 'Delete document', description: 'This document will be permanently deleted.', destructive: true, confirmText: 'Delete' }))) return; const res = await deleteMemberDocument(id); if (res?.success) { toast.success('Deleted.'); onChanged(); } else toast.error(res?.error || 'Failed.'); };
 
   return (
     <Card>

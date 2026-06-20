@@ -182,6 +182,48 @@ export async function setPassword(token: string, newPassword: string) {
     return { success: true };
 }
 
+/**
+ * Complete the mandatory first-login password change. The account stays in the
+ * "First Login Required" state (mustChangePassword) until this succeeds; only
+ * then is full access granted. No current password is required because the user
+ * is already authenticated and just used their temporary password to sign in.
+ */
+export async function completeFirstLoginPasswordChange(newPassword: string) {
+  const user = await getLoggedInUser();
+  if (!user) {
+    return { success: false, error: 'Your session has ended. Please sign in again.' };
+  }
+  // Only valid while the account is actually in the first-login state.
+  if (!(user as any).mustChangePassword) {
+    return { success: false, error: 'No password change is required for this account.' };
+  }
+
+  const validation = await passwordSchema.safeParseAsync(newPassword);
+  if (!validation.success) {
+    return { success: false, error: validation.error.issues[0]?.message || 'Password does not meet the security requirements.' };
+  }
+  if (user.hashedPassword && await bcrypt.compare(newPassword, user.hashedPassword)) {
+    return { success: false, error: 'Please choose a password different from your temporary one.' };
+  }
+
+  const hashedPassword = await bcrypt.hash(newPassword, 12);
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { hashedPassword, mustChangePassword: false, onboardingCompleted: true, passwordChangedAt: new Date() },
+  });
+
+  await logSecurityEvent({
+    event: SecurityEvent.PASSWORD_CHANGE_SUCCESS,
+    severity: LogSeverity.INFO,
+    actor: user,
+    details: `User '${user.name}' (ID: ${user.id}) completed the mandatory first-login password change.`,
+    targetId: user.id,
+    targetType: 'User',
+  });
+
+  return { success: true };
+}
+
 // Change password for the currently authenticated user
 export async function changePassword(currentPassword: string, newPassword: string) {
     const user = await getLoggedInUser();

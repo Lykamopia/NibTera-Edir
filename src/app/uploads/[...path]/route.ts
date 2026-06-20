@@ -89,16 +89,18 @@ export async function GET(req: NextRequest, { params }: { params: { path: string
     // Member relative documents: viewable by same-tenant users who manage or review members.
     else if (fileType === 'documents') {
         eventTarget = { id: dbPath, type: 'Document' };
-        const [relDoc, memberDoc] = await Promise.all([
+        const [relDoc, memberDoc, reqDoc] = await Promise.all([
             prisma.relativeDocument.findFirst({ where: { fileUrl: dbPath }, include: { relative: { include: { member: { select: { edirId: true } } } } } }),
             prisma.memberDocument.findFirst({ where: { fileUrl: dbPath }, include: { member: { select: { edirId: true } } } }),
+            prisma.memberRequest.findFirst({ where: { attachments: { array_contains: dbPath } }, include: { member: { select: { edirId: true, userId: true } } } }),
         ]);
         const perms = (user.role?.permissions?.split(',') ?? []).map(p => p.trim());
         const isSuper = user.role?.scope === 'SUPER_ADMIN' || perms.includes('super_admin');
-        const canView = perms.includes('view_members') || perms.includes('manage_members') || perms.includes('review_member_documents');
-        const docEdirId = relDoc?.relative.member?.edirId ?? memberDoc?.member?.edirId ?? null;
+        const canView = perms.includes('view_members') || perms.includes('manage_members') || perms.includes('review_member_documents') || perms.includes('handle_member_requests');
+        const docEdirId = relDoc?.relative.member?.edirId ?? memberDoc?.member?.edirId ?? reqDoc?.member?.edirId ?? null;
         const sameTenant = !!docEdirId && docEdirId === (user as any).edirId;
-        if (isSuper || (canView && sameTenant)) isAuthorized = true;
+        const isOwnRequestDoc = !!reqDoc && reqDoc.member?.userId === user.id; // member viewing their own attachment
+        if (isSuper || isOwnRequestDoc || (canView && sameTenant)) isAuthorized = true;
     }
     // Rules & bylaws attachments: viewable by same-tenant users who can read rules.
     else if (fileType === 'rules') {

@@ -11,12 +11,14 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Loader2, Plus, Pencil, Trash2 } from 'lucide-react';
 import { permissionGroups } from '@/lib/permissions';
 import { getRoles, saveRole, deleteRole } from '@/app/actions/admin';
+import { useConfirm } from '@/components/ui/confirm-provider';
 
 export default function RolesClient() {
   const [roles, setRoles] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [editing, setEditing] = useState<any | null>(null);
+  const confirm = useConfirm();
 
   const load = () => {
     setLoading(true); setError(false);
@@ -25,7 +27,7 @@ export default function RolesClient() {
   useEffect(() => { load(); }, []);
 
   const onDelete = async (id: string) => {
-    if (!confirm('Delete this role?')) return;
+    if (!(await confirm({ title: 'Delete role', description: 'This role will be permanently removed.', destructive: true, confirmText: 'Delete' }))) return;
     const res = await deleteRole(id);
     if (res?.success) { toast.success('Role deleted.'); load(); } else toast.error(res?.error || 'Failed to delete.');
   };

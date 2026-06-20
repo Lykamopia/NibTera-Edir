@@ -16,6 +16,7 @@ import {
   getRulesPage, createDraft, cloneCurrentToDraft, updateDraft, deleteDraft, submitRulesVersion,
   addRulesAttachment, removeRulesAttachment, searchRules,
 } from '@/app/actions/rules-doc';
+import { useConfirm } from '@/components/ui/confirm-provider';
 
 const STATUS: Record<string, { label: string; cls: string }> = {
   APPROVED: { label: 'Approved', cls: 'border-success/20 bg-success/10 text-success' },
@@ -210,6 +211,7 @@ function DraftEditor({ draft, onChanged }: { draft: any; onChanged: () => void }
   const [effectiveDate, setEffectiveDate] = useState(draft.effectiveDate ? new Date(draft.effectiveDate).toISOString().slice(0, 10) : '');
   const [saving, setSaving] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const confirm = useConfirm();
   const locked = draft.pending;
 
   const save = async () => {
@@ -224,7 +226,7 @@ function DraftEditor({ draft, onChanged }: { draft: any; onChanged: () => void }
     if (res?.success) { toast.success('Submitted for checker approval.'); onChanged(); } else toast.error(res?.error || 'Failed to submit.');
   };
   const del = async () => {
-    if (!confirm('Delete this draft? This cannot be undone.')) return;
+    if (!(await confirm({ title: 'Delete draft', description: 'This draft will be permanently deleted.', destructive: true, confirmText: 'Delete' }))) return;
     const res = await deleteDraft(draft.id);
     if (res?.success) { toast.success('Draft deleted.'); onChanged(); } else toast.error(res?.error || 'Failed.');
   };

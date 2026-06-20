@@ -16,6 +16,7 @@ export async function getOversightReport() {
 
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const windowStart = new Date(now.getFullYear(), now.getMonth() - 11, 1); // last 12 months
 
   const [
     membersByStatus,
@@ -28,8 +29,13 @@ export async function getOversightReport() {
     eventCounts,
     assetAgg,
     approvalsByStatus,
+    approvalsByModule,
     topOutstanding,
     recentRuleChanges,
+    windowPayments,
+    membersJoined,
+    grievanceByStatus,
+    recentActivity,
   ] = await Promise.all([
     prisma.member.groupBy({ by: ['status'], where, _count: { _all: true } }),
     prisma.paymentLog.groupBy({ by: ['status'], where, _count: { _all: true }, _sum: { amount: true } }),
@@ -41,8 +47,13 @@ export async function getOversightReport() {
     prisma.event.groupBy({ by: ['status'], where, _count: { _all: true } }),
     prisma.asset.aggregate({ _sum: { currentValue: true, quantity: true, issuedQuantity: true }, _count: { _all: true }, where }),
     prisma.approvalRequest.groupBy({ by: ['status'], where, _count: { _all: true } }),
+    prisma.approvalRequest.groupBy({ by: ['module'], where, _count: { _all: true } }),
     prisma.paymentStatus.findMany({ where: { member: memberWhere, balance: { gt: 0 } }, include: { member: { select: { name: true, memberId: true } } }, orderBy: { balance: 'desc' }, take: 5 }),
     prisma.ruleChangeLog.findMany({ where, orderBy: { createdAt: 'desc' }, take: 5 }),
+    prisma.paymentLog.findMany({ where: { ...where, status: { in: ['SUCCESS', 'PARTIAL'] }, createdAt: { gte: windowStart } }, select: { amount: true, createdAt: true, description: true } }),
+    prisma.member.findMany({ where: { ...where, joinDate: { gte: windowStart } }, select: { joinDate: true } }),
+    prisma.memberRequest.groupBy({ by: ['status'], where: { ...where, type: { in: ['GRIEVANCE', 'FEEDBACK'] } }, _count: { _all: true } }),
+    prisma.auditLog.findMany({ where, orderBy: { createdAt: 'desc' }, take: 10, include: { user: { select: { name: true, email: true } } } }),
   ]);
 
   const countByKey = (rows: { status: string; _count: { _all: number } }[]) =>
@@ -54,7 +65,44 @@ export async function getOversightReport() {
   const paymentStatus = Object.fromEntries((paymentsByStatus as any[]).map(r => [r.status, { count: r._count._all, sum: Number(r._sum.amount ?? 0) }]));
   const totalCollected = (paymentStatus.SUCCESS?.sum ?? 0) + (paymentStatus.PARTIAL?.sum ?? 0);
 
+  // ── 12-month trend buckets (collections, penalties, member growth) ───────────
+  const monthKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  const months: { key: string; label: string }[] = [];
+  for (let i = 11; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    months.push({ key: monthKey(d), label: d.toLocaleDateString(undefined, { month: 'short' }) });
+  }
+  const bucket = new Map(months.map(m => [m.key, { collected: 0, penalties: 0, joined: 0 }]));
+  for (const p of windowPayments) {
+    const b = bucket.get(monthKey(new Date(p.createdAt)));
+    if (b) { b.collected += Number(p.amount); try { b.penalties += Number(JSON.parse(p.description || '{}').latePenalty) || 0; } catch { /* ignore */ } }
+  }
+  for (const m of membersJoined) {
+    const b = bucket.get(monthKey(new Date(m.joinDate)));
+    if (b) b.joined += 1;
+  }
+  let cumulative = totalMembers - membersJoined.length;
+  const trend = months.map(m => {
+    const b = bucket.get(m.key)!;
+    cumulative += b.joined;
+    return { month: m.label, collected: Math.round(b.collected), penalties: Math.round(b.penalties), joined: b.joined, members: cumulative };
+  });
+  const penaltiesCollected = trend.reduce((s, t) => s + t.penalties, 0);
+
+  const totalUnits = assetAgg._sum.quantity ?? 0;
+  const issuedUnits = assetAgg._sum.issuedQuantity ?? 0;
+
   return {
+    trend,
+    penaltiesCollected,
+    approvalsByModule: (approvalsByModule as any[]).map(r => ({ module: r.module, count: r._count._all })),
+    grievances: {
+      byStatus: countByKey(grievanceByStatus as any),
+      open: (countByKey(grievanceByStatus as any).PENDING ?? 0) + (countByKey(grievanceByStatus as any).IN_REVIEW ?? 0),
+      total: (grievanceByStatus as any[]).reduce((s, r) => s + r._count._all, 0),
+    },
+    assetUtilization: totalUnits > 0 ? Math.round((issuedUnits / totalUnits) * 100) : 0,
+    recentActivity: recentActivity.map(a => ({ id: a.id, action: a.action, details: a.details, createdAt: a.createdAt, user: a.user?.name ?? a.user?.email ?? 'System' })),
     members: {
       total: totalMembers,
       active: memberStatus.ACTIVE ?? 0,

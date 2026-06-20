@@ -1,4 +1,4 @@
-# NibTera Sales System: Comprehensive User Manual
+# NibTera Edir System: Comprehensive User Manual
 
 > **IMPORTANT**: This document has been moved. The centralized, authoritative version of the User Manual is now located at the project root:
 > 

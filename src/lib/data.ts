@@ -9,17 +9,25 @@ export interface DetailedMember {
   memberId: string;
   name: string;
   phone: string | null;
+  status: string;
+  contributionStatus: string;
   totalOutstanding: number;
   monthlyFee: number;
+  monthsBehind: number;
+  penaltiesPaid: number;
+  totalPaid: number;
+  nextDueDate: Date | null;
+  gracePeriodDays: number;
+  joinDate: Date;
   currency: string;
-  dueInstallments: { id: string; amount: number; dueDate: Date }[];
-  paymentHistory: { transactionId: string; amount: number; status: string; createdAt: Date }[];
+  dueInstallments: { id: string; amount: number; dueDate: Date; overdue: boolean }[];
+  paymentHistory: { transactionId: string; amount: number; status: string; method: string; createdAt: Date }[];
 }
 
 /**
  * Resolve a member by phone with the figures the public payment flow needs:
- * outstanding balance, monthly fee, due installments, and recent payment history.
- * Returns null when no member matches.
+ * outstanding balance, monthly fee, penalties, contribution status, due dates,
+ * and recent payment history. Returns null when no member matches.
  */
 export async function fetchDetailedMemberByPhone(phone: string): Promise<DetailedMember | null> {
   const normalized = normalizeEthiopianPhone(phone);
@@ -35,9 +43,21 @@ export async function fetchDetailedMemberByPhone(phone: string): Promise<Detaile
   if (!member) return null;
 
   const settings = member.edir?.settings;
+  const now = new Date();
+  const monthlyFee = Number(settings?.monthlyFee ?? 0);
+  const balance = Number(member.paymentStatus?.balance ?? 0);
+
   const dueInstallments = member.installmentPlans.flatMap(p => p.installments).map(i => ({
-    id: i.id, amount: Number(i.amount), dueDate: i.dueDate,
+    id: i.id, amount: Number(i.amount), dueDate: i.dueDate, overdue: new Date(i.dueDate) < now,
   }));
+
+  const penaltiesPaid = member.paymentLogs
+    .filter(l => l.status === 'SUCCESS' || l.status === 'PARTIAL')
+    .reduce((s, l) => { try { return s + (Number(JSON.parse(l.description || '{}').latePenalty) || 0); } catch { return s; } }, 0);
+
+  const dueDay = settings?.dueDay ?? 1;
+  const nextDue = new Date(now.getFullYear(), now.getMonth(), dueDay);
+  if (nextDue < now) nextDue.setMonth(nextDue.getMonth() + 1);
 
   return {
     id: member.id,
@@ -45,12 +65,20 @@ export async function fetchDetailedMemberByPhone(phone: string): Promise<Detaile
     memberId: member.memberId,
     name: member.name,
     phone: member.phone,
-    totalOutstanding: Number(member.paymentStatus?.balance ?? 0),
-    monthlyFee: Number(settings?.monthlyFee ?? 0),
+    status: member.status,
+    contributionStatus: member.paymentStatus?.status ?? 'PENDING',
+    totalOutstanding: balance,
+    monthlyFee,
+    monthsBehind: monthlyFee > 0 ? Math.floor(balance / monthlyFee) : 0,
+    penaltiesPaid,
+    totalPaid: Number(member.paymentStatus?.totalPaid ?? 0),
+    nextDueDate: nextDue,
+    gracePeriodDays: settings?.gracePeriodDays ?? 0,
+    joinDate: member.joinDate,
     currency: settings?.currency ?? 'ETB',
     dueInstallments,
     paymentHistory: member.paymentLogs.map(l => ({
-      transactionId: l.transactionId, amount: Number(l.amount), status: l.status.toLowerCase(), createdAt: l.createdAt,
+      transactionId: l.transactionId, amount: Number(l.amount), status: l.status.toLowerCase(), method: l.method, createdAt: l.createdAt,
     })),
   };
 }

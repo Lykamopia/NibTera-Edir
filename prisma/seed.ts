@@ -18,6 +18,7 @@ const EDIR_PERMISSIONS = [
   'view_assets', 'manage_assets', 'manage_asset_categories', 'approve_asset_issuance',
   'view_rules', 'manage_rules', 'approve_rule_change',
   'view_audit_log', 'view_payment_log', 'manage_audit_log',
+  'handle_member_requests',
   'manage_edir_settings', 'manage_committee',
   'view_users', 'manage_users', 'view_roles', 'manage_roles', 'reset_password', 'lock_user', 'unlock_user',
 ];

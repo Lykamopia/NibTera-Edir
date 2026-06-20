@@ -21,6 +21,7 @@ import {
 import { PageHeader, LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
 import { getRuleConfig, saveRuleConfig } from '@/app/actions/rule-config';
 import { saveEmergencyType, deleteEmergencyType } from '@/app/actions/emergencies';
+import { useConfirm } from '@/components/ui/confirm-provider';
 
 type Tier = { id: string; label?: string | null; fromDays: number; toDays: number | null; type: 'FIXED' | 'PERCENT'; value: number };
 type Cfg = {
@@ -65,6 +66,7 @@ export default function RuleConfigClient() {
   const [error, setError] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editingType, setEditingType] = useState<any | null | undefined>(undefined);
+  const confirm = useConfirm();
 
   const load = useCallback(() => {
     setLoading(true); setError(false);
@@ -240,7 +242,7 @@ export default function RuleConfigClient() {
                       </div>
                       <div className="flex shrink-0 gap-1">
                         <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => setEditingType(t)}><Pencil className="h-4 w-4" /></Button>
-                        <Button size="icon" variant="ghost" className="h-8 w-8" onClick={async () => { if (!confirm(`Delete "${t.name}"? Types with claims are deactivated instead.`)) return; const r = await deleteEmergencyType(t.id); if (r?.success) { toast.success('Removed.'); load(); } else toast.error(r?.error || 'Failed.'); }}><Trash2 className="h-4 w-4" /></Button>
+                        <Button size="icon" variant="ghost" className="h-8 w-8" onClick={async () => { if (!(await confirm({ title: 'Delete emergency type', description: `Delete "${t.name}"? Types with claims are deactivated instead.`, destructive: true, confirmText: 'Delete' }))) return; const r = await deleteEmergencyType(t.id); if (r?.success) { toast.success('Removed.'); load(); } else toast.error(r?.error || 'Failed.'); }}><Trash2 className="h-4 w-4" /></Button>
                       </div>
                     </div>
                     <div className="flex flex-wrap gap-1.5 text-xs">

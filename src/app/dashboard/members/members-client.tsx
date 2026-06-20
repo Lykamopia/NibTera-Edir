@@ -15,6 +15,8 @@ import Link from 'next/link';
 import { Loader2, Plus, Search, Download, UserX, Eye, Upload } from 'lucide-react';
 import { getMembers, createMember, exportMembersCsv, requestMemberRemoval, type MemberInput } from '@/app/actions/members';
 import { getMemberRoles } from '@/app/actions/rule-config';
+import { CredentialsDialog, type Credentials } from '@/components/credentials-dialog';
+import { useConfirm } from '@/components/ui/confirm-provider';
 
 const EMPTY: MemberInput = {
   name: '', occupation: '', photoUrl: '', dateOfBirth: '', gender: '', nationalId: '',
@@ -36,6 +38,7 @@ export default function MembersClient() {
   const [page, setPage] = useState(1);
   const [pages, setPages] = useState(1);
   const [total, setTotal] = useState(0);
+  const confirm = useConfirm();
 
   const load = useCallback(() => {
     setLoading(true); setError(false);
@@ -59,7 +62,7 @@ export default function MembersClient() {
   };
 
   const onRemove = async (m: any) => {
-    if (!confirm(`Submit a removal request for ${m.name}? This requires checker approval.`)) return;
+    if (!(await confirm({ title: 'Request member removal', description: `Submit a removal request for ${m.name}? This requires checker approval.`, confirmText: 'Submit request' }))) return;
     const res = await requestMemberRemoval(m.id);
     if (res?.success) toast.success('Removal submitted for approval.');
     else toast.error(res?.error || 'Failed to submit removal.');
@@ -155,6 +158,7 @@ function AddMemberDialog({ onCreated }: { onCreated: () => void }) {
   const [roles, setRoles] = useState<string[]>(['Member']);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const photoRef = useRef<HTMLInputElement>(null);
+  const [cred, setCred] = useState<{ name: string; credentials: Credentials } | null>(null);
 
   useEffect(() => {
     if (open) getMemberRoles().then(setRoles).catch(() => setRoles(['Member']));
@@ -188,6 +192,7 @@ function AddMemberDialog({ onCreated }: { onCreated: () => void }) {
     setSaving(false);
     if (res?.success) {
       toast.success(`Member created: ${res.member.memberId}`);
+      if (res.credentials) setCred({ name: res.member.name, credentials: res.credentials as Credentials });
       setOpen(false); reset(); onCreated();
     } else {
       toast.error(res?.error || 'Failed to create member.');
@@ -196,6 +201,8 @@ function AddMemberDialog({ onCreated }: { onCreated: () => void }) {
   };
 
   return (
+    <>
+    {cred && <CredentialsDialog memberName={cred.name} credentials={cred.credentials} onClose={() => setCred(null)} />}
     <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) reset(); }}>
       <DialogTrigger asChild>
         <Button size="sm"><Plus className="h-4 w-4 mr-1" /> Add Member</Button>
@@ -289,6 +296,7 @@ function AddMemberDialog({ onCreated }: { onCreated: () => void }) {
         </DialogFooter>
       </DialogContent>
     </Dialog>
+    </>
   );
 }
 

@@ -14,7 +14,9 @@ const tierSchema = z.object({
   id: z.string(),
   label: z.string().optional().nullable(),
   fromDays: z.coerce.number().int().min(0),
-  toDays: z.union([z.coerce.number().int().min(0), z.null()]).optional(),
+  // `.nullable()` short-circuits on null BEFORE coercion — otherwise z.coerce.number()
+  // turns a null (open-ended tier) into 0 and trips the "to before from" check.
+  toDays: z.coerce.number().int().min(0).nullable().optional(),
   type: z.enum(['FIXED', 'PERCENT']),
   value: z.coerce.number().min(0),
 });

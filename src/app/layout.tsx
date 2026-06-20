@@ -2,6 +2,7 @@ import type {Metadata} from 'next';
 import './globals.css';
 import { Toaster } from "@/components/ui/sonner"
 import { NotificationProvider } from '@/components/notification-provider';
+import { ConfirmProvider } from '@/components/ui/confirm-provider';
 import { ThemeProvider } from '@/components/theme-provider';
 import AuthProvider from '@/components/auth-provider';
 import { OverlayCleanup } from '@/components/overlay-cleanup';
@@ -9,8 +10,8 @@ import { headers } from 'next/headers';
 import Script from 'next/script';
 
 export const metadata: Metadata = {
-  title: 'Edir Management Platform',
-  description: 'Manage members, contributions, emergencies, events, and governance for your Edir.',
+  title: 'NibTera Edir',
+  description: 'NibTera Edir — manage members, contributions, emergencies, events, and governance for your Edir.',
 };
 
 export default async function RootLayout({
@@ -37,7 +38,9 @@ export default async function RootLayout({
                 disableTransitionOnChange
             >
                 <NotificationProvider>
-                    {children}
+                    <ConfirmProvider>
+                        {children}
+                    </ConfirmProvider>
                     <Toaster />
                     <OverlayCleanup />
                 </NotificationProvider>

@@ -13,15 +13,15 @@ export default function AboutClientPage({ appVersion }: { appVersion: string }) 
                         <div className="mx-auto mb-4">
                             <Logo layout="vertical" />
                         </div>
-                        <CardTitle>About NibTera Sales</CardTitle>
+                        <CardTitle>About NibTera Edir</CardTitle>
                         <CardDescription>Version {appVersion}</CardDescription>
                     </CardHeader>
                     <CardContent className="text-center text-muted-foreground space-y-4">
                         <p>
-                            The Plan Management System is a self-contained, secure web application designed to manage organizational plans efficiently.
+                            NibTera Edir is a secure, multi-tenant platform for managing Ethiopian Edir community associations — members, contributions, emergencies, events, assets, and governance.
                         </p>
                         <p>
-                            It provides a centralized platform for creating, tracking, and managing plans, ensuring data integrity, security, and clear oversight.
+                            It provides a centralized, permission-based platform for registering members, collecting contributions, processing emergency benefits, and enforcing each Edir&apos;s rules with clear oversight and full audit trails.
                         </p>
                     </CardContent>
                 </Card>

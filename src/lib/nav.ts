@@ -8,6 +8,7 @@ export const IMPLEMENTED_PAGES = new Set<string>([
   'members',
   'payments',
   'approvals',
+  'member-requests',
   'emergencies',
   'events',
   'assets',

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import { cn } from '@/lib/utils';
+import { usePrompt } from '@/components/ui/confirm-provider';
 import { Bold, Italic, Underline, List, ListOrdered, Heading1, Heading2, Heading3, Quote, Link2, Pilcrow, Undo, Redo } from 'lucide-react';
 
 /**
@@ -11,6 +12,7 @@ import { Bold, Italic, Underline, List, ListOrdered, Heading1, Heading2, Heading
  */
 export function RichTextEditor({ value, onChange, className }: { value: string; onChange: (html: string) => void; className?: string }) {
   const ref = useRef<HTMLDivElement>(null);
+  const prompt = usePrompt();
 
   // Initialise once; do not re-write innerHTML on every keystroke (would reset caret).
   useEffect(() => {
@@ -25,7 +27,7 @@ export function RichTextEditor({ value, onChange, className }: { value: string; 
     sync();
   };
   const block = (tag: string) => exec('formatBlock', `<${tag}>`);
-  const link = () => { const url = window.prompt('Link URL (https://…)'); if (url) exec('createLink', url); };
+  const link = async () => { const url = await prompt({ title: 'Insert link', label: 'URL', placeholder: 'https://…' }); if (url) exec('createLink', url); };
 
   const Btn = ({ onClick, title, children }: { onClick: () => void; title: string; children: React.ReactNode }) => (
     <button type="button" title={title} onMouseDown={(e) => e.preventDefault()} onClick={onClick}

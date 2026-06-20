@@ -111,6 +111,11 @@ export const pagePermissions: PagePermissionDef[] = [
     actions: [{ id: 'view_committee_oversight', label: 'View Oversight', description: 'Read-only committee dashboard', isAccess: true }],
   },
   {
+    id: 'member-requests', label: 'Member Requests', path: '/dashboard/requests', icon: 'Inbox', section: 'operations',
+    accessPermissions: ['handle_member_requests'],
+    actions: [{ id: 'handle_member_requests', label: 'Handle Member Requests', description: 'Review and respond to member self-service requests (relatives, emergencies, assets, grievances)', isAccess: true }],
+  },
+  {
     id: 'audit', label: 'Audit Log', path: '/dashboard/audit', icon: 'ScrollText', section: 'governance',
     accessPermissions: ['view_audit_log', 'manage_audit_log'],
     actions: [

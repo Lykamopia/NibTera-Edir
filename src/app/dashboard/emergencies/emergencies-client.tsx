@@ -18,6 +18,7 @@ import {
   getEmergencyClaims, getEmergencyTypes, reportClaim, rejectReportedClaim,
   submitClaimForApproval, requestDisbursement, saveEmergencyType, deleteEmergencyType,
 } from '@/app/actions/emergencies';
+import { useConfirm, usePrompt } from '@/components/ui/confirm-provider';
 
 const STATUS_VARIANT: Record<string, { label: string; cls: string }> = {
   REPORTED: { label: 'Reported', cls: 'bg-blue-100 text-blue-800' },
@@ -57,6 +58,7 @@ function ClaimsTab() {
   const [reporting, setReporting] = useState(false);
   const [submitTarget, setSubmitTarget] = useState<any | null>(null);
   const [disburseTarget, setDisburseTarget] = useState<any | null>(null);
+  const prompt = usePrompt();
 
   const load = useCallback(() => {
     setLoading(true); setError(false);
@@ -65,7 +67,7 @@ function ClaimsTab() {
   useEffect(() => { load(); }, [load]);
 
   const onReject = async (c: any) => {
-    const reason = window.prompt(`Reject the claim for ${c.memberName}? Optionally add a reason:`);
+    const reason = await prompt({ title: 'Reject claim', description: `Reject the claim for ${c.memberName}?`, label: 'Reason (optional)', multiline: true, confirmText: 'Reject claim' });
     if (reason === null) return;
     const res = await rejectReportedClaim(c.id, reason || undefined);
     if (res?.success) { toast.success('Claim rejected.'); load(); }
@@ -339,6 +341,7 @@ function TypesTab() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [editing, setEditing] = useState<any | null | undefined>(undefined); // undefined = closed, null = new
+  const confirm = useConfirm();
 
   const load = useCallback(() => {
     setLoading(true); setError(false);
@@ -347,7 +350,7 @@ function TypesTab() {
   useEffect(() => { load(); }, [load]);
 
   const onDelete = async (t: any) => {
-    if (!confirm(`Delete "${t.name}"? Types with existing claims are deactivated instead.`)) return;
+    if (!(await confirm({ title: 'Delete emergency type', description: `Delete "${t.name}"? Types with existing claims are deactivated instead.`, destructive: true, confirmText: 'Delete' }))) return;
     const res = await deleteEmergencyType(t.id);
     if (res?.success) { toast.success('Type removed.'); load(); }
     else toast.error(res?.error || 'Failed to delete type.');

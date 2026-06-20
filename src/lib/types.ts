@@ -57,6 +57,8 @@ export type Permission =
   | 'view_audit_log'
   | 'view_payment_log'
   | 'manage_audit_log'
+  // Member self-service requests
+  | 'handle_member_requests'
   // Edir settings & committee
   | 'manage_edir_settings'
   | 'manage_committee'

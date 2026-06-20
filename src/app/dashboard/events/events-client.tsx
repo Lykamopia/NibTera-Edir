@@ -16,6 +16,7 @@ import {
   getEvents, getEvent, saveEvent, cancelEvent,
   addParticipants, inviteAllActiveMembers, removeParticipant, setAttendance, finalizeAttendance,
 } from '@/app/actions/events';
+import { useConfirm } from '@/components/ui/confirm-provider';
 
 const STATUS: Record<string, { label: string; cls: string }> = {
   SCHEDULED: { label: 'Scheduled', cls: 'bg-blue-100 text-blue-800' },
@@ -170,6 +171,7 @@ function ManageDialog({ eventId, onClose, onChanged }: { eventId: string; onClos
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [adding, setAdding] = useState(false);
+  const confirm = useConfirm();
 
   const load = useCallback(() => {
     setLoading(true);
@@ -195,7 +197,7 @@ function ManageDialog({ eventId, onClose, onChanged }: { eventId: string; onClos
     else toast.error(res?.error || 'Failed to invite members.');
   };
   const onFinalize = async () => {
-    if (!confirm('Finalize this event? Absent participants will be penalized and attendance will be locked.')) return;
+    if (!(await confirm({ title: 'Finalize event', description: 'Absent participants will be penalized and attendance will be locked.', confirmText: 'Finalize' }))) return;
     setBusy(true);
     const res = await finalizeAttendance(eventId);
     setBusy(false);
@@ -264,7 +266,7 @@ function ManageDialog({ eventId, onClose, onChanged }: { eventId: string; onClos
 
             <DialogFooter className="gap-2 sm:justify-between">
               {event.status === 'SCHEDULED' ? (
-                <Button variant="ghost" className="text-destructive" onClick={async () => { if (confirm('Cancel this event?')) { const r = await cancelEvent(eventId); if (r?.success) { toast.success('Event cancelled.'); load(); onChanged(); } else toast.error(r?.error || 'Failed.'); } }}>
+                <Button variant="ghost" className="text-destructive" onClick={async () => { if (await confirm({ title: 'Cancel event', description: 'This event will be cancelled.', destructive: true, confirmText: 'Cancel event', cancelText: 'Keep' })) { const r = await cancelEvent(eventId); if (r?.success) { toast.success('Event cancelled.'); load(); onChanged(); } else toast.error(r?.error || 'Failed.'); } }}>
                   <Ban className="h-4 w-4 mr-1" /> Cancel Event
                 </Button>
               ) : <span />}

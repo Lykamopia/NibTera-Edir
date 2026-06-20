@@ -16,13 +16,13 @@ export default function Logo({ className, hideText = false, layout = 'horizontal
       isVertical ? 'flex-col gap-2' : 'flex-row gap-2',
       className
     )}>
-      <img src="/Logo.png" alt="NibTera Sales Logo" width={imageSize} height={imageSize} className="object-contain" />
+      <img src="/Logo.png" alt="NibTera Edir Logo" width={imageSize} height={imageSize} className="object-contain" />
       {!hideText && (
         <span className={cn(
             "font-bold text-primary",
             isVertical ? 'text-2xl' : 'text-xl'
         )}>
-            NibTera Sales
+            NibTera Edir
         </span>
       )}
     </div>

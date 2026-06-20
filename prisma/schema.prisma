@@ -35,6 +35,7 @@ model Edir {
   ruleChangeLogs RuleChangeLog[]
   bylaws        Bylaw[]
   rulesVersions RulesVersion[]
+  memberRequests MemberRequest[]
 }
 
 model User {
@@ -52,6 +53,10 @@ model User {
   tokenVersion        Int       @default(0)
   failedLoginAttempts Int       @default(0)
   lockoutUntil        DateTime?
+  lastLoginAt         DateTime?
+  passwordChangedAt   DateTime?
+  passwordResetCount  Int       @default(0)
+  lastPasswordResetAt DateTime?
   lastIp              String?
   lastUserAgent       String?
   twoFactorEnabled    Boolean   @default(false)
@@ -73,6 +78,7 @@ model User {
   approvalEvents       ApprovalEvent[]
   rulesAuthored        RulesVersion[]        @relation("RulesAuthor")
   rulesApproved        RulesVersion[]        @relation("RulesApprover")
+  memberRequestsReviewed MemberRequest[]     @relation("MemberRequestReviewer")
 
   @@index([roleId])
   @@index([edirId])
@@ -149,6 +155,7 @@ model Member {
   emergencyClaims EmergencyClaim[]
   eventParticipations EventParticipant[]
   assetIssuances  AssetIssuance[]
+  requests        MemberRequest[]
 
   @@unique([edirId, memberId])
   @@index([edirId])
@@ -455,6 +462,49 @@ model RulesAttachment {
   createdAt DateTime     @default(now())
 
   @@index([versionId])
+}
+
+// ─── Member self-service requests (relative / emergency / asset / grievance) ──
+
+enum MemberRequestType {
+  RELATIVE
+  EMERGENCY
+  ASSET
+  GRIEVANCE
+  FEEDBACK
+}
+
+enum MemberRequestStatus {
+  PENDING
+  IN_REVIEW
+  APPROVED
+  REJECTED
+  RESOLVED
+}
+
+model MemberRequest {
+  id           String              @id @default(cuid())
+  edirId       String
+  edir         Edir                @relation(fields: [edirId], references: [id], onDelete: Cascade)
+  memberId     String
+  member       Member              @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  type         MemberRequestType
+  category     String? // e.g. grievance category, asset name, relationship
+  subject      String
+  description  String?             @db.Text
+  payload      Json? // type-specific structured data
+  attachments  Json? // [{ name, url }]
+  status       MemberRequestStatus @default(PENDING)
+  response     String?             @db.Text
+  reviewedById String?
+  reviewedBy   User?               @relation("MemberRequestReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt   DateTime?
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  @@index([edirId])
+  @@index([memberId])
+  @@index([status])
 }
 
 // ─── Emergencies (later-iteration models, defined now) ───────────────────────
