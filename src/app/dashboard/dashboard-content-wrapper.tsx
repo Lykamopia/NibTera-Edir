@@ -28,6 +28,20 @@ function Icon({ name, className }: { name: string; className?: string }) {
   return <Cmp className={className} />;
 }
 
+/** Edir identity on the right of the header so members always know their Edir. */
+function EdirBadge({ edir }: { edir?: { name?: string | null; logoUrl?: string | null } | null }) {
+  if (!edir?.name) return null;
+  const initials = edir.name.split(' ').map(s => s[0]).slice(0, 2).join('').toUpperCase();
+  return (
+    <div className="flex items-center gap-2 rounded-lg border bg-card px-2 py-1 shadow-sm">
+      {edir.logoUrl
+        ? <img src={edir.logoUrl} alt={edir.name} className="h-7 w-7 rounded-md object-contain" />
+        : <span className="flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-[11px] font-bold text-primary">{initials}</span>}
+      <span className="hidden max-w-[160px] truncate text-sm font-semibold sm:inline">{edir.name}</span>
+    </div>
+  );
+}
+
 export function DashboardContentWrapper({ user, children }: { user: LoggedInUser | null; children: React.ReactNode }) {
   const pathname = usePathname();
   const [isMounted, setIsMounted] = useState(false);
@@ -111,6 +125,7 @@ export function DashboardContentWrapper({ user, children }: { user: LoggedInUser
               <SidebarTrigger className="hidden md:flex" />
               <div className="hidden md:flex items-center"><Breadcrumb /></div>
               <div className="w-full flex-1" />
+              <EdirBadge edir={(user as any)?.edir} />
               <ThemeToggle />
               <NotificationBell />
               {user && <UserNav user={user as any} />}

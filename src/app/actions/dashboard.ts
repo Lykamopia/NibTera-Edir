@@ -7,6 +7,7 @@ import '@/lib/approval-modules';
 
 export type DashboardData = {
   user: { id: string; name: string | null; roleName: string | null; isSuperAdmin: boolean };
+  edir: { name: string; logoUrl: string | null } | null;
   kpis: {
     totalMembers: number;
     activeMembers: number;
@@ -35,9 +36,11 @@ export async function getDashboardData(): Promise<DashboardData> {
 
   const totalPaid = Number(paidAgg._sum.amount ?? 0);
   const totalDisbursed = Number(disbursedAgg._sum.disbursedAmount ?? 0);
+  const edir = actor.edirId ? await prisma.edir.findUnique({ where: { id: actor.edirId }, select: { name: true, logoUrl: true } }) : null;
 
   return {
     user: { id: actor.id, name: actor.name, roleName: actor.role?.name ?? null, isSuperAdmin: actor.isSuperAdmin },
+    edir,
     kpis: {
       totalMembers,
       activeMembers,

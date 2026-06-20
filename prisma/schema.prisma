@@ -16,6 +16,7 @@ model Edir {
   id          String   @id @default(cuid())
   name        String
   description String?
+  logoUrl     String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

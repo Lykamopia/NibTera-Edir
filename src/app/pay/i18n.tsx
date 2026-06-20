@@ -1,0 +1,151 @@
+'use client';
+
+import { createContext, useContext, useEffect, useState } from 'react';
+
+export type Lang = 'en' | 'am';
+
+const en: Record<string, string> = {
+  appTitle: 'Edir Payment',
+  appSubtitle: 'Pay contributions securely with NIB',
+  language: 'Language',
+  phoneLabel: 'Member phone number',
+  phoneHelp: 'Pre-filled with your number — change it to pay on behalf of another member.',
+  fetchBtn: 'Fetch Member Data',
+  sessionWarn: 'Open this page from the NIB Super App to start a secure payment session.',
+  member: 'Member',
+  membership: 'Membership',
+  status: 'Status',
+  payingFor: 'You are paying for',
+  outstanding: 'Outstanding',
+  monthlyFee: 'Monthly Fee',
+  monthsBehind: 'Months Behind',
+  contribution: 'Contribution',
+  breakdownTitle: 'Payment Breakdown',
+  outstandingBalance: 'Outstanding balance',
+  thisMonth: "This month's contribution",
+  penaltiesPaid: 'Penalties paid to date',
+  suggestedTotal: 'Suggested total',
+  amountToPay: 'Amount to pay',
+  amountHelp: 'Edit to pay a partial amount. Payments settle penalties → installments → monthly fee.',
+  upcoming: 'Upcoming Installments',
+  due: 'Due',
+  overdue: 'Overdue',
+  history: 'Payment History',
+  viewHistory: 'View Payment History',
+  pay: 'Pay',
+  processing: 'Processing…',
+  change: 'Change',
+  received: 'Payment received',
+  youPaid: 'You paid',
+  prevBalance: 'Previous balance',
+  newBalance: 'New outstanding balance',
+  contributionStatus: 'Contribution status',
+  updating: 'Updating your balance…',
+  makeAnother: 'Make another payment',
+  ref: 'Ref',
+  // penalty
+  penaltyTitle: 'Late Payment Penalty',
+  penaltyWhy: 'Why am I being charged?',
+  penaltyReason: 'Reason',
+  penaltyRule: 'Rule applied',
+  penaltyOverdue: 'Overdue period',
+  penaltyHow: 'How it was calculated',
+  penaltyAmount: 'Penalty amount',
+  days: 'days',
+  gracePeriod: 'grace period',
+  afterGrace: 'after grace',
+  // statuses
+  ACTIVE: 'Active', INACTIVE: 'Inactive', SUSPENDED: 'Suspended', TERMINATED: 'Terminated',
+  PAID: 'Paid', PENDING: 'Pending',
+  // errors
+  err_enterPhone: 'Please enter a phone number.',
+  err_invalid: 'Please enter a phone number.',
+  err_unauthorized: 'Your payment session has expired. Please reopen from the Super App.',
+  err_not_found: 'No member is registered with this phone number.',
+  err_error: 'Could not retrieve member details. Please try again.',
+  err_amount: 'Enter an amount greater than zero.',
+  err_channel: 'Could not reach the NIB Super App to complete the payment. Please open this page from within the Super App.',
+  err_notCompleted: 'Payment was not completed.',
+  err_startFailed: 'Failed to start payment.',
+  thankYou: 'Thank you',
+};
+
+const am: Record<string, string> = {
+  appTitle: 'የእድር ክፍያ',
+  appSubtitle: 'መዋጮዎን በNIB በደህንነት ይክፈሉ',
+  language: 'ቋንቋ',
+  phoneLabel: 'የአባል ስልክ ቁጥር',
+  phoneHelp: 'በእርስዎ ቁጥር ተሞልቷል — ለሌላ አባል ለመክፈል ይቀይሩት።',
+  fetchBtn: 'የአባል መረጃ አምጣ',
+  sessionWarn: 'ደህንነቱ የተጠበቀ ክፍያ ለመጀመር ይህን ገጽ ከNIB ሱፐር አፕ ይክፈቱ።',
+  member: 'አባል',
+  membership: 'አባልነት',
+  status: 'ሁኔታ',
+  payingFor: 'እየከፈሉ ያሉት ለ',
+  outstanding: 'ቀሪ ዕዳ',
+  monthlyFee: 'ወርሃዊ መዋጮ',
+  monthsBehind: 'የዘገዩ ወራት',
+  contribution: 'መዋጮ',
+  breakdownTitle: 'የክፍያ ዝርዝር',
+  outstandingBalance: 'ቀሪ ሂሳብ',
+  thisMonth: 'የዚህ ወር መዋጮ',
+  penaltiesPaid: 'እስካሁን የተከፈለ ቅጣት',
+  suggestedTotal: 'የተጠቆመ ጠቅላላ',
+  amountToPay: 'የሚከፈል መጠን',
+  amountHelp: 'ከፊል ለመክፈል ያስተካክሉ። ክፍያዎች ቅጣት → ክፍያ → ወርሃዊ መዋጮ በቅደም ተከተል ይከፈላሉ።',
+  upcoming: 'መጪ ክፍያዎች',
+  due: 'የሚከፈልበት',
+  overdue: 'ያለፈበት',
+  history: 'የክፍያ ታሪክ',
+  viewHistory: 'የክፍያ ታሪክ ይመልከቱ',
+  pay: 'ክፈል',
+  processing: 'በሂደት ላይ…',
+  change: 'ቀይር',
+  received: 'ክፍያ ተቀብሏል',
+  youPaid: 'ከፍለዋል',
+  prevBalance: 'ቀዳሚ ሂሳብ',
+  newBalance: 'አዲስ ቀሪ ሂሳብ',
+  contributionStatus: 'የመዋጮ ሁኔታ',
+  updating: 'ሂሳብዎን በማዘመን ላይ…',
+  makeAnother: 'ሌላ ክፍያ ያድርጉ',
+  ref: 'ማጣቀሻ',
+  penaltyTitle: 'የዘገየ ክፍያ ቅጣት',
+  penaltyWhy: 'ለምን ተቀጣሁ?',
+  penaltyReason: 'ምክንያት',
+  penaltyRule: 'የተተገበረ ደንብ',
+  penaltyOverdue: 'ያለፈበት ጊዜ',
+  penaltyHow: 'እንዴት እንደተሰላ',
+  penaltyAmount: 'የቅጣት መጠን',
+  days: 'ቀናት',
+  gracePeriod: 'የችሮታ ጊዜ',
+  afterGrace: 'ከችሮታ በኋላ',
+  ACTIVE: 'ንቁ', INACTIVE: 'ቦዝኗል', SUSPENDED: 'ታግዷል', TERMINATED: 'ተቋርጧል',
+  PAID: 'ተከፍሏል', PENDING: 'በመጠባበቅ ላይ',
+  err_enterPhone: 'እባክዎ ስልክ ቁጥር ያስገቡ።',
+  err_invalid: 'እባክዎ ስልክ ቁጥር ያስገቡ።',
+  err_unauthorized: 'የክፍያ ክፍለ ጊዜዎ አብቅቷል። እባክዎ ከሱፐር አፕ እንደገና ይክፈቱ።',
+  err_not_found: 'በዚህ ስልክ ቁጥር የተመዘገበ አባል የለም።',
+  err_error: 'የአባል መረጃ ማግኘት አልተቻለም። እባክዎ እንደገና ይሞክሩ።',
+  err_amount: 'ከዜሮ የሚበልጥ መጠን ያስገቡ።',
+  err_channel: 'ክፍያውን ለማጠናቀቅ NIB ሱፐር አፕ ማግኘት አልተቻለም። እባክዎ ይህን ገጽ ከሱፐር አፕ ውስጥ ይክፈቱ።',
+  err_notCompleted: 'ክፍያው አልተጠናቀቀም።',
+  err_startFailed: 'ክፍያ መጀመር አልተቻለም።',
+  thankYou: 'እናመሰግናለን',
+};
+
+const DICTS: Record<Lang, Record<string, string>> = { en, am };
+
+type Ctx = { lang: Lang; setLang: (l: Lang) => void; t: (k: string) => string };
+const LangContext = createContext<Ctx>({ lang: 'en', setLang: () => {}, t: (k) => en[k] ?? k });
+
+export function LangProvider({ children }: { children: React.ReactNode }) {
+  const [lang, setLangState] = useState<Lang>('en');
+  useEffect(() => {
+    try { const s = sessionStorage.getItem('pay_lang'); if (s === 'am' || s === 'en') setLangState(s); } catch { /* ignore */ }
+  }, []);
+  const setLang = (l: Lang) => { setLangState(l); try { sessionStorage.setItem('pay_lang', l); } catch { /* ignore */ } };
+  const t = (k: string) => DICTS[lang][k] ?? en[k] ?? k;
+  return <LangContext.Provider value={{ lang, setLang, t }}>{children}</LangContext.Provider>;
+}
+
+export const useLang = () => useContext(LangContext);

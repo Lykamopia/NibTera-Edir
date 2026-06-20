@@ -22,6 +22,7 @@ import { PageHeader, LoadingState, ErrorState, EmptyState } from '@/components/u
 import { getRuleConfig, saveRuleConfig } from '@/app/actions/rule-config';
 import { saveEmergencyType, deleteEmergencyType } from '@/app/actions/emergencies';
 import { useConfirm } from '@/components/ui/confirm-provider';
+import BrandingCard from './branding-card';
 
 type Tier = { id: string; label?: string | null; fromDays: number; toDays: number | null; type: 'FIXED' | 'PERCENT'; value: number };
 type Cfg = {
@@ -114,6 +115,8 @@ export default function RuleConfigClient() {
         }
       />
       <Input className="w-full sm:hidden" placeholder="Reason for changes (optional)" value={reason} onChange={e => setReason(e.target.value)} />
+
+      <BrandingCard />
 
       <Tabs defaultValue="contributions">
         <TabsList className="flex w-full flex-wrap justify-start">

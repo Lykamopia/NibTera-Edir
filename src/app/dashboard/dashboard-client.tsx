@@ -33,10 +33,21 @@ export default function DashboardClient() {
   if (loading) return <LoadingState label="Loading your dashboard…" className="min-h-[60vh]" />;
   if (error || !data) return <ErrorState variant="page" onRetry={load} showContact />;
 
-  const { user, kpis, recentPayments } = data;
+  const { user, kpis, recentPayments, edir } = data;
 
   return (
     <div className="space-y-6">
+      {edir && (
+        <div className="flex items-center gap-3 rounded-xl border bg-gradient-to-r from-primary/5 to-transparent p-3">
+          {edir.logoUrl
+            ? <img src={edir.logoUrl} alt={edir.name} className="h-12 w-12 rounded-lg object-contain" />
+            : <span className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary/10 text-base font-bold text-primary">{edir.name.split(' ').map(s => s[0]).slice(0, 2).join('').toUpperCase()}</span>}
+          <div>
+            <div className="text-xs uppercase tracking-wide text-muted-foreground">Your Edir</div>
+            <div className="text-lg font-bold">{edir.name}</div>
+          </div>
+        </div>
+      )}
       <PageHeader
         title={`Welcome, ${user.name || 'there'}`}
         description={user.roleName ? `Signed in as ${user.roleName} · Edir overview` : 'Edir overview'}

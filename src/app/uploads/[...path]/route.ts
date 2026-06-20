@@ -18,8 +18,9 @@ export async function GET(req: NextRequest, { params }: { params: { path: string
 
     const [fileType, ...fileNameParts] = filePathParts;
 
-    // Allow public access to background images for the login page
-    if (fileType === 'bg') {
+    // Allow public access to background images and Edir logos (non-sensitive
+    // branding shown on public pages such as the payment mini-app).
+    if (fileType === 'bg' || fileType === 'logos') {
         const uploadsDir = join(process.cwd(), 'uploads');
         const absolutePath = join(uploadsDir, ...filePathParts);
         
