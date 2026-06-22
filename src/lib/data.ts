@@ -44,7 +44,13 @@ export interface DetailedMember {
   assetPenalties: { id: string; asset: string; amount: number; date: Date | null; status: string }[];
   reinstatementFee: number;
   dueInstallments: { id: string; amount: number; dueDate: Date; overdue: boolean }[];
-  paymentHistory: { transactionId: string; amount: number; status: string; method: string; receiptUrl: string | null; createdAt: Date }[];
+  monthsPaid: number;
+  // Contribution coverage in calendar months (indexed from the member's join month).
+  contributionCoverage: { monthsPaid: number; paidThrough: Date | null; nextDue: Date | null };
+  paymentHistory: {
+    transactionId: string; amount: number; status: string; method: string; receiptUrl: string | null; createdAt: Date;
+    coverage: { months: number; from: string; to: string } | null;
+  }[];
 }
 
 /**
@@ -106,6 +112,16 @@ export async function fetchDetailedMemberByPhone(phone: string): Promise<Detaile
   const nextDue = new Date(now.getFullYear(), now.getMonth(), dueDay);
   if (nextDue < now) nextDue.setMonth(nextDue.getMonth() + 1);
 
+  // ── Contribution coverage by calendar month (indexed from the join month) ─────
+  const monthsPaid = member.paymentStatus?.monthsPaid ?? 0;
+  const joinMonth = new Date(member.joinDate.getFullYear(), member.joinDate.getMonth(), 1);
+  const monthFromJoin = (n: number) => new Date(joinMonth.getFullYear(), joinMonth.getMonth() + n, 1);
+  const contributionCoverage = {
+    monthsPaid,
+    paidThrough: monthsPaid > 0 ? monthFromJoin(monthsPaid - 1) : null,
+    nextDue: monthlyFee > 0 ? monthFromJoin(monthsPaid) : null,
+  };
+
   // ── Compute the applicable late-payment penalty from the Edir's penalty tiers ─
   const penalty = computePenalty({ monthsBehind, balance, dueDay, gracePeriodDays, currency, tiers: settings?.penaltyTiers, now });
 
@@ -135,9 +151,15 @@ export async function fetchDetailedMemberByPhone(phone: string): Promise<Detaile
     assetPenalties,
     reinstatementFee,
     dueInstallments,
-    paymentHistory: member.paymentLogs.map(l => ({
-      transactionId: l.transactionId, amount: Number(l.amount), status: l.status.toLowerCase(), method: l.method, receiptUrl: l.receiptUrl ?? null, createdAt: l.createdAt,
-    })),
+    monthsPaid,
+    contributionCoverage,
+    paymentHistory: member.paymentLogs.map(l => {
+      let coverage: { months: number; from: string; to: string } | null = null;
+      try { coverage = JSON.parse(l.description || '{}')?.coverage ?? null; } catch { coverage = null; }
+      return {
+        transactionId: l.transactionId, amount: Number(l.amount), status: l.status.toLowerCase(), method: l.method, receiptUrl: l.receiptUrl ?? null, createdAt: l.createdAt, coverage,
+      };
+    }),
   };
 }
 

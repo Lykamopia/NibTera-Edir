@@ -22,6 +22,8 @@ declare global {
 
 const money = (n: number, cur = 'ETB') => `${Number(n || 0).toLocaleString()} ${cur}`;
 const fmt = (d: any) => (d ? new Date(d).toLocaleDateString(undefined, { dateStyle: 'medium' }) : '—');
+const monthFmt = (d: any) => (d ? new Date(d).toLocaleDateString(undefined, { month: 'short', year: 'numeric' }) : '—');
+const addMonths = (d: any, n: number) => { const x = new Date(d); return new Date(x.getFullYear(), x.getMonth() + n, 1); };
 
 export default function PayClient() {
   return <LangProvider><PayInner /></LangProvider>;
@@ -162,6 +164,9 @@ function PayInner() {
                 <div className="flex items-center justify-between text-sm"><span className="text-muted-foreground">{t('prevBalance')}</span><span className="text-muted-foreground line-through">{money(prevOutstanding ?? 0, m.currency)}</span></div>
                 <div className="flex items-center justify-between"><span className="text-sm font-medium">{t('newBalance')}</span><span className={`text-lg font-bold ${newBalance > 0 ? 'text-warning' : 'text-success'}`}>{money(newBalance, m.currency)}</span></div>
                 <div className="flex items-center justify-between text-sm"><span className="text-muted-foreground">{t('contributionStatus')}</span><Badge variant="outline" className={m.contributionStatus === 'PAID' ? 'border-success/20 bg-success/10 text-success' : 'border-warning/20 bg-warning/10 text-warning'}>{t(m.contributionStatus)}</Badge></div>
+                {m?.contributionCoverage?.paidThrough && (
+                  <div className="flex items-center justify-between text-sm"><span className="text-muted-foreground">{t('paidThrough')}</span><span className="font-semibold text-success">{monthFmt(m.contributionCoverage.paidThrough)}</span></div>
+                )}
               </div>
             )}
           </div>
@@ -265,6 +270,9 @@ function MemberPanel({ member, amount, setAmount, paying, error, txn, onPay, onC
         </CardContent>
       </Card>
 
+      {/* Contribution coverage — which months are paid / being paid */}
+      <CoverageCard member={member} amount={amount} />
+
       {/* What You Owe — aggregated obligations */}
       <Card className="page-enter">
         <CardContent className="space-y-3 p-4">
@@ -352,6 +360,31 @@ function MemberPanel({ member, amount, setAmount, paying, error, txn, onPay, onC
         </div>
       </div>
     </>
+  );
+}
+
+function CoverageCard({ member, amount }: { member: Member; amount: string }) {
+  const { t } = useLang();
+  const m = member as any;
+  const cov = m.contributionCoverage || { monthsPaid: 0, paidThrough: null, nextDue: null };
+  const amt = Number(amount) || 0;
+  const monthsThisPays = m.monthlyFee > 0 ? Math.floor(amt / m.monthlyFee) : 0;
+  const coverTo = monthsThisPays > 1 && cov.nextDue ? addMonths(cov.nextDue, monthsThisPays - 1) : cov.nextDue;
+  return (
+    <Card className="page-enter">
+      <CardContent className="space-y-2.5 p-4">
+        <h3 className="flex items-center gap-1.5 text-sm font-semibold"><CalendarClock className="h-4 w-4 text-primary" /> {t('coverageTitle')}</h3>
+        <Line label={t('paidThrough')} value={cov.paidThrough ? monthFmt(cov.paidThrough) : t('noMonthsYet')} />
+        <Line label={t('nextDueMonth')} value={cov.nextDue ? monthFmt(cov.nextDue) : t('upToDate')} />
+        {monthsThisPays > 0 && cov.nextDue && (
+          <div className="rounded-md bg-primary/5 px-3 py-2 text-xs">
+            <span className="font-semibold text-primary">{t('thisPaysFor')} {monthsThisPays} {t('monthsUnit')}</span>
+            <span className="text-muted-foreground"> · </span>
+            <span className="font-medium">{monthFmt(cov.nextDue)}{monthsThisPays > 1 ? ` – ${monthFmt(coverTo)}` : ''}</span>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

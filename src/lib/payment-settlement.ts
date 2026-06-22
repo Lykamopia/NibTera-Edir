@@ -55,9 +55,10 @@ export async function settlePaymentTx(tx: Prisma.TransactionClient, input: Settl
   const status = await tx.paymentStatus.findUnique({ where: { memberId: input.memberId } });
   const settings = await tx.member.findUnique({
     where: { id: input.memberId },
-    select: { edir: { select: { settings: true } } },
+    select: { joinDate: true, edir: { select: { settings: true } } },
   });
   const monthlyFee = settings?.edir?.settings?.monthlyFee ?? D(0);
+  const prevMonthsPaid = status?.monthsPaid ?? 0;
 
   let remaining = D(input.total);
 
@@ -108,9 +109,27 @@ export async function settlePaymentTx(tx: Prisma.TransactionClient, input: Settl
   });
 
   if (input.paymentLogId) {
+    // Record which contribution months this payment covered, so the member can
+    // see "paid for March–May" rather than just an amount. Months are indexed
+    // from the member's join month; this payment covers the months immediately
+    // after whatever was already paid.
+    let coverage: { months: number; from: string; to: string } | null = null;
+    if (settings?.joinDate && monthsCovered > 0) {
+      const join = new Date(settings.joinDate);
+      const monthStart = (n: number) => new Date(join.getFullYear(), join.getMonth() + n, 1);
+      coverage = {
+        months: monthsCovered,
+        from: monthStart(prevMonthsPaid).toISOString(),
+        to: monthStart(prevMonthsPaid + monthsCovered - 1).toISOString(),
+      };
+    }
+    const prior = await tx.paymentLog.findUnique({ where: { id: input.paymentLogId }, select: { description: true } });
+    let desc: any = {};
+    try { desc = JSON.parse(prior?.description || '{}') || {}; } catch { desc = {}; }
+    if (coverage) desc.coverage = coverage;
     await tx.paymentLog.update({
       where: { id: input.paymentLogId },
-      data: { status: input.partial ? 'PARTIAL' : 'SUCCESS' },
+      data: { status: input.partial ? 'PARTIAL' : 'SUCCESS', description: JSON.stringify(desc) },
     });
   }
 

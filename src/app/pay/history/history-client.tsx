@@ -6,13 +6,14 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
-import { Loader2, ArrowLeft, Search, History, Receipt, AlertTriangle, CheckCircle2, XCircle, Building2 } from 'lucide-react';
+import { Loader2, ArrowLeft, Search, History, Receipt, AlertTriangle, CheckCircle2, XCircle, Building2, CalendarCheck } from 'lucide-react';
 import { fetchMemberForPayment } from '../actions';
 import type { DetailedMember as Member } from '@/lib/data';
 import { LangProvider, useLang } from '../i18n';
 
 const money = (n: number, cur = 'ETB') => `${Number(n || 0).toLocaleString()} ${cur}`;
 const fmt = (d: any) => new Date(d).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+const monthFmt = (d: any) => (d ? new Date(d).toLocaleDateString(undefined, { month: 'short', year: 'numeric' }) : '');
 
 // Only Paid/Successful and Failed are shown — Pending/Void are hidden so members
 // are never misled into thinking an in-progress payment has completed.
@@ -105,6 +106,12 @@ function HistoryInner() {
                           <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${ok ? 'bg-success/10 text-success' : 'bg-destructive/10 text-destructive'}`}>{ok ? <CheckCircle2 className="h-5 w-5" /> : <XCircle className="h-5 w-5" />}</span>
                           <div className="min-w-0">
                             <div className="text-sm font-semibold">{money(h.amount, cur)}</div>
+                            {ok && (h as any).coverage && (
+                              <div className="flex items-center gap-1 truncate text-[11px] font-medium text-primary">
+                                <CalendarCheck className="h-3 w-3 shrink-0" />
+                                {t('paidForMonths')}: {monthFmt((h as any).coverage.from)}{(h as any).coverage.months > 1 ? ` – ${monthFmt((h as any).coverage.to)}` : ''}
+                              </div>
+                            )}
                             <div className="truncate text-xs text-muted-foreground">{fmt(h.createdAt)} · {h.method}</div>
                             <div className="truncate font-mono text-[10px] text-muted-foreground">{h.transactionId}</div>
                           </div>
