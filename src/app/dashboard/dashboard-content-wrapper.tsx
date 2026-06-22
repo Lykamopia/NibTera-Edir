@@ -18,6 +18,7 @@ import Logo from '@/components/logo';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 import { UserNav } from '@/components/user-nav';
 import { NotificationBell } from '@/components/notification-bell';
+import { EdirSwitcher } from '@/components/edir-switcher';
 import { HoneycombLoader } from '@/components/honeycomb-loader';
 import { SessionTimeoutManager } from '@/components/session-timeout-manager';
 import { ThemeToggle } from '@/components/theme-toggle';
@@ -125,6 +126,7 @@ export function DashboardContentWrapper({ user, children }: { user: LoggedInUser
               <SidebarTrigger className="hidden md:flex" />
               <div className="hidden md:flex items-center"><Breadcrumb /></div>
               <div className="w-full flex-1" />
+              <EdirSwitcher />
               <EdirBadge edir={(user as any)?.edir} />
               <ThemeToggle />
               <NotificationBell />

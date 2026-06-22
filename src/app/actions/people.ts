@@ -124,13 +124,14 @@ function personFromMember(m: any): PersonRow {
   };
 }
 
-/** Resolve the tenant filter, honouring a Super-Admin's optional Edir selector. */
+/** Resolve the tenant filter from the People page's own Edir selector. The page
+ *  manages its own scope, so "all" means every Edir regardless of the Super-Admin
+ *  global context. Non-Super-Admins are always bound to their own Edir. */
 function resolveScope(actor: Awaited<ReturnType<typeof getActor>>, edirId?: string) {
-  const scope = tenantWhere(actor) as any;
-  if (!actor.isSuperAdmin) return scope;
-  if (!edirId || edirId === 'all') return scope;
-  if (edirId === 'none') return { ...scope, edirId: null };
-  return { ...scope, edirId };
+  if (!actor.isSuperAdmin) return tenantWhere(actor) as any;
+  if (!edirId || edirId === 'all') return {};
+  if (edirId === 'none') return { edirId: null };
+  return { edirId };
 }
 
 async function collectRows(actor: Awaited<ReturnType<typeof getActor>>, caps: PeopleContext, baseWhere: any): Promise<PersonRow[]> {

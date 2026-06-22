@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { RichTextEditor } from '@/components/ui/rich-text-editor';
 import { Scale, Printer, Search, Plus, FilePlus2, Send, Trash2, Pencil, Paperclip, X, FileText, ExternalLink, History, Eye, CheckCircle2, Clock } from 'lucide-react';
 import { PageHeader, LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
+import { SelectEdirNotice } from '@/components/select-edir-notice';
 import {
   getRulesPage, createDraft, cloneCurrentToDraft, updateDraft, deleteDraft, submitRulesVersion,
   addRulesAttachment, removeRulesAttachment, searchRules,
@@ -49,6 +50,7 @@ export default function RulesClient() {
   useEffect(() => { load(); }, [load]);
 
   if (loading) return <LoadingState label="Loading rules & bylaws…" className="min-h-[60vh]" />;
+  if (data?.needsEdir) return <SelectEdirNotice what="rules & bylaws" />;
   if (error || !data) return <ErrorState variant="page" onRetry={load} showContact />;
 
   const drafts = data.history.filter((v: any) => v.status === 'DRAFT');

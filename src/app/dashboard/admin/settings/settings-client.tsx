@@ -19,6 +19,7 @@ import {
   Users, Siren, ScrollText, Pencil, ArrowRight,
 } from 'lucide-react';
 import { PageHeader, LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
+import { SelectEdirNotice } from '@/components/select-edir-notice';
 import { getRuleConfig, saveRuleConfig } from '@/app/actions/rule-config';
 import { saveEmergencyType, deleteEmergencyType } from '@/app/actions/emergencies';
 import { useConfirm } from '@/components/ui/confirm-provider';
@@ -65,13 +66,15 @@ export default function RuleConfigClient() {
   const [reason, setReason] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  const [needsEdir, setNeedsEdir] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editingType, setEditingType] = useState<any | null | undefined>(undefined);
   const confirm = useConfirm();
 
   const load = useCallback(() => {
-    setLoading(true); setError(false);
+    setLoading(true); setError(false); setNeedsEdir(false);
     getRuleConfig().then(r => {
+      if ((r as any).needsEdir) { setNeedsEdir(true); return; }
       const s = r.settings ?? { monthlyFee: 0, registrationFee: 0, currency: 'ETB', dueDay: 1, gracePeriodDays: 5, autoSuspendMonths: 3, autoTerminateMonths: 6, minMembershipMonths: 0, reinstatementFee: 0, autoSuspendEnabled: true, autoReminderEnabled: true, memberRoles: [], penaltyTiers: [] };
       const { penaltyTiers, ...scalar } = s as any;
       setCfg(scalar);
@@ -97,6 +100,7 @@ export default function RuleConfigClient() {
   };
 
   if (loading) return <LoadingState label="Loading rule configuration…" className="min-h-[60vh]" />;
+  if (needsEdir) return <SelectEdirNotice what="Edir settings" />;
   if (error || !cfg) return <ErrorState variant="page" onRetry={load} showContact />;
 
   const cur = cfg.currency || 'ETB';

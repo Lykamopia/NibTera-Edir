@@ -70,6 +70,7 @@ export async function getRulesHistory() {
 export async function getRulesPage() {
   const actor = await getActor();
   await assertPermission(actor, ['view_rules', 'manage_rules']);
+  if (actor.isSuperAdmin && !actor.activeEdirId) return { needsEdir: true as const, canManage: false, current: null, history: [] as any[] };
   const edirId = resolveEdirId(actor);
   const versions = await prisma.rulesVersion.findMany({
     where: { edirId },
