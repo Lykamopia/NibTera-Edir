@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import {
   Loader2, Wallet, CheckCircle2, AlertTriangle, Search, Phone, RefreshCw, User, CalendarClock,
-  TrendingDown, ReceiptText, ShieldAlert, History, Building2, Info,
+  TrendingDown, ReceiptText, ShieldAlert, History, Building2, ChevronDown,
 } from 'lucide-react';
 import { validateNibToken, fetchMemberForPayment, getPaymentToken, checkTransactionStatus } from './actions';
 import type { DetailedMember as Member } from '@/lib/data';
@@ -265,33 +265,62 @@ function MemberPanel({ member, amount, setAmount, paying, error, txn, onPay, onC
         </CardContent>
       </Card>
 
-      {/* Penalty explanation */}
-      {m.penalty && (
-        <Card className="page-enter border-warning/30 bg-warning/5">
-          <CardContent className="space-y-2 p-4">
-            <div className="flex items-center justify-between">
-              <h3 className="flex items-center gap-1.5 text-sm font-semibold text-warning"><AlertTriangle className="h-4 w-4" /> {t('penaltyTitle')}</h3>
-              <span className="text-base font-bold text-warning">{money(m.penalty.amount, cur)}</span>
-            </div>
-            <p className="flex items-start gap-1.5 text-xs text-muted-foreground"><Info className="mt-0.5 h-3.5 w-3.5 shrink-0" /> {t('penaltyWhy')}</p>
-            <div className="space-y-1 rounded-md border bg-card p-2.5 text-xs">
-              <PenRow label={t('penaltyReason')} value={t('contribution') + (m.penalty.reason ? ` — ${m.penalty.reason}` : '')} />
-              <PenRow label={t('penaltyRule')} value={m.penalty.rule} />
-              <PenRow label={t('penaltyOverdue')} value={`${m.penalty.overdueDays} ${t('days')} (${m.penalty.gracePeriodDays} ${t('days')} ${t('gracePeriod')})`} />
-              <PenRow label={t('penaltyHow')} value={m.penalty.calculation} />
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Breakdown + amount */}
+      {/* What You Owe — aggregated obligations */}
       <Card className="page-enter">
         <CardContent className="space-y-3 p-4">
-          <h3 className="text-sm font-semibold">{t('breakdownTitle')}</h3>
-          <Line label={t('outstandingBalance')} value={money(m.totalOutstanding, cur)} />
-          <Line label={t('thisMonth')} value={money(m.monthlyFee, cur)} />
-          {m.penalty && <Line label={`${t('penaltyTitle')} (${m.penalty.rule})`} value={money(m.penalty.amount, cur)} warn />}
-          {m.penaltiesPaid > 0 && <Line label={t('penaltiesPaid')} value={money(m.penaltiesPaid, cur)} muted />}
+          <h3 className="text-sm font-semibold">{t('obligations')}</h3>
+
+          {/* Contributions & arrears */}
+          <div className="space-y-1.5">
+            <Line label={t('outstandingBalance')} value={money(m.totalOutstanding, cur)} />
+            <Line label={t('thisMonth')} value={money(m.monthlyFee, cur)} />
+          </div>
+
+          {/* Installment summary */}
+          {m.installmentSummary && (
+            <Section title={t('installments')} icon={CalendarClock} badge={`${m.installmentSummary.paid}/${m.installmentSummary.total}`} defaultOpen>
+              <div className="grid grid-cols-3 gap-2">
+                <Mini label={t('totalInstallments')} value={String(m.installmentSummary.total)} />
+                <Mini label={t('paidInstallments')} value={String(m.installmentSummary.paid)} tone="ok" />
+                <Mini label={t('remainingInstallments')} value={String(m.installmentSummary.remaining)} tone={m.installmentSummary.remaining > 0 ? 'warn' : 'ok'} />
+              </div>
+              <div className="mt-2 space-y-1.5">
+                <Line label={t('nextInstallment')} value={m.installmentSummary.nextDueDate ? `${money(m.installmentSummary.nextAmount, cur)} · ${fmt(m.installmentSummary.nextDueDate)}` : '—'} />
+                <Line label={t('installmentOutstanding')} value={money(m.installmentSummary.outstanding, cur)} />
+              </div>
+            </Section>
+          )}
+
+          {/* Penalties & charges */}
+          {(m.penalty || m.eventPenalties.length > 0 || m.assetPenalties.length > 0 || m.reinstatementFee > 0) ? (
+            <Section title={t('chargesTitle')} icon={AlertTriangle} tone="warn"
+              badge={money(
+                (m.penalty?.amount || 0) + m.eventPenalties.reduce((s: number, e: any) => s + e.amount, 0) + m.assetPenalties.reduce((s: number, a: any) => s + a.amount, 0) + (m.reinstatementFee || 0), cur)}
+              defaultOpen>
+              <div className="space-y-2">
+                {m.penalty && (
+                  <Charge label={t('penaltyTitle')} amount={money(m.penalty.amount, cur)} tag={t('additional')}
+                    rows={[[t('penaltyRule'), m.penalty.rule], [t('penaltyOverdue'), `${m.penalty.overdueDays} ${t('days')}`], [t('penaltyHow'), m.penalty.calculation]]} />
+                )}
+                {m.eventPenalties.map((e: any) => (
+                  <Charge key={e.id} label={`${t('eventAbsence')}`} amount={money(e.amount, cur)} tag={t('includedInBalance')}
+                    rows={[[t('penaltyReason'), e.event], [t('date'), fmt(e.date)]]} />
+                ))}
+                {m.assetPenalties.map((a: any) => (
+                  <Charge key={a.id} label={t('assetCompensation')} amount={money(a.amount, cur)} tag={t('includedInBalance')}
+                    rows={[[t('penaltyReason'), a.asset], [t('date'), fmt(a.date)]]} />
+                ))}
+                {m.reinstatementFee > 0 && (
+                  <Charge label={t('reinstatementFee')} amount={money(m.reinstatementFee, cur)} tag={t('additional')}
+                    rows={[[t('penaltyReason'), `${t('status')}: ${t(m.status)}`]]} />
+                )}
+              </div>
+            </Section>
+          ) : (
+            <p className="rounded-md bg-success/10 px-3 py-2 text-xs text-success">✓ {t('noCharges')}</p>
+          )}
+
+          {/* Suggested total + amount */}
           <div className="flex items-center justify-between border-t pt-3"><span className="text-sm font-medium">{t('suggestedTotal')}</span><span className="font-semibold">{money(amountDue, cur)}</span></div>
           <div className="space-y-1.5 pt-1">
             <Label className="text-xs">{t('amountToPay')} ({cur})</Label>
@@ -300,23 +329,6 @@ function MemberPanel({ member, amount, setAmount, paying, error, txn, onPay, onC
           </div>
         </CardContent>
       </Card>
-
-      {/* Upcoming installments */}
-      {m.dueInstallments.length > 0 && (
-        <Card className="page-enter">
-          <CardContent className="p-4">
-            <h3 className="mb-2 text-sm font-semibold">{t('upcoming')}</h3>
-            <div className="space-y-1.5">
-              {m.dueInstallments.slice(0, 5).map((i: any) => (
-                <div key={i.id} className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
-                  <span className="flex items-center gap-2 text-muted-foreground"><CalendarClock className="h-4 w-4" /> {t('due')} {fmt(i.dueDate)}</span>
-                  <span className="flex items-center gap-2">{i.overdue && <Badge variant="outline" className="border-destructive/20 bg-destructive/10 text-destructive">{t('overdue')}</Badge>}<span className="font-medium">{money(i.amount, cur)}</span></span>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
 
       {/* Link to dedicated history page */}
       <Link href={`/pay/history?phone=${encodeURIComponent(m.phone || '')}`} className="block">
@@ -355,6 +367,31 @@ function Stat({ label, value, icon: Icon, tone }: { label: string; value: string
 function Line({ label, value, muted, warn }: { label: string; value: string; muted?: boolean; warn?: boolean }) {
   return <div className="flex items-center justify-between text-sm"><span className="text-muted-foreground">{label}</span><span className={warn ? 'font-medium text-warning' : muted ? 'text-muted-foreground' : 'font-medium'}>{value}</span></div>;
 }
-function PenRow({ label, value }: { label: string; value: string }) {
-  return <div className="flex justify-between gap-3"><span className="shrink-0 text-muted-foreground">{label}</span><span className="text-right font-medium">{value}</span></div>;
+
+function Section({ title, icon: Icon, badge, tone, defaultOpen, children }: { title: string; icon: any; badge?: string; tone?: 'warn'; defaultOpen?: boolean; children: React.ReactNode }) {
+  const [open, setOpen] = useState(defaultOpen ?? false);
+  return (
+    <div className="rounded-lg border">
+      <button type="button" onClick={() => setOpen(o => !o)} className="flex w-full items-center justify-between p-2.5 text-sm">
+        <span className={`flex items-center gap-1.5 font-medium ${tone === 'warn' ? 'text-warning' : ''}`}><Icon className="h-4 w-4" /> {title}</span>
+        <span className="flex items-center gap-2">{badge && <span className="text-xs font-semibold">{badge}</span>}<ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${open ? 'rotate-180' : ''}`} /></span>
+      </button>
+      {open && <div className="border-t p-2.5">{children}</div>}
+    </div>
+  );
+}
+function Mini({ label, value, tone }: { label: string; value: string; tone?: 'ok' | 'warn' }) {
+  const c = tone === 'warn' ? 'text-warning' : tone === 'ok' ? 'text-success' : '';
+  return <div className="rounded-md border p-2 text-center"><div className="text-[10px] text-muted-foreground">{label}</div><div className={`text-base font-bold ${c}`}>{value}</div></div>;
+}
+function Charge({ label, amount, tag, rows }: { label: string; amount: string; tag: string; rows: [string, string][] }) {
+  return (
+    <div className="rounded-md border bg-card p-2.5 text-xs">
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <span className="font-semibold">{label}</span>
+        <span className="flex items-center gap-1.5"><span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{tag}</span><span className="font-bold text-warning">{amount}</span></span>
+      </div>
+      {rows.map(([k, v], i) => <div key={i} className="flex justify-between gap-3"><span className="shrink-0 text-muted-foreground">{k}</span><span className="text-right">{v}</span></div>)}
+    </div>
+  );
 }

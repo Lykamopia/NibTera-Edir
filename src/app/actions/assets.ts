@@ -11,6 +11,33 @@ import '@/lib/approval-modules';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
 
+/** Tenant-wide asset KPIs for the summary cards. */
+export async function getAssetSummary() {
+  const actor = await getActor();
+  await assertPermission(actor, ['view_assets', 'manage_assets']);
+  const where = tenantWhere(actor);
+  const [agg, categories, openIssuances, settings] = await Promise.all([
+    prisma.asset.aggregate({ _sum: { currentValue: true, purchaseValue: true, quantity: true, issuedQuantity: true }, _count: { _all: true }, where }),
+    prisma.assetCategory.count({ where }),
+    prisma.assetIssuance.count({ where: { asset: where, status: { in: ['ISSUED', 'COMPENSATION_PENDING'] } } }),
+    actor.edirId || actor.isSuperAdmin ? prisma.edirSettings.findFirst({ where: actor.isSuperAdmin ? {} : { edirId: actor.edirId! } }) : Promise.resolve(null),
+  ]);
+  const totalUnits = agg._sum.quantity ?? 0;
+  const issuedUnits = agg._sum.issuedQuantity ?? 0;
+  return {
+    currency: settings?.currency ?? 'ETB',
+    count: agg._count._all,
+    categories,
+    totalValue: Number(agg._sum.currentValue ?? 0),
+    purchaseValue: Number(agg._sum.purchaseValue ?? 0),
+    totalUnits,
+    issuedUnits,
+    availableUnits: totalUnits - issuedUnits,
+    utilization: totalUnits > 0 ? Math.round((issuedUnits / totalUnits) * 100) : 0,
+    activeIssuances: openIssuances,
+  };
+}
+
 // ─── Categories ──────────────────────────────────────────────────────────────
 
 export async function getAssetCategories() {

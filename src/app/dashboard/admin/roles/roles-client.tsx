@@ -9,11 +9,11 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Loader2, Plus, Pencil, Trash2 } from 'lucide-react';
-import { permissionGroups } from '@/lib/permissions';
+import { getAssignablePermissionGroups } from '@/lib/permissions';
 import { getRoles, saveRole, deleteRole } from '@/app/actions/admin';
 import { useConfirm } from '@/components/ui/confirm-provider';
 
-export default function RolesClient() {
+export default function RolesClient({ isSuperAdmin = false }: { isSuperAdmin?: boolean }) {
   const [roles, setRoles] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -62,15 +62,16 @@ export default function RolesClient() {
           )}
         </CardContent>
       </Card>
-      {editing && <RoleDialog role={editing} onClose={() => setEditing(null)} onDone={() => { setEditing(null); load(); }} />}
+      {editing && <RoleDialog role={editing} isSuperAdmin={isSuperAdmin} onClose={() => setEditing(null)} onDone={() => { setEditing(null); load(); }} />}
     </div>
   );
 }
 
-function RoleDialog({ role, onClose, onDone }: { role: any; onClose: () => void; onDone: () => void }) {
+function RoleDialog({ role, isSuperAdmin, onClose, onDone }: { role: any; isSuperAdmin: boolean; onClose: () => void; onDone: () => void }) {
   const [name, setName] = useState(role.name);
   const [perms, setPerms] = useState<string[]>(role.permissions);
   const [saving, setSaving] = useState(false);
+  const groups = getAssignablePermissionGroups(isSuperAdmin);
 
   const toggle = (id: string) => setPerms(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id]);
 
@@ -88,7 +89,7 @@ function RoleDialog({ role, onClose, onDone }: { role: any; onClose: () => void;
         <div className="space-y-4">
           <div className="space-y-1.5"><Label className="text-xs">Role Name</Label><Input value={name} onChange={e => setName(e.target.value)} /></div>
           <div className="space-y-3">
-            {permissionGroups.map(g => (
+            {groups.map(g => (
               <div key={g.id} className="rounded-md border p-3">
                 <div className="mb-2 text-sm font-semibold">{g.label}</div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">

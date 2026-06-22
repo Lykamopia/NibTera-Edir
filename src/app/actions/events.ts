@@ -11,6 +11,30 @@ import { failure } from '@/lib/action-result';
 
 // ─── Events (read) ───────────────────────────────────────────────────────────
 
+/** Tenant-wide event KPIs for the summary cards. */
+export async function getEventsSummary() {
+  const actor = await getActor();
+  await assertPermission(actor, ['view_events', 'manage_events']);
+  const where = tenantWhere(actor);
+  const now = new Date();
+  const [byStatus, upcoming, penalized, participants] = await Promise.all([
+    prisma.event.groupBy({ by: ['status'], where, _count: { _all: true } }),
+    prisma.event.count({ where: { ...where, status: 'SCHEDULED', datetime: { gte: now } } }),
+    prisma.eventParticipant.count({ where: { event: where, penalized: true } }),
+    prisma.eventParticipant.count({ where: { event: where } }),
+  ]);
+  const counts = Object.fromEntries(byStatus.map(r => [r.status, r._count._all]));
+  return {
+    total: byStatus.reduce((s, r) => s + r._count._all, 0),
+    scheduled: counts.SCHEDULED ?? 0,
+    completed: counts.COMPLETED ?? 0,
+    cancelled: counts.CANCELLED ?? 0,
+    upcoming,
+    penalizedAbsences: penalized,
+    participants,
+  };
+}
+
 export async function getEvents(params: { status?: string; query?: string } = {}) {
   const actor = await getActor();
   await assertPermission(actor, ['view_events', 'manage_events']);

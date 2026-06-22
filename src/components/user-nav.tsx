@@ -17,13 +17,17 @@ import {
 } from "@/components/ui/dropdown-menu"
 import type { User } from "@/lib/types";
 import { revokeUserTokens } from "@/app/actions/auth";
+import { getClientBaseUrl } from "@/lib/url";
 
 export function UserNav({ user }: { user: User }) {
   if (!user) return null;
 
   const handleSignOut = async () => {
     try { await revokeUserTokens(user.id); } catch {}
-    signOut({ callbackUrl: `${window.location.origin}/login` });
+    // Sign out without NextAuth's own redirect (it rejects cross-origin callback
+    // URLs and falls back to NEXTAUTH_URL), then navigate to the correct host.
+    try { await signOut({ redirect: false }); } catch {}
+    window.location.href = `${getClientBaseUrl()}/login`;
   };
 
   const getAvatarUrl = () => {

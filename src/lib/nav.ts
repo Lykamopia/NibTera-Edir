@@ -5,7 +5,7 @@ import type { Permission } from '@/lib/types';
 // dead links; deferred modules are added here as they are built.
 export const IMPLEMENTED_PAGES = new Set<string>([
   'dashboard',
-  'members',
+  'people', // unified Members + Users + Associations (adapts to role)
   'payments',
   'approvals',
   'member-requests',
@@ -14,9 +14,9 @@ export const IMPLEMENTED_PAGES = new Set<string>([
   'assets',
   'rules',
   'committee',
+  'documents',
   'audit',
   'payment-log',
-  'admin-users',
   'admin-roles',
   'admin-settings',
   'system-edirs',

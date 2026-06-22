@@ -111,7 +111,7 @@ export default function OversightClient() {
 
       {/* KPI row */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
-        <Kpi title="Total Members" value={data.members.total} sub={`${data.members.active} active`} icon={Users} accent="primary" href="/dashboard/members" />
+        <Kpi title="Total Members" value={data.members.total} sub={`${data.members.active} active`} icon={Users} accent="primary" href="/dashboard/people" />
         <Kpi title="Collected (12mo)" value={money(data.trend.reduce((s: number, t: any) => s + t.collected, 0))} sub={cur} icon={Wallet} accent="success" trend={collectionTrendPct} />
         <Kpi title="Outstanding" value={money(data.finance.totalOutstanding)} sub={cur} icon={CreditCard} accent="warning" />
         <Kpi title="Active Emergencies" value={data.emergencies.byStatus.ACTIVE ?? 0} sub={`${money(data.emergencies.totalDisbursed)} disbursed`} icon={Siren} accent="destructive" href="/dashboard/emergencies" />

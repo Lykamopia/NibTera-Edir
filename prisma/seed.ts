@@ -18,7 +18,7 @@ const EDIR_PERMISSIONS = [
   'view_assets', 'manage_assets', 'manage_asset_categories', 'approve_asset_issuance',
   'view_rules', 'manage_rules', 'approve_rule_change',
   'view_audit_log', 'view_payment_log', 'manage_audit_log',
-  'handle_member_requests',
+  'handle_member_requests', 'view_documents',
   'manage_edir_settings', 'manage_committee',
   'view_users', 'manage_users', 'view_roles', 'manage_roles', 'reset_password', 'lock_user', 'unlock_user',
 ];
@@ -83,7 +83,7 @@ async function main() {
   const superRole = await prisma.role.create({ data: { name: 'Super Admin', scope: 'SUPER_ADMIN', permissions: 'super_admin', edirId: null } });
   const adminRole = await prisma.role.create({ data: { name: 'Edir Admin', scope: 'EDIR', permissions: EDIR_PERMISSIONS.join(','), edirId: edir.id } });
   const memberRole = await prisma.role.create({ data: { name: 'Member', scope: 'EDIR', permissions: ['view_dashboard'].join(','), edirId: edir.id } });
-  const committeeRole = await prisma.role.create({ data: { name: 'Committee (Oversight)', scope: 'EDIR', permissions: ['view_dashboard', 'view_committee_oversight', 'view_members', 'view_payments', 'view_audit_log', 'view_payment_log', 'view_approvals'].join(','), edirId: edir.id } });
+  const committeeRole = await prisma.role.create({ data: { name: 'Committee (Oversight)', scope: 'EDIR', permissions: ['view_dashboard', 'view_committee_oversight', 'view_members', 'view_payments', 'view_audit_log', 'view_payment_log', 'view_approvals', 'view_documents'].join(','), edirId: edir.id } });
 
   // ── Users (maker + checker share the admin role) ──────────────────────────
   const superEmail = process.env.ADMIN_EMAIL || 'superadmin@edir.local';
@@ -153,6 +153,16 @@ async function main() {
       },
     });
   }
+
+  // ── Second Edir (multi-tenant demo) ────────────────────────────────────────
+  const edir2 = await prisma.edir.create({ data: { name: 'Bole Community Edir', description: 'Second demo association.' } });
+  await prisma.edirSettings.create({ data: { edirId: edir2.id, monthlyFee: 150, registrationFee: 800, currency: 'ETB', dueDay: 1, gracePeriodDays: 7 } });
+  await prisma.role.create({ data: { name: 'Edir Admin', scope: 'EDIR', permissions: EDIR_PERMISSIONS.join(','), edirId: edir2.id } });
+  await prisma.role.create({ data: { name: 'Member', scope: 'EDIR', permissions: 'view_dashboard', edirId: edir2.id } });
+  await prisma.member.create({ data: { edirId: edir2.id, memberId: `EDR-${year}-0001`, name: 'Selam Bekele', phone: '251944000001', role: 'Member', status: 'ACTIVE', paymentStatus: { create: { balance: 450, status: 'PENDING' } } } });
+  await prisma.member.create({ data: { edirId: edir2.id, memberId: `EDR-${year}-0002`, name: 'Dawit Haile', phone: '251944000002', role: 'Member', status: 'ACTIVE', paymentStatus: { create: { balance: 0, status: 'PAID' } } } });
+  // An unassigned staff account to demonstrate association management.
+  await prisma.user.create({ data: { name: 'Tigist (Unassigned)', email: 'tigist@edir.local', phone: '251955000001', edirId: null, roleId: null, status: 'INACTIVE', hashedPassword: hashed, onboardingCompleted: true } });
 
   console.log('Seed complete.');
   console.log(`  Super Admin: ${superEmail} (phone 251900000000)`);

@@ -18,3 +18,17 @@ export function getBaseUrl(): string {
     'http://localhost:3010';
   return raw.trim().replace(/\/+$/, '');
 }
+
+/**
+ * Client-safe base URL for browser-side redirects (e.g. sign-out).
+ *
+ * Uses the build-time NEXT_PUBLIC_APP_URL (the only base URL exposed to the
+ * client), falling back to the current window origin when it isn't configured.
+ * Trailing slashes are stripped.
+ */
+export function getClientBaseUrl(): string {
+  const configured = process.env.BASE_URL?.trim().replace(/\/+$/, '');
+  if (configured) return configured;
+  if (typeof window !== 'undefined') return window.location.origin;
+  return '';
+}

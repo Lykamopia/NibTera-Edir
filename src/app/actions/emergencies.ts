@@ -11,6 +11,30 @@ import '@/lib/approval-modules';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
 
+/** Tenant-wide emergency KPIs for the summary cards. */
+export async function getEmergencySummary() {
+  const actor = await getActor();
+  await assertPermission(actor, ['view_emergencies', 'manage_emergencies']);
+  const where = tenantWhere(actor);
+  const [byStatus, agg, settings] = await Promise.all([
+    prisma.emergencyClaim.groupBy({ by: ['status'], where, _count: { _all: true } }),
+    prisma.emergencyClaim.aggregate({ _sum: { approvedAmount: true, disbursedAmount: true }, where }),
+    actor.edirId || actor.isSuperAdmin ? prisma.edirSettings.findFirst({ where: actor.isSuperAdmin ? {} : { edirId: actor.edirId! } }) : Promise.resolve(null),
+  ]);
+  const counts = Object.fromEntries(byStatus.map(r => [r.status, r._count._all]));
+  return {
+    currency: settings?.currency ?? 'ETB',
+    total: byStatus.reduce((s, r) => s + r._count._all, 0),
+    reported: counts.REPORTED ?? 0,
+    active: counts.ACTIVE ?? 0,
+    resolved: counts.RESOLVED ?? 0,
+    rejected: counts.REJECTED ?? 0,
+    totalApproved: Number(agg._sum.approvedAmount ?? 0),
+    totalDisbursed: Number(agg._sum.disbursedAmount ?? 0),
+    emergencyReserve: settings ? Number(settings.emergencyReserve) : 0,
+  };
+}
+
 // ─── Emergency types (payout configuration) ──────────────────────────────────
 
 const typeSchema = z.object({

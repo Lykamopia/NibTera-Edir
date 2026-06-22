@@ -12,33 +12,43 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
-import { Loader2, Search, Siren, Plus, Send, HandCoins, Ban, Pencil, Trash2 } from 'lucide-react';
+import { Loader2, Search, Siren, Plus, Send, HandCoins, Ban, Pencil, Trash2, Download, ChevronUp, ChevronDown, ArrowUpDown, ShieldCheck, Activity, Wallet } from 'lucide-react';
 import { getMembers } from '@/app/actions/members';
 import {
-  getEmergencyClaims, getEmergencyTypes, reportClaim, rejectReportedClaim,
+  getEmergencyClaims, getEmergencyTypes, getEmergencySummary, reportClaim, rejectReportedClaim,
   submitClaimForApproval, requestDisbursement, saveEmergencyType, deleteEmergencyType,
 } from '@/app/actions/emergencies';
 import { useConfirm, usePrompt } from '@/components/ui/confirm-provider';
+import { PageHeader, StatCard, LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
 
 const STATUS_VARIANT: Record<string, { label: string; cls: string }> = {
-  REPORTED: { label: 'Reported', cls: 'bg-blue-100 text-blue-800' },
-  PENDING: { label: 'Pending', cls: 'bg-amber-100 text-amber-800' },
-  ACTIVE: { label: 'Approved', cls: 'bg-violet-100 text-violet-800' },
-  RESOLVED: { label: 'Disbursed', cls: 'bg-green-100 text-green-800' },
-  REJECTED: { label: 'Rejected', cls: 'bg-red-100 text-red-800' },
+  REPORTED: { label: 'Reported', cls: 'border-info/20 bg-info/10 text-info' },
+  PENDING: { label: 'Pending', cls: 'border-warning/20 bg-warning/10 text-warning' },
+  ACTIVE: { label: 'Approved', cls: 'border-primary/20 bg-primary/10 text-primary' },
+  RESOLVED: { label: 'Disbursed', cls: 'border-success/20 bg-success/10 text-success' },
+  REJECTED: { label: 'Rejected', cls: 'border-destructive/20 bg-destructive/10 text-destructive' },
 };
 
 export default function EmergenciesClient() {
+  const [summary, setSummary] = useState<any | null>(null);
+  useEffect(() => { getEmergencySummary().then(setSummary).catch(() => {}); }, []);
+  const money = (n: number) => `${(n || 0).toLocaleString()} ${summary?.currency ?? 'ETB'}`;
+
   return (
-    <div className="space-y-4">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Emergencies</h1>
-        <p className="text-muted-foreground text-sm">Report claims, route approvals and disbursements through Maker–Checker, and configure payout types.</p>
+    <div className="space-y-5">
+      <PageHeader title="Emergencies" description="Report claims, route approvals and disbursements through Maker–Checker, and configure payout types." icon={Siren} />
+
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatCard title="Total Claims" value={summary?.total ?? '—'} icon={Siren} accent="primary" hint={summary ? `${summary.reported} awaiting review` : undefined} />
+        <StatCard title="Active (Approved)" value={summary?.active ?? '—'} icon={Activity} accent="warning" />
+        <StatCard title="Total Disbursed" value={summary ? money(summary.totalDisbursed) : '—'} icon={HandCoins} accent="success" />
+        <StatCard title="Emergency Reserve" value={summary ? money(summary.emergencyReserve) : '—'} icon={Wallet} accent="info" />
       </div>
+
       <Tabs defaultValue="claims">
         <TabsList>
-          <TabsTrigger value="claims">Claims</TabsTrigger>
-          <TabsTrigger value="types">Payout Types</TabsTrigger>
+          <TabsTrigger value="claims"><Siren className="mr-1.5 h-4 w-4" /> Claims</TabsTrigger>
+          <TabsTrigger value="types"><ShieldCheck className="mr-1.5 h-4 w-4" /> Payout Types</TabsTrigger>
         </TabsList>
         <TabsContent value="claims" className="mt-4"><ClaimsTab /></TabsContent>
         <TabsContent value="types" className="mt-4"><TypesTab /></TabsContent>
@@ -55,6 +65,7 @@ function ClaimsTab() {
   const [error, setError] = useState(false);
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState('all');
+  const [sort, setSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'createdAt', dir: 'desc' });
   const [reporting, setReporting] = useState(false);
   const [submitTarget, setSubmitTarget] = useState<any | null>(null);
   const [disburseTarget, setDisburseTarget] = useState<any | null>(null);
@@ -74,6 +85,26 @@ function ClaimsTab() {
     else toast.error(res?.error || 'Failed to reject claim.');
   };
 
+  const toggleSort = (key: string) => setSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' });
+  const SortIcon = ({ k }: { k: string }) => sort.key !== k ? <ArrowUpDown className="h-3.5 w-3.5 opacity-40" /> : sort.dir === 'asc' ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />;
+  const sorted = [...items].sort((a, b) => {
+    let cmp = 0;
+    if (sort.key === 'member') cmp = (a.memberName || '').localeCompare(b.memberName || '');
+    else if (sort.key === 'type') cmp = (a.typeName || '').localeCompare(b.typeName || '');
+    else if (sort.key === 'status') cmp = (a.status || '').localeCompare(b.status || '');
+    else if (sort.key === 'approved') cmp = (a.approvedAmount || 0) - (b.approvedAmount || 0);
+    else if (sort.key === 'disbursed') cmp = (a.disbursedAmount || 0) - (b.disbursedAmount || 0);
+    else cmp = +new Date(a.createdAt) - +new Date(b.createdAt);
+    return sort.dir === 'asc' ? cmp : -cmp;
+  });
+  const exportCsv = () => {
+    const header = ['Member', 'Member ID', 'Type', 'Affected', 'Status', 'Approved', 'Disbursed', 'Created'];
+    const data = sorted.map(c => [c.memberName, c.memberId, c.typeName || '', c.affectedPerson || '', c.status, c.approvedAmount ?? '', c.disbursedAmount ?? '', new Date(c.createdAt).toISOString().slice(0, 10)]);
+    const csv = [header, ...data].map(r => r.map(x => `"${String(x).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+    const a = document.createElement('a'); a.href = url; a.download = 'emergency-claims.csv'; a.click(); URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
@@ -91,6 +122,7 @@ function ClaimsTab() {
             <SelectItem value="REJECTED">Rejected</SelectItem>
           </SelectContent>
         </Select>
+        <Button variant="outline" onClick={exportCsv}><Download className="mr-1.5 h-4 w-4" /> Export</Button>
         <div className="ml-auto">
           <Button onClick={() => setReporting(true)}><Plus className="h-4 w-4 mr-1" /> Report Claim</Button>
         </div>
@@ -98,29 +130,23 @@ function ClaimsTab() {
 
       <Card>
         <CardContent className="p-0">
-          {loading ? (
-            <div className="flex h-40 items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
-          ) : error ? (
-            <div className="flex h-40 flex-col items-center justify-center gap-2">
-              <p className="text-sm text-muted-foreground">Failed to load claims.</p>
-              <Button variant="outline" size="sm" onClick={load}>Retry</Button>
-            </div>
-          ) : items.length === 0 ? (
-            <div className="flex h-40 flex-col items-center justify-center gap-2 text-center">
-              <Siren className="h-8 w-8 text-muted-foreground" />
-              <p className="text-sm text-muted-foreground">No emergency claims yet.</p>
-            </div>
+          {loading ? <LoadingState rows={5} /> : error ? <ErrorState onRetry={load} /> : items.length === 0 ? (
+            <EmptyState icon={Siren} title="No emergency claims yet" description="Report a claim to begin the approval and disbursement workflow." />
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Member</TableHead><TableHead>Type</TableHead><TableHead>Affected</TableHead>
-                  <TableHead>Status</TableHead><TableHead className="text-right">Approved</TableHead>
-                  <TableHead className="text-right">Disbursed</TableHead><TableHead></TableHead>
+                  <TableHead><button onClick={() => toggleSort('member')} className="flex items-center gap-1 hover:text-foreground">Member <SortIcon k="member" /></button></TableHead>
+                  <TableHead><button onClick={() => toggleSort('type')} className="flex items-center gap-1 hover:text-foreground">Type <SortIcon k="type" /></button></TableHead>
+                  <TableHead>Affected</TableHead>
+                  <TableHead><button onClick={() => toggleSort('status')} className="flex items-center gap-1 hover:text-foreground">Status <SortIcon k="status" /></button></TableHead>
+                  <TableHead className="text-right"><button onClick={() => toggleSort('approved')} className="ml-auto flex items-center gap-1 hover:text-foreground">Approved <SortIcon k="approved" /></button></TableHead>
+                  <TableHead className="text-right"><button onClick={() => toggleSort('disbursed')} className="ml-auto flex items-center gap-1 hover:text-foreground">Disbursed <SortIcon k="disbursed" /></button></TableHead>
+                  <TableHead></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {items.map(c => {
+                {sorted.map(c => {
                   const sv = STATUS_VARIANT[c.status] ?? { label: c.status, cls: '' };
                   return (
                     <TableRow key={c.id}>

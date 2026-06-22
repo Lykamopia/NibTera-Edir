@@ -70,23 +70,85 @@ export async function getMemberOutstanding(memberId: string) {
   const dueInstallments = member.installmentPlans.flatMap(p => p.installments);
   const nextInstallment = dueInstallments.sort((a, b) => +a.dueDate - +b.dueDate)[0];
   const balance = Number(member.paymentStatus?.balance ?? 0);
+  const monthlyFee = Number(settings?.monthlyFee ?? 0);
+  const gracePeriodDays = settings?.gracePeriodDays ?? 0;
+  const monthsBehind = monthlyFee > 0 ? Math.floor(balance / monthlyFee) : 0;
+
+  // ── Auto-calculate the suggested payment ─────────────────────────────────────
+  // Split the outstanding into an installment line (when a plan installment is
+  // due) and arrears, then add the applicable late penalty from the Edir tiers.
+  const penalty = computeOutstandingPenalty(balance, monthsBehind, settings, gracePeriodDays);
+  const installmentLine = nextInstallment && balance >= Number(nextInstallment.amount) ? Number(nextInstallment.amount) : 0;
+  const arrears = Math.max(0, balance - installmentLine);
 
   return {
     memberId: member.id,
     name: member.name,
+    memberCode: member.memberId,
     balance,
-    monthlyFee: Number(settings?.monthlyFee ?? 0),
+    monthlyFee,
+    monthsBehind,
     currency: settings?.currency ?? 'ETB',
-    // Prefill breakdown lines from outstanding figures.
+    penalty, // { amount, rule, overdueDays } | null
+    // Auto-filled breakdown: covers the full amount due (arrears + penalty).
     breakdown: {
-      installment: nextInstallment ? Number(nextInstallment.amount) : 0,
-      arrears: 0,
-      latePenalty: 0,
+      installment: installmentLine,
+      arrears,
+      latePenalty: penalty?.amount ?? 0,
       interest: 0,
       serviceFees: 0,
       other: 0,
     },
     dueInstallmentCount: dueInstallments.length,
+  };
+}
+
+/** Late-payment penalty for the manual-payment auto-calculation (mirrors the public computePenalty). */
+function computeOutstandingPenalty(balance: number, monthsBehind: number, settings: any, gracePeriodDays: number) {
+  if (monthsBehind <= 0 || balance <= 0) return null;
+  const tiers = Array.isArray(settings?.penaltyTiers) ? settings.penaltyTiers : [];
+  if (tiers.length === 0) return null;
+  const now = new Date();
+  const dueDay = settings?.dueDay ?? 1;
+  const cycleDue = new Date(now.getFullYear(), now.getMonth(), dueDay);
+  const ref = now >= cycleDue ? cycleDue : new Date(now.getFullYear(), now.getMonth() - 1, dueDay);
+  const overdueDays = Math.max(0, Math.floor((now.getTime() - ref.getTime()) / 86400000) - gracePeriodDays) + Math.max(0, monthsBehind - 1) * 30;
+  if (overdueDays <= 0) return null;
+  const tier = tiers.find((t: any) => overdueDays >= Number(t.fromDays ?? 0) && (t.toDays == null || overdueDays <= Number(t.toDays)));
+  if (!tier) return null;
+  const value = Number(tier.value ?? 0);
+  const amount = tier.type === 'PERCENT' ? Math.round((balance * value) / 100) : value;
+  return { amount, rule: tier.label || `${tier.fromDays}${tier.toDays == null ? '+' : `–${tier.toDays}`} days late`, overdueDays };
+}
+
+/** Tenant-wide payment KPIs for the Payments dashboard summary cards. */
+export async function getPaymentsSummary() {
+  const actor = await getActor();
+  await assertPermission(actor, ['view_payments', 'record_payment']);
+  const where = tenantWhere(actor);
+  const memberWhere = where as { edirId?: string };
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
+  const [settings, outstandingAgg, inArrears, activeMembers, collectedMonth, collectedTotal, pendingManual] = await Promise.all([
+    actor.edirId || actor.isSuperAdmin ? prisma.edirSettings.findFirst({ where: actor.isSuperAdmin ? {} : { edirId: actor.edirId! } }) : Promise.resolve(null),
+    prisma.paymentStatus.aggregate({ _sum: { balance: true }, where: { member: memberWhere } }),
+    prisma.paymentStatus.count({ where: { member: memberWhere, balance: { gt: 0 } } }),
+    prisma.member.count({ where: { ...where, status: 'ACTIVE' } }),
+    prisma.paymentLog.aggregate({ _sum: { amount: true }, where: { ...where, status: { in: ['SUCCESS', 'PARTIAL'] }, createdAt: { gte: monthStart } } }),
+    prisma.paymentLog.aggregate({ _sum: { amount: true }, where: { ...where, status: { in: ['SUCCESS', 'PARTIAL'] } } }),
+    prisma.paymentLog.count({ where: { ...where, status: 'PENDING' } }),
+  ]);
+
+  return {
+    currency: settings?.currency ?? 'ETB',
+    monthlyFee: Number(settings?.monthlyFee ?? 0),
+    totalOutstanding: Number(outstandingAgg._sum.balance ?? 0),
+    membersInArrears: inArrears,
+    activeMembers,
+    collectedThisMonth: Number(collectedMonth._sum.amount ?? 0),
+    collectedTotal: Number(collectedTotal._sum.amount ?? 0),
+    pendingManual,
   };
 }
 

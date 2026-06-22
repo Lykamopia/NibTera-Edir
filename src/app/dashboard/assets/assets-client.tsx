@@ -11,35 +11,45 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
-import { Loader2, Search, Plus, Package, Pencil, Trash2, Send, Undo2, FolderCog } from 'lucide-react';
+import { Loader2, Search, Plus, Package, Pencil, Trash2, Send, Undo2, FolderCog, Download, ChevronUp, ChevronDown, ArrowUpDown, Boxes, Wallet, PackageCheck, Gauge } from 'lucide-react';
 import { getMembers } from '@/app/actions/members';
 import {
   getAssets, saveAsset, deleteAsset, getAssetCategories, saveAssetCategory, deleteAssetCategory,
-  getIssuances, requestIssuance, recordReturn, getDepreciationReport,
+  getIssuances, requestIssuance, recordReturn, getDepreciationReport, getAssetSummary,
 } from '@/app/actions/assets';
 import { useConfirm } from '@/components/ui/confirm-provider';
+import { PageHeader, StatCard, LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
 
 const ISSUE_STATUS: Record<string, { label: string; cls: string }> = {
-  REQUESTED: { label: 'Requested', cls: 'bg-amber-100 text-amber-800' },
-  APPROVED: { label: 'Approved', cls: 'bg-violet-100 text-violet-800' },
-  ISSUED: { label: 'Issued', cls: 'bg-blue-100 text-blue-800' },
-  RETURNED: { label: 'Returned', cls: 'bg-gray-100 text-gray-700' },
-  COMPENSATION_PENDING: { label: 'Compensation due', cls: 'bg-red-100 text-red-800' },
-  CLOSED: { label: 'Closed', cls: 'bg-green-100 text-green-800' },
+  REQUESTED: { label: 'Requested', cls: 'border-warning/20 bg-warning/10 text-warning' },
+  APPROVED: { label: 'Approved', cls: 'border-primary/20 bg-primary/10 text-primary' },
+  ISSUED: { label: 'Issued', cls: 'border-info/20 bg-info/10 text-info' },
+  RETURNED: { label: 'Returned', cls: 'bg-muted text-muted-foreground' },
+  COMPENSATION_PENDING: { label: 'Compensation due', cls: 'border-destructive/20 bg-destructive/10 text-destructive' },
+  CLOSED: { label: 'Closed', cls: 'border-success/20 bg-success/10 text-success' },
 };
 
 export default function AssetsClient() {
+  const [summary, setSummary] = useState<any | null>(null);
+  useEffect(() => { getAssetSummary().then(setSummary).catch(() => {}); }, []);
+  const money = (n: number) => `${(n || 0).toLocaleString()} ${summary?.currency ?? 'ETB'}`;
+
   return (
-    <div className="space-y-4">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Assets</h1>
-        <p className="text-muted-foreground text-sm">Track inventory, route issuance through Maker–Checker, record returns, and review valuation.</p>
+    <div className="space-y-5">
+      <PageHeader title="Assets" description="Track inventory, route issuance through Maker–Checker, record returns, and review valuation." icon={Package} />
+
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatCard title="Total Assets" value={summary?.count ?? '—'} icon={Boxes} accent="primary" hint={summary ? `${summary.categories} categor${summary.categories === 1 ? 'y' : 'ies'}` : undefined} />
+        <StatCard title="Current Value" value={summary ? money(summary.totalValue) : '—'} icon={Wallet} accent="success" />
+        <StatCard title="Units Available" value={summary ? `${summary.availableUnits} / ${summary.totalUnits}` : '—'} icon={PackageCheck} accent="info" hint={summary ? `${summary.activeIssuances} out on loan` : undefined} />
+        <StatCard title="Utilization" value={summary != null ? `${summary.utilization}%` : '—'} icon={Gauge} accent="warning" />
       </div>
+
       <Tabs defaultValue="inventory">
         <TabsList>
-          <TabsTrigger value="inventory">Inventory</TabsTrigger>
-          <TabsTrigger value="issuances">Issuances</TabsTrigger>
-          <TabsTrigger value="valuation">Valuation</TabsTrigger>
+          <TabsTrigger value="inventory"><Package className="mr-1.5 h-4 w-4" /> Inventory</TabsTrigger>
+          <TabsTrigger value="issuances"><Send className="mr-1.5 h-4 w-4" /> Issuances</TabsTrigger>
+          <TabsTrigger value="valuation"><Gauge className="mr-1.5 h-4 w-4" /> Valuation</TabsTrigger>
         </TabsList>
         <TabsContent value="inventory" className="mt-4"><InventoryTab /></TabsContent>
         <TabsContent value="issuances" className="mt-4"><IssuancesTab /></TabsContent>
@@ -61,6 +71,7 @@ function InventoryTab() {
   const [editing, setEditing] = useState<any | null | undefined>(undefined);
   const [issuing, setIssuing] = useState<any | null>(null);
   const [managingCats, setManagingCats] = useState(false);
+  const [sort, setSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'name', dir: 'asc' });
   const confirm = useConfirm();
 
   const load = useCallback(() => {
@@ -78,6 +89,24 @@ function InventoryTab() {
     else toast.error(res?.error || 'Failed to delete.');
   };
 
+  const toggleSort = (key: string) => setSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' });
+  const SortIcon = ({ k }: { k: string }) => sort.key !== k ? <ArrowUpDown className="h-3.5 w-3.5 opacity-40" /> : sort.dir === 'asc' ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />;
+  const sorted = [...items].sort((a, b) => {
+    let cmp = 0;
+    if (sort.key === 'category') cmp = (a.categoryName || '').localeCompare(b.categoryName || '');
+    else if (sort.key === 'available') cmp = a.available - b.available;
+    else if (sort.key === 'value') cmp = a.currentValue - b.currentValue;
+    else cmp = (a.name || '').localeCompare(b.name || '');
+    return sort.dir === 'asc' ? cmp : -cmp;
+  });
+  const exportCsv = () => {
+    const header = ['Asset', 'Category', 'Available', 'Total', 'Issued', 'Current Value', 'Location'];
+    const data = sorted.map(a => [a.name, a.categoryName || '', a.available, a.quantity, a.issuedQuantity, a.currentValue, a.location || '']);
+    const csv = [header, ...data].map(r => r.map(x => `"${String(x).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+    const el = document.createElement('a'); el.href = url; el.download = 'assets.csv'; el.click(); URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
@@ -92,6 +121,7 @@ function InventoryTab() {
             {categories.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
           </SelectContent>
         </Select>
+        <Button variant="outline" onClick={exportCsv}><Download className="mr-1.5 h-4 w-4" /> Export</Button>
         <div className="ml-auto flex gap-2">
           <Button variant="outline" onClick={() => setManagingCats(true)}><FolderCog className="h-4 w-4 mr-1" /> Categories</Button>
           <Button onClick={() => setEditing(null)}><Plus className="h-4 w-4 mr-1" /> Add Asset</Button>
@@ -100,28 +130,21 @@ function InventoryTab() {
 
       <Card>
         <CardContent className="p-0">
-          {loading ? (
-            <div className="flex h-40 items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
-          ) : error ? (
-            <div className="flex h-40 flex-col items-center justify-center gap-2">
-              <p className="text-sm text-muted-foreground">Failed to load assets.</p>
-              <Button variant="outline" size="sm" onClick={load}>Retry</Button>
-            </div>
-          ) : items.length === 0 ? (
-            <div className="flex h-40 flex-col items-center justify-center gap-2 text-center">
-              <Package className="h-8 w-8 text-muted-foreground" /><p className="text-sm text-muted-foreground">No assets yet.</p>
-            </div>
+          {loading ? <LoadingState rows={5} /> : error ? <ErrorState onRetry={load} /> : items.length === 0 ? (
+            <EmptyState icon={Package} title="No assets yet" description="Add an asset to start tracking inventory and issuance." />
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Asset</TableHead><TableHead>Category</TableHead>
-                  <TableHead className="text-center">Available / Total</TableHead>
-                  <TableHead className="text-right">Current Value</TableHead><TableHead></TableHead>
+                  <TableHead><button onClick={() => toggleSort('name')} className="flex items-center gap-1 hover:text-foreground">Asset <SortIcon k="name" /></button></TableHead>
+                  <TableHead><button onClick={() => toggleSort('category')} className="flex items-center gap-1 hover:text-foreground">Category <SortIcon k="category" /></button></TableHead>
+                  <TableHead className="text-center"><button onClick={() => toggleSort('available')} className="mx-auto flex items-center gap-1 hover:text-foreground">Available / Total <SortIcon k="available" /></button></TableHead>
+                  <TableHead className="text-right"><button onClick={() => toggleSort('value')} className="ml-auto flex items-center gap-1 hover:text-foreground">Current Value <SortIcon k="value" /></button></TableHead>
+                  <TableHead></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {items.map(a => (
+                {sorted.map(a => (
                   <TableRow key={a.id}>
                     <TableCell><div className="font-medium">{a.name}</div>{a.location && <div className="text-xs text-muted-foreground">{a.location}</div>}</TableCell>
                     <TableCell>{a.categoryName || '—'}</TableCell>
@@ -313,6 +336,8 @@ function IssuancesTab() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [status, setStatus] = useState('all');
+  const [query, setQuery] = useState('');
+  const [sort, setSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'createdAt', dir: 'desc' });
   const [returning, setReturning] = useState<any | null>(null);
 
   const load = useCallback(() => {
@@ -321,9 +346,35 @@ function IssuancesTab() {
   }, [status]);
   useEffect(() => { load(); }, [load]);
 
+  const toggleSort = (key: string) => setSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' });
+  const SortIcon = ({ k }: { k: string }) => sort.key !== k ? <ArrowUpDown className="h-3.5 w-3.5 opacity-40" /> : sort.dir === 'asc' ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />;
+  const rows = items
+    .filter(i => !query || (i.assetName || '').toLowerCase().includes(query.toLowerCase()) || (i.memberName || '').toLowerCase().includes(query.toLowerCase()))
+    .sort((a, b) => {
+      let cmp = 0;
+      if (sort.key === 'asset') cmp = (a.assetName || '').localeCompare(b.assetName || '');
+      else if (sort.key === 'member') cmp = (a.memberName || '').localeCompare(b.memberName || '');
+      else if (sort.key === 'status') cmp = (a.status || '').localeCompare(b.status || '');
+      else if (sort.key === 'issued') cmp = (a.issuedQty || 0) - (b.issuedQty || 0);
+      else if (sort.key === 'compensation') cmp = (a.compensation || 0) - (b.compensation || 0);
+      else cmp = +new Date(a.createdAt) - +new Date(b.createdAt);
+      return sort.dir === 'asc' ? cmp : -cmp;
+    });
+  const exportCsv = () => {
+    const header = ['Asset', 'Member', 'Member ID', 'Status', 'Issued', 'Returned', 'Compensation'];
+    const data = rows.map(i => [i.assetName, i.memberName || '', i.memberCode || '', i.status, i.issuedQty, i.returnedQty || 0, i.compensation || 0]);
+    const csv = [header, ...data].map(r => r.map(x => `"${String(x).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+    const el = document.createElement('a'); el.href = url; el.download = 'asset-issuances.csv'; el.click(); URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative max-w-xs flex-1">
+          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+          <Input className="pl-8" placeholder="Search asset or member…" value={query} onChange={e => setQuery(e.target.value)} />
+        </div>
         <Select value={status} onValueChange={setStatus}>
           <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
           <SelectContent>
@@ -331,29 +382,27 @@ function IssuancesTab() {
             {Object.entries(ISSUE_STATUS).map(([k, v]) => <SelectItem key={k} value={k}>{v.label}</SelectItem>)}
           </SelectContent>
         </Select>
+        <Button variant="outline" onClick={exportCsv}><Download className="mr-1.5 h-4 w-4" /> Export</Button>
       </div>
       <Card>
         <CardContent className="p-0">
-          {loading ? (
-            <div className="flex h-40 items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
-          ) : error ? (
-            <div className="flex h-40 flex-col items-center justify-center gap-2">
-              <p className="text-sm text-muted-foreground">Failed to load issuances.</p>
-              <Button variant="outline" size="sm" onClick={load}>Retry</Button>
-            </div>
-          ) : items.length === 0 ? (
-            <div className="flex h-40 items-center justify-center"><p className="text-sm text-muted-foreground">No issuances yet.</p></div>
+          {loading ? <LoadingState rows={5} /> : error ? <ErrorState onRetry={load} /> : rows.length === 0 ? (
+            <EmptyState icon={Send} title="No issuances yet" description="Issue an asset from the Inventory tab to track it here." />
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Asset</TableHead><TableHead>Member</TableHead><TableHead>Status</TableHead>
-                  <TableHead className="text-center">Issued</TableHead><TableHead className="text-center">Returned</TableHead>
-                  <TableHead className="text-right">Compensation</TableHead><TableHead></TableHead>
+                  <TableHead><button onClick={() => toggleSort('asset')} className="flex items-center gap-1 hover:text-foreground">Asset <SortIcon k="asset" /></button></TableHead>
+                  <TableHead><button onClick={() => toggleSort('member')} className="flex items-center gap-1 hover:text-foreground">Member <SortIcon k="member" /></button></TableHead>
+                  <TableHead><button onClick={() => toggleSort('status')} className="flex items-center gap-1 hover:text-foreground">Status <SortIcon k="status" /></button></TableHead>
+                  <TableHead className="text-center"><button onClick={() => toggleSort('issued')} className="mx-auto flex items-center gap-1 hover:text-foreground">Issued <SortIcon k="issued" /></button></TableHead>
+                  <TableHead className="text-center">Returned</TableHead>
+                  <TableHead className="text-right"><button onClick={() => toggleSort('compensation')} className="ml-auto flex items-center gap-1 hover:text-foreground">Compensation <SortIcon k="compensation" /></button></TableHead>
+                  <TableHead></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {items.map(i => {
+                {rows.map(i => {
                   const sv = ISSUE_STATUS[i.status] ?? { label: i.status, cls: '' };
                   return (
                     <TableRow key={i.id}>
@@ -379,11 +428,21 @@ function IssuancesTab() {
   );
 }
 
+const RETURN_CONDITIONS = [{ v: 'good', label: 'Good', factor: 0 }, { v: 'damaged', label: 'Damaged', factor: 0.5 }, { v: 'lost', label: 'Lost', factor: 1 }];
+
 function ReturnDialog({ issuance, onClose, onDone }: { issuance: any; onClose: () => void; onDone: () => void }) {
+  const perUnit = Number(issuance.compensationCost || 0);
   const [returnedQty, setReturnedQty] = useState(String(issuance.issuedQty));
   const [condition, setCondition] = useState('good');
   const [compensation, setCompensation] = useState('0');
+  const [manual, setManual] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  // Auto-calculate compensation = per-unit cost × quantity × condition factor,
+  // until the admin overrides it manually.
+  const factor = RETURN_CONDITIONS.find(c => c.v === condition)?.factor ?? 0;
+  const suggested = Math.round(perUnit * (Number(returnedQty) || 0) * factor);
+  useEffect(() => { if (!manual) setCompensation(String(suggested)); }, [suggested, manual]);
 
   const submit = async () => {
     const n = Number(returnedQty);
@@ -400,17 +459,27 @@ function ReturnDialog({ issuance, onClose, onDone }: { issuance: any; onClose: (
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Return · {issuance.assetName}</DialogTitle>
-          <DialogDescription>From {issuance.memberName}. Any compensation for loss/damage is added to the member&apos;s balance.</DialogDescription>
+          <DialogDescription>From {issuance.memberName}. Compensation is auto-calculated from condition and added to the member&apos;s balance.</DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1"><Label>Quantity returned</Label><Input type="number" min={1} max={issuance.issuedQty} value={returnedQty} onChange={e => setReturnedQty(e.target.value)} /></div>
-            <div className="space-y-1"><Label>Condition</Label><Input value={condition} onChange={e => setCondition(e.target.value)} /></div>
+            <div className="space-y-1"><Label>Quantity returned</Label><Input type="number" min={1} max={issuance.issuedQty} value={returnedQty} onChange={e => { setManual(false); setReturnedQty(e.target.value); }} /></div>
+            <div className="space-y-1"><Label>Condition</Label>
+              <Select value={condition} onValueChange={(v) => { setManual(false); setCondition(v); }}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>{RETURN_CONDITIONS.map(c => <SelectItem key={c.v} value={c.v}>{c.label}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
           </div>
           <div className="space-y-1">
-            <Label>Compensation charged</Label>
-            <Input type="number" min={0} value={compensation} onChange={e => setCompensation(e.target.value)} />
-            {issuance.compensationCost > 0 && <p className="text-xs text-muted-foreground">Suggested per-unit compensation if lost: {issuance.compensationCost.toLocaleString()}</p>}
+            <div className="flex items-center justify-between">
+              <Label>Compensation charged</Label>
+              {manual && <button type="button" className="text-xs text-primary" onClick={() => setManual(false)}>Auto ({suggested.toLocaleString()})</button>}
+            </div>
+            <Input type="number" min={0} value={compensation} onChange={e => { setManual(true); setCompensation(e.target.value); }} />
+            <p className="text-xs text-muted-foreground">
+              {perUnit > 0 ? <>Per-unit cost {perUnit.toLocaleString()} × {returnedQty || 0} × {condition} {factor > 0 ? `(${factor * 100}%)` : '(no charge)'}</> : 'No compensation cost configured for this asset.'}
+            </p>
           </div>
         </div>
         <DialogFooter>
@@ -435,21 +504,21 @@ function ValuationTab() {
   }, []);
   useEffect(() => { load(); }, [load]);
 
-  if (loading) return <div className="flex h-40 items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>;
-  if (error) return <div className="flex h-40 flex-col items-center justify-center gap-2"><p className="text-sm text-muted-foreground">Failed to load report.</p><Button variant="outline" size="sm" onClick={load}>Retry</Button></div>;
+  if (loading) return <LoadingState rows={4} />;
+  if (error) return <ErrorState onRetry={load} />;
 
   const t = data.totals;
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <Card><CardContent className="p-4"><div className="text-sm text-muted-foreground">Total Purchase Value</div><div className="text-2xl font-bold">{t.purchase.toLocaleString()}</div></CardContent></Card>
-        <Card><CardContent className="p-4"><div className="text-sm text-muted-foreground">Total Current Value</div><div className="text-2xl font-bold">{t.current.toLocaleString()}</div></CardContent></Card>
-        <Card><CardContent className="p-4"><div className="text-sm text-muted-foreground">Total Depreciation</div><div className="text-2xl font-bold text-red-600">{t.depreciation.toLocaleString()}</div></CardContent></Card>
+        <StatCard title="Total Purchase Value" value={t.purchase.toLocaleString()} icon={Wallet} accent="info" />
+        <StatCard title="Total Current Value" value={t.current.toLocaleString()} icon={Wallet} accent="success" />
+        <StatCard title="Total Depreciation" value={t.depreciation.toLocaleString()} icon={Gauge} accent="destructive" />
       </div>
       <Card>
         <CardContent className="p-0">
           {data.rows.length === 0 ? (
-            <div className="flex h-32 items-center justify-center"><p className="text-sm text-muted-foreground">No assets to value.</p></div>
+            <EmptyState icon={Package} title="No assets to value" className="min-h-28" />
           ) : (
             <Table>
               <TableHeader>

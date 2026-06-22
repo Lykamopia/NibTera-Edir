@@ -36,6 +36,13 @@ export interface DetailedMember {
   joinDate: Date;
   currency: string;
   penalty: PenaltyBreakdown | null;
+  installmentSummary: {
+    type: string; total: number; paid: number; remaining: number;
+    nextDueDate: Date | null; nextAmount: number; outstanding: number;
+  } | null;
+  eventPenalties: { id: string; event: string; amount: number; date: Date | null }[];
+  assetPenalties: { id: string; asset: string; amount: number; date: Date | null; status: string }[];
+  reinstatementFee: number;
   dueInstallments: { id: string; amount: number; dueDate: Date; overdue: boolean }[];
   paymentHistory: { transactionId: string; amount: number; status: string; method: string; receiptUrl: string | null; createdAt: Date }[];
 }
@@ -52,8 +59,10 @@ export async function fetchDetailedMemberByPhone(phone: string): Promise<Detaile
     include: {
       paymentStatus: true,
       edir: { select: { name: true, logoUrl: true, settings: true } },
-      installmentPlans: { include: { installments: { where: { status: 'PENDING' }, orderBy: { dueDate: 'asc' } } } },
+      installmentPlans: { include: { installments: { orderBy: { sequence: 'asc' } } } },
       paymentLogs: { orderBy: { createdAt: 'desc' }, take: 25 },
+      eventParticipations: { where: { penalized: true }, include: { event: { select: { title: true, datetime: true, absencePenalty: true } } } },
+      assetIssuances: { where: { compensation: { gt: 0 } }, include: { asset: { select: { name: true } } } },
     },
   });
   if (!member) return null;
@@ -66,9 +75,28 @@ export async function fetchDetailedMemberByPhone(phone: string): Promise<Detaile
   const gracePeriodDays = settings?.gracePeriodDays ?? 0;
   const monthsBehind = monthlyFee > 0 ? Math.floor(balance / monthlyFee) : 0;
 
-  const dueInstallments = member.installmentPlans.flatMap(p => p.installments).map(i => ({
-    id: i.id, amount: Number(i.amount), dueDate: i.dueDate, overdue: new Date(i.dueDate) < now,
-  }));
+  // ── Installments: full summary across all plans ──────────────────────────────
+  const allInstallments = member.installmentPlans.flatMap(p => p.installments.map(i => ({ ...i, planType: p.type })));
+  const pendingInstallments = allInstallments.filter(i => i.status !== 'PAID').sort((a, b) => +new Date(a.dueDate) - +new Date(b.dueDate));
+  const dueInstallments = pendingInstallments.map(i => ({ id: i.id, amount: Number(i.amount), dueDate: i.dueDate, overdue: new Date(i.dueDate) < now }));
+  const installmentSummary = allInstallments.length > 0 ? {
+    type: member.installmentPlans.map(p => p.type).join(', ') || 'Installment',
+    total: allInstallments.length,
+    paid: allInstallments.filter(i => i.status === 'PAID').length,
+    remaining: pendingInstallments.length,
+    nextDueDate: pendingInstallments[0]?.dueDate ?? null,
+    nextAmount: pendingInstallments[0] ? Number(pendingInstallments[0].amount) : 0,
+    outstanding: pendingInstallments.reduce((s, i) => s + Number(i.amount), 0),
+  } : null;
+
+  // ── Other obligations folded into / alongside the balance ────────────────────
+  const eventPenalties = member.eventParticipations.map(p => ({
+    id: p.id, event: p.event?.title ?? 'Event', amount: Number(p.event?.absencePenalty ?? 0), date: p.event?.datetime ?? null,
+  })).filter(e => e.amount > 0);
+  const assetPenalties = member.assetIssuances.map(i => ({
+    id: i.id, asset: i.asset?.name ?? 'Asset', amount: Number(i.compensation ?? 0), date: i.updatedAt, status: i.status,
+  })).filter(a => a.amount > 0);
+  const reinstatementFee = (member.status === 'SUSPENDED' || member.status === 'TERMINATED') ? Number(settings?.reinstatementFee ?? 0) : 0;
 
   const penaltiesPaid = member.paymentLogs
     .filter(l => l.status === 'SUCCESS' || l.status === 'PARTIAL')
@@ -102,6 +130,10 @@ export async function fetchDetailedMemberByPhone(phone: string): Promise<Detaile
     joinDate: member.joinDate,
     currency,
     penalty,
+    installmentSummary,
+    eventPenalties,
+    assetPenalties,
+    reinstatementFee,
     dueInstallments,
     paymentHistory: member.paymentLogs.map(l => ({
       transactionId: l.transactionId, amount: Number(l.amount), status: l.status.toLowerCase(), method: l.method, receiptUrl: l.receiptUrl ?? null, createdAt: l.createdAt,

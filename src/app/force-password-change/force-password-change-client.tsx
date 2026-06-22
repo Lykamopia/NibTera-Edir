@@ -10,6 +10,7 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Loader2, KeyRound, ShieldCheck, LogOut } from 'lucide-react';
 import { completeFirstLoginPasswordChange } from '@/app/actions/auth';
+import { getClientBaseUrl } from '@/lib/url';
 
 export default function ForcePasswordChangeClient() {
   const router = useRouter();
@@ -56,7 +57,7 @@ export default function ForcePasswordChangeClient() {
           <Button className="w-full" onClick={submit} disabled={saving}>
             {saving && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />} Set password &amp; continue
           </Button>
-          <Button variant="ghost" className="w-full text-muted-foreground" onClick={() => signOut({ callbackUrl: '/login' })}>
+          <Button variant="ghost" className="w-full text-muted-foreground" onClick={async () => { try { await signOut({ redirect: false }); } catch {} window.location.href = `${getClientBaseUrl()}/login`; }}>
             <LogOut className="mr-1.5 h-4 w-4" /> Sign out
           </Button>
         </CardContent>

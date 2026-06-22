@@ -37,6 +37,11 @@ export const pagePermissions: PagePermissionDef[] = [
     actions: [{ id: 'view_dashboard', label: 'View Dashboard', description: 'Access the dashboard', isAccess: true }],
   },
   {
+    id: 'people', label: 'People', path: '/dashboard/people', icon: 'UsersRound', section: 'operations',
+    accessPermissions: ['view_members', 'manage_members', 'view_users', 'manage_users', 'manage_edirs', 'super_admin'],
+    actions: [{ id: 'view_members', label: 'People Management', description: 'Unified members & users management (adapts to your role)', isAccess: true }],
+  },
+  {
     id: 'members', label: 'Members', path: '/dashboard/members', icon: 'Users', section: 'operations',
     accessPermissions: ['view_members', 'manage_members'],
     actions: [
@@ -116,6 +121,11 @@ export const pagePermissions: PagePermissionDef[] = [
     actions: [{ id: 'handle_member_requests', label: 'Handle Member Requests', description: 'Review and respond to member self-service requests (relatives, emergencies, assets, grievances)', isAccess: true }],
   },
   {
+    id: 'documents', label: 'Documents', path: '/dashboard/documents', icon: 'FolderArchive', section: 'governance',
+    accessPermissions: ['view_documents'],
+    actions: [{ id: 'view_documents', label: 'View Documents', description: 'Access the centralized document repository (scope-limited to authorized records)', isAccess: true }],
+  },
+  {
     id: 'audit', label: 'Audit Log', path: '/dashboard/audit', icon: 'ScrollText', section: 'governance',
     accessPermissions: ['view_audit_log', 'manage_audit_log'],
     actions: [
@@ -161,6 +171,11 @@ export const pagePermissions: PagePermissionDef[] = [
     id: 'system-edirs', label: 'Edirs', path: '/dashboard/system/edirs', icon: 'Building2', section: 'system',
     accessPermissions: ['manage_edirs', 'super_admin'],
     actions: [{ id: 'manage_edirs', label: 'Manage Edirs', description: 'Create and manage tenant Edirs', isAccess: true }],
+  },
+  {
+    id: 'system-associations', label: 'User Associations', path: '/dashboard/system/associations', icon: 'Network', section: 'system',
+    accessPermissions: ['manage_edirs', 'super_admin'],
+    actions: [{ id: 'super_admin', label: 'Manage Associations', description: 'Associate, transfer, and remove users across Edirs', isAccess: true }],
   },
 ];
 
@@ -223,3 +238,21 @@ export const permissions = permissionGroups.flatMap(g => g.permissions);
 
 // The full list of valid permission ids — used to validate the role editor.
 export const ALL_PERMISSION_IDS: Permission[] = Array.from(new Set(permissions.map(p => p.id)));
+
+// Platform/global permissions — only ever grantable by a Super-Admin. These gate
+// cross-tenant capabilities (managing Edirs, associations, the super switch) and
+// must never appear in an Edir-scoped role editor or be saved on an Edir role.
+export const PLATFORM_PERMISSION_IDS: Permission[] = Array.from(new Set([
+  ...pagePermissions.filter(p => p.section === 'system').flatMap(p => p.actions.map(a => a.id)),
+  'super_admin',
+])) as Permission[];
+
+/** Permission groups assignable by the given actor scope. Edir (non-super) roles
+ *  never see platform/global permissions. */
+export function getAssignablePermissionGroups(isSuperAdmin: boolean): PermissionGroup[] {
+  if (isSuperAdmin) return permissionGroups;
+  const platform = new Set(PLATFORM_PERMISSION_IDS as string[]);
+  return permissionGroups
+    .map(g => ({ ...g, permissions: g.permissions.filter(p => !platform.has(p.id)) }))
+    .filter(g => g.permissions.length > 0);
+}

@@ -10,18 +10,19 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
-import { Loader2, Search, Plus, CalendarDays, Users, CheckCircle2, Ban, X } from 'lucide-react';
+import { Loader2, Search, Plus, CalendarDays, Users, CheckCircle2, Ban, X, Download, ChevronUp, ChevronDown, ArrowUpDown, CalendarClock, AlertTriangle } from 'lucide-react';
 import { getMembers } from '@/app/actions/members';
 import {
-  getEvents, getEvent, saveEvent, cancelEvent,
+  getEvents, getEvent, getEventsSummary, saveEvent, cancelEvent,
   addParticipants, inviteAllActiveMembers, removeParticipant, setAttendance, finalizeAttendance,
 } from '@/app/actions/events';
 import { useConfirm } from '@/components/ui/confirm-provider';
+import { PageHeader, StatCard, LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
 
 const STATUS: Record<string, { label: string; cls: string }> = {
-  SCHEDULED: { label: 'Scheduled', cls: 'bg-blue-100 text-blue-800' },
-  COMPLETED: { label: 'Finalized', cls: 'bg-green-100 text-green-800' },
-  CANCELLED: { label: 'Cancelled', cls: 'bg-gray-100 text-gray-700' },
+  SCHEDULED: { label: 'Scheduled', cls: 'border-info/20 bg-info/10 text-info' },
+  COMPLETED: { label: 'Finalized', cls: 'border-success/20 bg-success/10 text-success' },
+  CANCELLED: { label: 'Cancelled', cls: 'bg-muted text-muted-foreground' },
 };
 const ATT_STATUSES = ['INVITED', 'PRESENT', 'ABSENT', 'EXCUSED', 'ATTENDING', 'DECLINED'] as const;
 
@@ -29,24 +30,52 @@ const fmt = (d: string | Date) => new Date(d).toLocaleString(undefined, { dateSt
 
 export default function EventsClient() {
   const [items, setItems] = useState<any[]>([]);
+  const [summary, setSummary] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState('all');
+  const [sort, setSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'datetime', dir: 'desc' });
   const [editing, setEditing] = useState<any | null | undefined>(undefined);
   const [manageId, setManageId] = useState<string | null>(null);
 
   const load = useCallback(() => {
     setLoading(true); setError(false);
-    getEvents({ query, status }).then(setItems).catch(() => setError(true)).finally(() => setLoading(false));
+    Promise.all([getEvents({ query, status }), getEventsSummary()])
+      .then(([e, s]) => { setItems(e); setSummary(s); })
+      .catch(() => setError(true)).finally(() => setLoading(false));
   }, [query, status]);
   useEffect(() => { load(); }, [load]);
 
+  const toggleSort = (key: string) => setSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' });
+  const SortIcon = ({ k }: { k: string }) => sort.key !== k ? <ArrowUpDown className="h-3.5 w-3.5 opacity-40" /> : sort.dir === 'asc' ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />;
+  const sorted = [...items].sort((a, b) => {
+    let cmp = 0;
+    if (sort.key === 'title') cmp = (a.title || '').localeCompare(b.title || '');
+    else if (sort.key === 'penalty') cmp = (a.absencePenalty || 0) - (b.absencePenalty || 0);
+    else if (sort.key === 'participants') cmp = (a.participantCount || 0) - (b.participantCount || 0);
+    else if (sort.key === 'status') cmp = (a.status || '').localeCompare(b.status || '');
+    else cmp = +new Date(a.datetime) - +new Date(b.datetime);
+    return sort.dir === 'asc' ? cmp : -cmp;
+  });
+  const exportCsv = () => {
+    const header = ['Event', 'When', 'Location', 'Attendance', 'Penalty', 'Participants', 'Status'];
+    const data = sorted.map(e => [e.title, new Date(e.datetime).toISOString(), e.location || '', e.attendanceRequired ? 'Required' : 'Optional', e.attendanceRequired ? e.absencePenalty : '', e.participantCount, e.status]);
+    const csv = [header, ...data].map(r => r.map(x => `"${String(x).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+    const el = document.createElement('a'); el.href = url; el.download = 'events.csv'; el.click(); URL.revokeObjectURL(url);
+  };
+
   return (
-    <div className="space-y-4">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Events</h1>
-        <p className="text-muted-foreground text-sm">Schedule events, track attendance, and finalize to apply absence penalties.</p>
+    <div className="space-y-5">
+      <PageHeader title="Events" description="Schedule events, track attendance, and finalize to apply absence penalties." icon={CalendarDays}
+        actions={<Button onClick={() => setEditing(null)}><Plus className="mr-1 h-4 w-4" /> New Event</Button>} />
+
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatCard title="Upcoming" value={summary?.upcoming ?? '—'} icon={CalendarClock} accent="primary" hint={summary ? `${summary.scheduled} scheduled` : undefined} />
+        <StatCard title="Finalized" value={summary?.completed ?? '—'} icon={CheckCircle2} accent="success" />
+        <StatCard title="Total Events" value={summary?.total ?? '—'} icon={CalendarDays} accent="info" />
+        <StatCard title="Penalized Absences" value={summary?.penalizedAbsences ?? '—'} icon={AlertTriangle} accent="warning" />
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -63,38 +92,32 @@ export default function EventsClient() {
             <SelectItem value="CANCELLED">Cancelled</SelectItem>
           </SelectContent>
         </Select>
-        <div className="ml-auto"><Button onClick={() => setEditing(null)}><Plus className="h-4 w-4 mr-1" /> New Event</Button></div>
+        <Button variant="outline" onClick={exportCsv}><Download className="mr-1.5 h-4 w-4" /> Export</Button>
       </div>
 
       <Card>
         <CardContent className="p-0">
-          {loading ? (
-            <div className="flex h-40 items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
-          ) : error ? (
-            <div className="flex h-40 flex-col items-center justify-center gap-2">
-              <p className="text-sm text-muted-foreground">Failed to load events.</p>
-              <Button variant="outline" size="sm" onClick={load}>Retry</Button>
-            </div>
-          ) : items.length === 0 ? (
-            <div className="flex h-40 flex-col items-center justify-center gap-2 text-center">
-              <CalendarDays className="h-8 w-8 text-muted-foreground" />
-              <p className="text-sm text-muted-foreground">No events yet.</p>
-            </div>
+          {loading ? <LoadingState rows={5} /> : error ? <ErrorState onRetry={load} /> : items.length === 0 ? (
+            <EmptyState icon={CalendarDays} title="No events yet" description="Schedule your first event to track attendance." />
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Event</TableHead><TableHead>When</TableHead><TableHead>Attendance</TableHead>
-                  <TableHead className="text-right">Penalty</TableHead><TableHead className="text-center">Participants</TableHead>
-                  <TableHead>Status</TableHead><TableHead></TableHead>
+                  <TableHead><button onClick={() => toggleSort('title')} className="flex items-center gap-1 hover:text-foreground">Event <SortIcon k="title" /></button></TableHead>
+                  <TableHead><button onClick={() => toggleSort('datetime')} className="flex items-center gap-1 hover:text-foreground">When <SortIcon k="datetime" /></button></TableHead>
+                  <TableHead>Attendance</TableHead>
+                  <TableHead className="text-right"><button onClick={() => toggleSort('penalty')} className="ml-auto flex items-center gap-1 hover:text-foreground">Penalty <SortIcon k="penalty" /></button></TableHead>
+                  <TableHead className="text-center"><button onClick={() => toggleSort('participants')} className="mx-auto flex items-center gap-1 hover:text-foreground">Participants <SortIcon k="participants" /></button></TableHead>
+                  <TableHead><button onClick={() => toggleSort('status')} className="flex items-center gap-1 hover:text-foreground">Status <SortIcon k="status" /></button></TableHead>
+                  <TableHead></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {items.map(e => (
+                {sorted.map(e => (
                   <TableRow key={e.id}>
                     <TableCell><div className="font-medium">{e.title}</div>{e.location && <div className="text-xs text-muted-foreground">{e.location}</div>}</TableCell>
                     <TableCell className="whitespace-nowrap">{fmt(e.datetime)}</TableCell>
-                    <TableCell>{e.attendanceRequired ? 'Required' : 'Optional'}</TableCell>
+                    <TableCell>{e.attendanceRequired ? <Badge variant="outline" className="border-warning/20 bg-warning/10 text-warning">Required</Badge> : <span className="text-sm text-muted-foreground">Optional</span>}</TableCell>
                     <TableCell className="text-right">{e.attendanceRequired ? e.absencePenalty.toLocaleString() : '—'}</TableCell>
                     <TableCell className="text-center">{e.participantCount}</TableCell>
                     <TableCell><Badge variant="outline" className={STATUS[e.status]?.cls}>{STATUS[e.status]?.label ?? e.status}</Badge></TableCell>
@@ -109,6 +132,7 @@ export default function EventsClient() {
           )}
         </CardContent>
       </Card>
+      <p className="text-xs text-muted-foreground">{sorted.length} event(s)</p>
 
       {editing !== undefined && <EventFormDialog event={editing} onClose={() => setEditing(undefined)} onDone={() => { setEditing(undefined); load(); }} />}
       {manageId && <ManageDialog eventId={manageId} onClose={() => setManageId(null)} onChanged={load} />}

@@ -53,7 +53,7 @@ export default function MemberProfileClient({ initial, memberId }: { initial: Pr
 
   return (
     <div className="space-y-5">
-      <Link href="/dashboard/members" className="inline-flex items-center text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="mr-1 h-4 w-4" /> Back to members</Link>
+      <Link href="/dashboard/people" className="inline-flex items-center text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="mr-1 h-4 w-4" /> Back to people</Link>
 
       {/* Identity header */}
       <Card>

@@ -97,7 +97,7 @@ export async function GET(req: NextRequest, { params }: { params: { path: string
         ]);
         const perms = (user.role?.permissions?.split(',') ?? []).map(p => p.trim());
         const isSuper = user.role?.scope === 'SUPER_ADMIN' || perms.includes('super_admin');
-        const canView = perms.includes('view_members') || perms.includes('manage_members') || perms.includes('review_member_documents') || perms.includes('handle_member_requests');
+        const canView = perms.includes('view_members') || perms.includes('manage_members') || perms.includes('review_member_documents') || perms.includes('handle_member_requests') || perms.includes('view_documents');
         const docEdirId = relDoc?.relative.member?.edirId ?? memberDoc?.member?.edirId ?? reqDoc?.member?.edirId ?? null;
         const sameTenant = !!docEdirId && docEdirId === (user as any).edirId;
         const isOwnRequestDoc = !!reqDoc && reqDoc.member?.userId === user.id; // member viewing their own attachment

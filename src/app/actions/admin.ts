@@ -4,11 +4,12 @@ import { z } from 'zod';
 import crypto from 'crypto';
 import prisma from '@/lib/prisma';
 import { Prisma } from '@prisma/client';
-import { getActor, requireActor, assertPermission, assertSameTenant, tenantWhere, type Actor } from '@/lib/tenant-scope';
+import { getActor, requireActor, assertPermission, assertSameTenant, tenantWhere, resolveEdirId, type Actor } from '@/lib/tenant-scope';
 import { writeAudit } from '@/lib/audit';
-import { ALL_PERMISSION_IDS } from '@/lib/permissions';
+import { ALL_PERMISSION_IDS, PLATFORM_PERMISSION_IDS } from '@/lib/permissions';
 import { normalizeEthiopianPhone, isValidEthiopianPhone } from '@/lib/utils';
 import { sendPasswordResetEmail } from '@/lib/email';
+import { ensureMembershipForUser } from '@/app/actions/members';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
 
@@ -32,7 +33,7 @@ export async function getUsers() {
   const actor = await getActor();
   await assertPermission(actor, ['view_users', 'manage_users']);
   const users = await prisma.user.findMany({
-    where: tenantWhere(actor),
+    where: { ...tenantWhere(actor), NOT: { role: { is: { scope: 'SUPER_ADMIN' } } } }, // hide platform admins
     include: { role: true, edir: true },
     orderBy: { createdAt: 'desc' },
   });
@@ -41,6 +42,16 @@ export async function getUsers() {
     status: u.status, roleName: u.role?.name ?? null, roleId: u.roleId,
     edirName: u.edir?.name ?? null, edirId: u.edirId,
   }));
+}
+
+/** Context for the Users page: whether the actor is a Super-Admin and the Edirs they can target. */
+export async function getUserManagementContext() {
+  const actor = await getActor();
+  await assertPermission(actor, ['view_users', 'manage_users']);
+  const edirs = actor.isSuperAdmin
+    ? await prisma.edir.findMany({ orderBy: { name: 'asc' }, select: { id: true, name: true } })
+    : (actor.edirId ? await prisma.edir.findMany({ where: { id: actor.edirId }, select: { id: true, name: true } }) : []);
+  return { isSuperAdmin: actor.isSuperAdmin, edirs };
 }
 
 export async function getRoles() {
@@ -59,13 +70,20 @@ const inviteSchema = z.object({
   email: z.string().email(),
   phone: z.string().min(9),
   roleId: z.string().optional().nullable(),
+  edirId: z.string().optional().nullable(), // required for Super-Admins; ignored for Edir admins
 });
 
 /** Invite a user: validate unique email+phone, create INVITED user, 48h token, email set-password link. */
 export async function inviteUser(input: z.infer<typeof inviteSchema>) {
   try {
-    const { actor, edirId } = await requireActor('manage_users');
+    const actor = await getActor();
+    await assertPermission(actor, 'manage_users');
     const data = inviteSchema.parse(input);
+    // Super-Admins must choose which Edir the new user belongs to; Edir admins use their own.
+    if (actor.isSuperAdmin && !data.edirId) {
+      return { success: false as const, error: 'Select an Edir for the new user.' };
+    }
+    const edirId = resolveEdirId(actor, data.edirId);
     if (!isValidEthiopianPhone(data.phone)) return { success: false as const, error: 'Enter a valid Ethiopian phone number.' };
     const phone = normalizeEthiopianPhone(data.phone);
     const email = data.email.toLowerCase().trim();
@@ -80,7 +98,7 @@ export async function inviteUser(input: z.infer<typeof inviteSchema>) {
     if (data.roleId) {
       const role = await prisma.role.findUnique({ where: { id: data.roleId } });
       if (!role) return { success: false as const, error: 'Role not found.' };
-      if (!actor.isSuperAdmin && role.edirId && role.edirId !== edirId) {
+      if (role.edirId && role.edirId !== edirId) {
         return { success: false as const, error: 'That role belongs to a different Edir.' };
       }
     }
@@ -100,6 +118,8 @@ export async function inviteUser(input: z.infer<typeof inviteSchema>) {
       .catch(err => console.error('Failed to send invite email:', err));
 
     await writeAudit({ edirId, userId: actor.id, action: 'USER_INVITED', targetType: 'User', targetId: user.id, details: `Invited ${email}.` });
+    // Invited users are also regular Edir members (obligations follow the bylaws, not the role).
+    try { await ensureMembershipForUser(user.id); } catch { /* non-fatal */ }
     revalidatePath('/dashboard/admin/users');
     return { success: true as const, userId: user.id };
   } catch (error) {
@@ -114,6 +134,12 @@ export async function setUserRole(userId: string, roleId: string | null) {
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (!user) return { success: false as const, error: 'User not found.' };
     assertSameTenant(actor, user.edirId);
+    if (roleId) {
+      const role = await prisma.role.findUnique({ where: { id: roleId }, select: { scope: true, edirId: true } });
+      if (!role) return { success: false as const, error: 'Role not found.' };
+      if (role.scope === 'SUPER_ADMIN') return { success: false as const, error: 'The platform Super-Admin role cannot be assigned here.' };
+      if (role.edirId && role.edirId !== user.edirId) return { success: false as const, error: 'That role belongs to a different Edir.' };
+    }
     await prisma.user.update({ where: { id: userId }, data: { roleId } });
     await writeAudit({ edirId: user.edirId, userId: actor.id, action: 'USER_ROLE_CHANGED', targetType: 'User', targetId: userId });
     revalidatePath('/dashboard/admin/users');
@@ -194,7 +220,9 @@ export async function saveRole(input: z.infer<typeof roleSchema>) {
     const { actor, edirId } = await requireActor('manage_roles');
     const data = roleSchema.parse(input);
     const valid = data.permissions.filter(p => (ALL_PERMISSION_IDS as string[]).includes(p));
-    const filtered = actor.isSuperAdmin ? valid : valid.filter(p => p !== 'super_admin');
+    // Edir (non-super) roles can never carry platform/global permissions.
+    const platform = new Set(PLATFORM_PERMISSION_IDS as string[]);
+    const filtered = actor.isSuperAdmin ? valid : valid.filter(p => !platform.has(p));
     const permissions = filtered.join(',');
 
     if (data.id) {
@@ -232,6 +260,24 @@ export async function deleteRole(id: string) {
 
 // ─── Edirs (Super Admin) ─────────────────────────────────────────────────────
 
+// Default roles every Edir needs so it can be configured and operated. "Edir
+// Admin" carries the full Edir catalog (never the platform super_admin switch).
+const EDIR_ADMIN_PERMISSIONS = (ALL_PERMISSION_IDS as string[]).filter(p => p !== 'super_admin');
+const DEFAULT_EDIR_ROLES: { name: string; permissions: string[] }[] = [
+  { name: 'Edir Admin', permissions: EDIR_ADMIN_PERMISSIONS },
+  { name: 'Member', permissions: ['view_dashboard'] },
+  { name: 'Committee (Oversight)', permissions: ['view_dashboard', 'view_committee_oversight', 'view_members', 'view_payments', 'view_audit_log', 'view_payment_log', 'view_approvals', 'view_documents'] },
+];
+
+/** Create the default Edir roles when an Edir has none. Idempotent. */
+export async function ensureDefaultEdirRoles(edirId: string, client: Prisma.TransactionClient | typeof prisma = prisma) {
+  const existing = await client.role.count({ where: { edirId } });
+  if (existing > 0) return;
+  await client.role.createMany({
+    data: DEFAULT_EDIR_ROLES.map(r => ({ name: r.name, scope: 'EDIR' as const, edirId, permissions: r.permissions.join(',') })),
+  });
+}
+
 export async function getEdirs() {
   const actor = await getActor();
   await assertPermission(actor, ['manage_edirs', 'super_admin']);
@@ -253,6 +299,7 @@ export async function saveEdir(input: { id?: string; name: string; description?:
     } else {
       const edir = await prisma.edir.create({ data: { name, description: input.description ?? null } });
       await prisma.edirSettings.create({ data: { edirId: edir.id } });
+      await ensureDefaultEdirRoles(edir.id); // so the Edir can be staffed & configured immediately
     }
     await writeAudit({ userId: actor.id, action: 'EDIR_SAVED', targetType: 'Edir', targetId: input.id ?? null, details: name });
     revalidatePath('/dashboard/system/edirs');

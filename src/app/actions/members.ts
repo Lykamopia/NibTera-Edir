@@ -3,7 +3,7 @@
 import { z } from 'zod';
 import prisma from '@/lib/prisma';
 import { Prisma } from '@prisma/client';
-import { requireActor, getActor, assertPermission, assertSameTenant, tenantWhere } from '@/lib/tenant-scope';
+import { getActor, assertPermission, assertSameTenant, tenantWhere, resolveEdirId } from '@/lib/tenant-scope';
 import { writeAudit } from '@/lib/audit';
 import { submitForApproval } from '@/lib/approval-engine';
 import '@/lib/approval-modules';
@@ -29,17 +29,59 @@ const memberSchema = z.object({
   emergencyContactName: z.string().optional().nullable(),
   emergencyContactPhone: z.string().optional().nullable(),
   role: z.string().default('Member'),
+  roleId: z.string().optional().nullable(), // login (permission) role from the Roles page
+  edirId: z.string().optional().nullable(),  // required for Super-Admins; ignored for Edir admins
   registrationInstallmentCount: z.coerce.number().int().min(1).max(60).default(1),
 });
 
 export type MemberInput = z.infer<typeof memberSchema>;
 
 /** Generate the next member id `EDR-YYYY-NNNN`, unique within the edir for the year. */
-async function nextMemberId(edirId: string): Promise<string> {
+async function nextMemberId(edirId: string, client: Prisma.TransactionClient | typeof prisma = prisma): Promise<string> {
   const year = new Date().getFullYear();
   const prefix = `EDR-${year}-`;
-  const count = await prisma.member.count({ where: { edirId, memberId: { startsWith: prefix } } });
+  const count = await client.member.count({ where: { edirId, memberId: { startsWith: prefix } } });
   return `${prefix}${String(count + 1).padStart(4, '0')}`;
+}
+
+/**
+ * Guarantee that an Edir-scoped user also has a Member record, so every user
+ * (admins, committee, approvers included) is treated as a regular member for
+ * contributions, penalties, eligibility, etc. — governed by the Edir's bylaws,
+ * not their role. Platform Super-Admins (no Edir) are exempt. Find-or-create by
+ * phone/email so an existing member is linked rather than duplicated.
+ */
+export async function ensureMembershipForUser(userId: string): Promise<{ created: boolean }> {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    include: { role: { select: { scope: true } }, member: { select: { id: true } } },
+  });
+  if (!user || user.member || !user.edirId) return { created: false };
+  if (user.role?.scope === 'SUPER_ADMIN') return { created: false };
+
+  return prisma.$transaction(async (tx) => {
+    if (await tx.member.findFirst({ where: { userId }, select: { id: true } })) return { created: false };
+
+    // Link an existing unlinked member with the same phone/email, if any.
+    const matchers = [user.phone ? { phone: user.phone } : undefined, user.email ? { email: user.email } : undefined].filter(Boolean) as any[];
+    if (matchers.length) {
+      const existing = await tx.member.findFirst({ where: { edirId: user.edirId!, userId: null, OR: matchers } });
+      if (existing) { await tx.member.update({ where: { id: existing.id }, data: { userId } }); return { created: false }; }
+    }
+
+    const settings = await tx.edirSettings.findUnique({ where: { edirId: user.edirId! } });
+    const registrationFee = settings?.registrationFee ?? new Prisma.Decimal(0);
+    const memberId = await nextMemberId(user.edirId!, tx);
+    await tx.member.create({
+      data: {
+        edirId: user.edirId!, memberId, userId,
+        name: user.name ?? user.email ?? 'Member', phone: user.phone, email: user.email,
+        role: 'Member', status: 'ACTIVE',
+        paymentStatus: { create: { balance: registrationFee, status: registrationFee.greaterThan(0) ? 'PENDING' : 'PAID' } },
+      },
+    });
+    return { created: true };
+  });
 }
 
 export async function getMembers(params: { query?: string; status?: string; page?: number; pageSize?: number } = {}) {
@@ -234,10 +276,12 @@ function relativeData(data: z.infer<typeof relativeSchema>) {
 
 export async function addRelative(memberId: string, input: z.infer<typeof relativeSchema>) {
   try {
-    const { actor, edirId } = await requireActor('manage_members');
+    const actor = await getActor();
+    await assertPermission(actor, 'manage_members');
     const member = await prisma.member.findUnique({ where: { id: memberId } });
     if (!member) return { success: false as const, error: 'Member not found.' };
     assertSameTenant(actor, member.edirId);
+    const edirId = member.edirId;
     const data = relativeSchema.parse(input);
     const rel = await prisma.relative.create({ data: { memberId, ...relativeData(data) } });
     await writeAudit({ edirId, userId: actor.id, action: 'RELATIVE_ADDED', targetType: 'Relative', targetId: rel.id, details: `${data.name} (${data.relationship}) for ${member.name}.` });
@@ -251,10 +295,12 @@ export async function addRelative(memberId: string, input: z.infer<typeof relati
 
 export async function updateRelative(relativeId: string, input: z.infer<typeof relativeSchema>) {
   try {
-    const { actor, edirId } = await requireActor('manage_members');
+    const actor = await getActor();
+    await assertPermission(actor, 'manage_members');
     const rel = await prisma.relative.findUnique({ where: { id: relativeId }, include: { member: true } });
     if (!rel) return { success: false as const, error: 'Relative not found.' };
     assertSameTenant(actor, rel.member.edirId);
+    const edirId = rel.member.edirId;
     const data = relativeSchema.parse(input);
     await prisma.relative.update({ where: { id: relativeId }, data: relativeData(data) });
     await writeAudit({ edirId, userId: actor.id, action: 'RELATIVE_UPDATED', targetType: 'Relative', targetId: relativeId, details: data.name });
@@ -267,10 +313,12 @@ export async function updateRelative(relativeId: string, input: z.infer<typeof r
 
 export async function removeRelative(relativeId: string) {
   try {
-    const { actor, edirId } = await requireActor('manage_members');
+    const actor = await getActor();
+    await assertPermission(actor, 'manage_members');
     const rel = await prisma.relative.findUnique({ where: { id: relativeId }, include: { member: true } });
     if (!rel) return { success: false as const, error: 'Relative not found.' };
     assertSameTenant(actor, rel.member.edirId);
+    const edirId = rel.member.edirId;
     await prisma.relative.delete({ where: { id: relativeId } });
     await writeAudit({ edirId, userId: actor.id, action: 'RELATIVE_REMOVED', targetType: 'Relative', targetId: relativeId, details: rel.name });
     revalidatePath('/dashboard/members');
@@ -288,10 +336,12 @@ const documentSchema = z.object({
 /** Attach an uploaded document to a relative (lands in PENDING review state). */
 export async function addRelativeDocument(relativeId: string, input: z.infer<typeof documentSchema>) {
   try {
-    const { actor, edirId } = await requireActor('manage_members');
+    const actor = await getActor();
+    await assertPermission(actor, 'manage_members');
     const rel = await prisma.relative.findUnique({ where: { id: relativeId }, include: { member: true } });
     if (!rel) return { success: false as const, error: 'Relative not found.' };
     assertSameTenant(actor, rel.member.edirId);
+    const edirId = rel.member.edirId;
     const data = documentSchema.parse(input);
     const doc = await prisma.relativeDocument.create({
       data: { relativeId, fileUrl: data.fileUrl, fileName: data.fileName || null, status: 'PENDING' },
@@ -307,11 +357,13 @@ export async function addRelativeDocument(relativeId: string, input: z.infer<typ
 /** Approve or reject a relative document (review_member_documents). */
 export async function reviewDocument(documentId: string, status: 'APPROVED' | 'REJECTED', notes?: string) {
   try {
-    const { actor, edirId } = await requireActor('review_member_documents');
+    const actor = await getActor();
+    await assertPermission(actor, 'review_member_documents');
     if (status !== 'APPROVED' && status !== 'REJECTED') return { success: false as const, error: 'Invalid review decision.' };
     const doc = await prisma.relativeDocument.findUnique({ where: { id: documentId }, include: { relative: { include: { member: true } } } });
     if (!doc) return { success: false as const, error: 'Document not found.' };
     assertSameTenant(actor, doc.relative.member.edirId);
+    const edirId = doc.relative.member.edirId;
     await prisma.relativeDocument.update({ where: { id: documentId }, data: { status, notes: notes || null } });
     await writeAudit({ edirId, userId: actor.id, action: `RELATIVE_DOCUMENT_${status}`, targetType: 'RelativeDocument', targetId: documentId, details: notes || `Document ${status.toLowerCase()}.` });
     revalidatePath('/dashboard/members');
@@ -350,10 +402,12 @@ const memberDocSchema = z.object({
 
 export async function addMemberDocument(memberId: string, input: z.infer<typeof memberDocSchema>) {
   try {
-    const { actor, edirId } = await requireActor('manage_members');
+    const actor = await getActor();
+    await assertPermission(actor, 'manage_members');
     const member = await prisma.member.findUnique({ where: { id: memberId } });
     if (!member) return { success: false as const, error: 'Member not found.' };
     assertSameTenant(actor, member.edirId);
+    const edirId = member.edirId;
     const data = memberDocSchema.parse(input);
     const doc = await prisma.memberDocument.create({
       data: { memberId, category: data.category, fileUrl: data.fileUrl, fileName: data.fileName || null, status: 'PENDING' },
@@ -368,10 +422,12 @@ export async function addMemberDocument(memberId: string, input: z.infer<typeof 
 
 export async function deleteMemberDocument(documentId: string) {
   try {
-    const { actor, edirId } = await requireActor('manage_members');
+    const actor = await getActor();
+    await assertPermission(actor, 'manage_members');
     const doc = await prisma.memberDocument.findUnique({ where: { id: documentId }, include: { member: true } });
     if (!doc) return { success: false as const, error: 'Document not found.' };
     assertSameTenant(actor, doc.member.edirId);
+    const edirId = doc.member.edirId;
     await prisma.memberDocument.delete({ where: { id: documentId } });
     await writeAudit({ edirId, userId: actor.id, action: 'MEMBER_DOCUMENT_DELETED', targetType: 'MemberDocument', targetId: documentId });
     revalidatePath(`/dashboard/members/${doc.memberId}`);
@@ -383,11 +439,13 @@ export async function deleteMemberDocument(documentId: string) {
 
 export async function reviewMemberDocument(documentId: string, status: 'APPROVED' | 'REJECTED', notes?: string) {
   try {
-    const { actor, edirId } = await requireActor('review_member_documents');
+    const actor = await getActor();
+    await assertPermission(actor, 'review_member_documents');
     if (status !== 'APPROVED' && status !== 'REJECTED') return { success: false as const, error: 'Invalid review decision.' };
     const doc = await prisma.memberDocument.findUnique({ where: { id: documentId }, include: { member: true } });
     if (!doc) return { success: false as const, error: 'Document not found.' };
     assertSameTenant(actor, doc.member.edirId);
+    const edirId = doc.member.edirId;
     await prisma.memberDocument.update({ where: { id: documentId }, data: { status, notes: notes || null } });
     await writeAudit({ edirId, userId: actor.id, action: `MEMBER_DOCUMENT_${status}`, targetType: 'MemberDocument', targetId: documentId, details: notes || `Document ${status.toLowerCase()}.` });
     revalidatePath(`/dashboard/members/${doc.memberId}`);
@@ -405,8 +463,14 @@ export async function reviewMemberDocument(documentId: string, status: 'APPROVED
  */
 export async function createMember(input: MemberInput) {
   try {
-    const { actor, edirId } = await requireActor('manage_members');
     const data = memberSchema.parse(input);
+    const actor = await getActor();
+    await assertPermission(actor, 'manage_members');
+    // Super-Admins act across tenants, so they must choose the target Edir.
+    if (actor.isSuperAdmin && !data.edirId) {
+      return { success: false as const, error: 'Select an Edir for the new member.' };
+    }
+    const edirId = resolveEdirId(actor, data.edirId);
 
     if (data.phone && !isValidEthiopianPhone(data.phone)) {
       return { success: false as const, error: 'Enter a valid Ethiopian phone number.' };
@@ -417,8 +481,21 @@ export async function createMember(input: MemberInput) {
     const settings = await prisma.edirSettings.findUnique({ where: { edirId } });
     const registrationFee = settings?.registrationFee ?? new Prisma.Decimal(0);
 
-    // Default member login role (least privilege) for the tenant.
-    const memberLoginRole = await prisma.role.findFirst({ where: { edirId, name: 'Member' }, select: { id: true } });
+    // Resolve the login (permission) role. If the form chose one from the Roles
+    // page, validate it belongs to this tenant; otherwise fall back to the
+    // least-privilege "Member" role.
+    let loginRole = await prisma.role.findFirst({ where: { edirId, name: 'Member' }, select: { id: true, name: true } });
+    if (data.roleId) {
+      const chosen = await prisma.role.findUnique({ where: { id: data.roleId }, select: { id: true, name: true, edirId: true, scope: true } });
+      if (!chosen) return { success: false as const, error: 'Role not found.' };
+      if (chosen.scope === 'SUPER_ADMIN') return { success: false as const, error: 'The platform Super-Admin role cannot be assigned to a member.' };
+      if (chosen.edirId && chosen.edirId !== edirId) {
+        return { success: false as const, error: 'The selected role does not belong to this Edir.' };
+      }
+      loginRole = { id: chosen.id, name: chosen.name };
+    }
+    // The membership-role label mirrors the assigned role's name for display.
+    const memberRoleLabel = loginRole?.name ?? data.role ?? 'Member';
 
     let tempPassword: string | null = null;
     let loginCreated = false;
@@ -436,13 +513,17 @@ export async function createMember(input: MemberInput) {
         });
         if (existing) {
           userId = existing.id;
+          // Apply the explicitly chosen role to the linked login account.
+          if (data.roleId && loginRole?.id) {
+            await tx.user.update({ where: { id: existing.id }, data: { roleId: loginRole.id } });
+          }
         } else {
           tempPassword = generateTempPassword();
           const hashed = await bcrypt.hash(tempPassword, 12);
           const created = await tx.user.create({
             data: {
               name: data.name, phone, email, edirId,
-              roleId: memberLoginRole?.id ?? null,
+              roleId: loginRole?.id ?? null,
               status: 'ACTIVE',
               hashedPassword: hashed,
               mustChangePassword: true,
@@ -474,7 +555,7 @@ export async function createMember(input: MemberInput) {
           woreda: data.woreda || null,
           emergencyContactName: data.emergencyContactName || null,
           emergencyContactPhone: data.emergencyContactPhone ? normalizeEthiopianPhone(data.emergencyContactPhone) : null,
-          role: data.role || 'Member',
+          role: memberRoleLabel,
           status: 'ACTIVE',
           registrationInstallmentCount: data.registrationInstallmentCount,
           paymentStatus: {
@@ -569,10 +650,14 @@ export async function updateMember(id: string, input: MemberInput) {
  */
 export async function resetMemberPassword(memberId: string) {
   try {
-    const { actor, edirId } = await requireActor(['manage_members', 'reset_password']);
+    // Scope to the member's own Edir (not the actor's) so a Super-Admin — who has
+    // no Edir of their own — can reset credentials for any tenant's member.
+    const actor = await getActor();
+    await assertPermission(actor, ['manage_members', 'reset_password']);
     const member = await prisma.member.findUnique({ where: { id: memberId }, include: { user: true } });
     if (!member) return { success: false as const, error: 'Member not found.' };
     assertSameTenant(actor, member.edirId);
+    const edirId = member.edirId;
 
     const username = member.user?.phone ?? member.phone ?? member.user?.email ?? member.email ?? null;
     if (!username) return { success: false as const, error: 'This member has no phone or email to use as a login username.' };
@@ -632,10 +717,12 @@ export async function setMemberStatus(id: string, status: 'ACTIVE' | 'INACTIVE' 
 /** Member removal goes through Maker–Checker. */
 export async function requestMemberRemoval(id: string, reason?: string) {
   try {
-    const { actor, edirId } = await requireActor('remove_members');
+    const actor = await getActor();
+    await assertPermission(actor, 'remove_members');
     const member = await prisma.member.findUnique({ where: { id } });
     if (!member) return { success: false as const, error: 'Member not found.' };
     assertSameTenant(actor, member.edirId);
+    const edirId = member.edirId;
 
     const requestId = await submitForApproval(actor, {
       edirId,

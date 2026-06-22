@@ -4,6 +4,7 @@ import { z } from 'zod';
 import prisma from '@/lib/prisma';
 import { getActor } from '@/lib/tenant-scope';
 import { writeAudit } from '@/lib/audit';
+import { ensureMembershipForUser } from '@/app/actions/members';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
 
@@ -58,6 +59,9 @@ export async function getMyAccount() {
  */
 export async function getMyPortal() {
   const actor = await getActor();
+  // Every Edir-scoped user (admins, committee, approvers included) is a member
+  // for obligations/benefits — provision their membership if missing.
+  try { await ensureMembershipForUser(actor.id); } catch { /* non-fatal */ }
   const user = await prisma.user.findUnique({
     where: { id: actor.id },
     include: {

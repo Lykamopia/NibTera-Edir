@@ -1,5 +1,6 @@
 import { toast } from "sonner";
 import { signOut } from "next-auth/react";
+import { getClientBaseUrl } from "@/lib/url";
 
 interface ErrorData {
   name?: string;
@@ -36,7 +37,7 @@ export function handleActionError(error: unknown, fallbackTitle = "Error") {
         duration: 5000,
       });
       if (typeof window !== "undefined") {
-        signOut({ callbackUrl: `${window.location.origin}/login?error=SessionExpired` });
+        signOut({ redirect: false }).finally(() => { window.location.href = `${getClientBaseUrl()}/login?error=SessionExpired`; });
       }
       return;
     }
@@ -53,7 +54,7 @@ export function handleActionError(error: unknown, fallbackTitle = "Error") {
         duration: 5000,
       });
       if (typeof window !== "undefined") {
-        signOut({ callbackUrl: `${window.location.origin}/login?error=SessionExpired` });
+        signOut({ redirect: false }).finally(() => { window.location.href = `${getClientBaseUrl()}/login?error=SessionExpired`; });
       }
       return;
     } else if (err.name === "NotFoundError" || err.message?.includes("Not found")) {
