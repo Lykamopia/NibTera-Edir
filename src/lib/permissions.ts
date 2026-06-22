@@ -170,12 +170,12 @@ export const pagePermissions: PagePermissionDef[] = [
   {
     id: 'system-edirs', label: 'Edirs', path: '/dashboard/system/edirs', icon: 'Building2', section: 'system',
     accessPermissions: ['manage_edirs', 'super_admin'],
-    actions: [{ id: 'manage_edirs', label: 'Manage Edirs', description: 'Create and manage tenant Edirs', isAccess: true }],
+    actions: [{ id: 'manage_edirs', label: 'Create & Manage Edirs', description: 'Create tenant Edirs and edit their profiles', isAccess: true }],
   },
   {
     id: 'system-associations', label: 'User Associations', path: '/dashboard/system/associations', icon: 'Network', section: 'system',
-    accessPermissions: ['manage_edirs', 'super_admin'],
-    actions: [{ id: 'super_admin', label: 'Manage Associations', description: 'Associate, transfer, and remove users across Edirs', isAccess: true }],
+    accessPermissions: ['manage_associations', 'manage_edirs', 'super_admin'],
+    actions: [{ id: 'manage_associations', label: 'Assign & Transfer Users', description: 'Associate, transfer, and remove users across Edirs (assign Edir Admins)', isAccess: true }],
   },
 ];
 
@@ -255,4 +255,80 @@ export function getAssignablePermissionGroups(isSuperAdmin: boolean): Permission
   return permissionGroups
     .map(g => ({ ...g, permissions: g.permissions.filter(p => !platform.has(p.id)) }))
     .filter(g => g.permissions.length > 0);
+}
+
+// ─── Action taxonomy ─────────────────────────────────────────────────────────
+// Each permission is classified into a granular "action" so the role editor can
+// label and group capabilities consistently (Create, Read, Update, Approve, …).
+
+export type ActionKind =
+  | 'View' | 'Reports' | 'Create' | 'Update' | 'Delete' | 'Manage'
+  | 'Approve' | 'Reject' | 'Assign' | 'Export' | 'Print' | 'Upload' | 'Download' | 'Other';
+
+/** Ordered for stable display. */
+export const ACTION_KINDS: ActionKind[] = [
+  'View', 'Reports', 'Create', 'Update', 'Delete', 'Manage',
+  'Approve', 'Reject', 'Assign', 'Export', 'Print', 'Upload', 'Download', 'Other',
+];
+
+/** Per-permission overrides where the id prefix is ambiguous. */
+const ACTION_OVERRIDES: Partial<Record<Permission, ActionKind>> = {
+  view_committee_oversight: 'Reports',
+  view_audit_log: 'Reports',
+  view_payment_log: 'Reports',
+  record_payment: 'Create',
+  remove_members: 'Delete',
+  void_payment: 'Delete',
+  waive_penalty: 'Approve',
+  finalize_attendance: 'Approve',
+  review_member_documents: 'Approve',
+  handle_member_requests: 'Manage',
+  reset_password: 'Manage',
+  lock_user: 'Manage',
+  unlock_user: 'Manage',
+  manage_committee: 'Assign',
+  manage_associations: 'Assign',
+  manage_edirs: 'Create',
+  manage_asset_categories: 'Manage',
+  super_admin: 'Other',
+};
+
+/** Classify a permission id into its action kind (prefix heuristic + overrides). */
+export function permissionActionKind(id: Permission): ActionKind {
+  if (ACTION_OVERRIDES[id]) return ACTION_OVERRIDES[id]!;
+  if (id.startsWith('view_')) return 'View';
+  if (id.startsWith('approve_')) return 'Approve';
+  if (id.startsWith('reject_')) return 'Reject';
+  if (id.startsWith('export_')) return 'Export';
+  if (id.startsWith('print_')) return 'Print';
+  if (id.startsWith('upload_')) return 'Upload';
+  if (id.startsWith('download_')) return 'Download';
+  if (id.startsWith('assign_')) return 'Assign';
+  if (id.startsWith('create_')) return 'Create';
+  if (id.startsWith('update_') || id.startsWith('edit_')) return 'Update';
+  if (id.startsWith('delete_') || id.startsWith('remove_')) return 'Delete';
+  if (id.startsWith('manage_')) return 'Manage';
+  return 'Other';
+}
+
+// ─── Role scope helpers ──────────────────────────────────────────────────────
+// A role is either Edir-scoped (operates within one tenant, or a template for
+// all Edirs) or Platform-scoped (cross-tenant, Super-Admin managed).
+
+export type RoleScopeKind = 'EDIR' | 'PLATFORM';
+
+const PLATFORM_SET = new Set(PLATFORM_PERMISSION_IDS as string[]);
+
+/** Permission groups to show in the editor for a given role scope. Edir roles get
+ *  every non-platform capability; Platform roles get only platform capabilities. */
+export function getPermissionGroupsForScope(scope: RoleScopeKind): PermissionGroup[] {
+  return permissionGroups
+    .map(g => ({ ...g, permissions: g.permissions.filter(p => (scope === 'PLATFORM' ? PLATFORM_SET.has(p.id) : !PLATFORM_SET.has(p.id))) }))
+    .filter(g => g.permissions.length > 0);
+}
+
+/** Keep only permission ids valid for the given scope (server-side hardening). */
+export function filterPermissionsForScope(ids: string[], scope: RoleScopeKind): string[] {
+  const valid = new Set(ALL_PERMISSION_IDS as string[]);
+  return ids.filter(p => valid.has(p) && (scope === 'PLATFORM' ? PLATFORM_SET.has(p) : !PLATFORM_SET.has(p)));
 }

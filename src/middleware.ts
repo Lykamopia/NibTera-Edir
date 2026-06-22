@@ -26,7 +26,7 @@ const ROUTE_PERMISSIONS: { path: string; perms: string[] }[] = [
   { path: '/dashboard/admin/roles', perms: ['view_roles', 'manage_roles'] },
   { path: '/dashboard/admin/settings', perms: ['manage_edir_settings', 'manage_committee'] },
   { path: '/dashboard/system/edirs', perms: ['manage_edirs', 'super_admin'] },
-  { path: '/dashboard/system/associations', perms: ['manage_edirs', 'super_admin'] },
+  { path: '/dashboard/system/associations', perms: ['manage_associations', 'manage_edirs', 'super_admin'] },
 ].sort((a, b) => b.path.length - a.path.length);
 
 function generateCsp(nonce: string, framable: boolean) {

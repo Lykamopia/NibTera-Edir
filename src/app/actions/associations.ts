@@ -2,16 +2,21 @@
 
 import { z } from 'zod';
 import prisma from '@/lib/prisma';
-import { getActor } from '@/lib/tenant-scope';
+import { getActor, actorHasPermission } from '@/lib/tenant-scope';
 import { AccessDeniedError } from '@/lib/errors';
 import { writeAudit } from '@/lib/audit';
 import { ensureMembershipForUser } from '@/app/actions/members';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
 
+// Association management is a platform capability: full Super-Admins, or a
+// limited platform role granted `manage_associations` (e.g. an "assign Edir
+// Admins" role) may use it.
 async function requireSuperAdmin() {
   const actor = await getActor();
-  if (!actor.isSuperAdmin) throw new AccessDeniedError('Only Super Administrators can manage Edir associations.');
+  if (!actorHasPermission(actor, ['super_admin', 'manage_associations'])) {
+    throw new AccessDeniedError('You do not have permission to manage Edir associations.');
+  }
   return actor;
 }
 

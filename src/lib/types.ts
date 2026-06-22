@@ -72,8 +72,9 @@ export type Permission =
   | 'reset_password'
   | 'lock_user'
   | 'unlock_user'
-  // System (Super Admin)
+  // System (Super Admin / platform)
   | 'manage_edirs'
+  | 'manage_associations'
   | 'super_admin';
 
 export type Role = PrismaRole;

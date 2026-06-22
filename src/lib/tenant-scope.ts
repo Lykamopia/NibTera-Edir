@@ -49,7 +49,9 @@ export async function getActor(): Promise<Actor> {
   if (!user) throw new NotAuthenticatedError();
 
   const permissions = parsePermissions(user.role?.permissions);
-  const isSuperAdmin = user.role?.scope === 'SUPER_ADMIN' || permissions.includes('super_admin');
+  // Full cross-tenant access is granted ONLY by the `super_admin` master switch —
+  // a platform-scoped role without it (e.g. "create Edirs only") is limited.
+  const isSuperAdmin = permissions.includes('super_admin');
 
   // Super-Admins may pin an "active Edir" via the top-bar switcher (cookie). This
   // becomes their default tenant scope for Edir-specific pages; null = all Edirs.
@@ -146,6 +148,6 @@ export async function usersWithPermission(edirId: string, permission: Permission
   });
   return users.filter(u => {
     const perms = parsePermissions(u.role?.permissions);
-    return u.role?.scope === 'SUPER_ADMIN' || perms.includes('super_admin') || perms.includes(permission);
+    return perms.includes('super_admin') || perms.includes(permission);
   });
 }

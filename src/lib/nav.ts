@@ -20,6 +20,7 @@ export const IMPLEMENTED_PAGES = new Set<string>([
   'admin-roles',
   'admin-settings',
   'system-edirs',
+  'system-associations', // standalone access for limited platform roles (manage_associations)
 ]);
 
 export interface NavItem extends PagePermissionDef {}

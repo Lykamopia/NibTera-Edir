@@ -226,7 +226,8 @@ export const authOptions: NextAuthOptions = {
         token.edirId = dbUser.edirId;
         const perms = (dbUser.role?.permissions ?? '').split(',').map(p => p.trim()).filter(Boolean);
         token.permissions = perms;
-        token.isSuperAdmin = dbUser.role?.scope === 'SUPER_ADMIN' || perms.includes('super_admin');
+        // Full access requires the `super_admin` master switch (not merely the scope).
+        token.isSuperAdmin = perms.includes('super_admin');
       }
 
       return token;

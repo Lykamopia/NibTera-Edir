@@ -25,7 +25,7 @@ export async function getFirstAccessiblePage(preferredUrl?: string | null): Prom
   if (!user) return '/login';
 
   const userPerms = ((user.role?.permissions ?? '').split(',').filter(Boolean)) as Permission[];
-  const isSuperAdmin = user.role?.scope === 'SUPER_ADMIN' || userPerms.includes('super_admin' as Permission);
+  const isSuperAdmin = userPerms.includes('super_admin' as Permission);
 
   // Super-Admins land on the platform dashboard.
   if (isSuperAdmin) return '/dashboard';

@@ -6,7 +6,7 @@ import prisma from '@/lib/prisma';
 import { Prisma } from '@prisma/client';
 import { getActor, requireActor, assertPermission, assertSameTenant, tenantWhere, resolveEdirId, type Actor } from '@/lib/tenant-scope';
 import { writeAudit } from '@/lib/audit';
-import { ALL_PERMISSION_IDS, PLATFORM_PERMISSION_IDS } from '@/lib/permissions';
+import { ALL_PERMISSION_IDS, PLATFORM_PERMISSION_IDS, filterPermissionsForScope, type RoleScopeKind } from '@/lib/permissions';
 import { normalizeEthiopianPhone, isValidEthiopianPhone } from '@/lib/utils';
 import { sendPasswordResetEmail } from '@/lib/email';
 import { ensureMembershipForUser } from '@/app/actions/members';
@@ -213,6 +213,10 @@ const roleSchema = z.object({
   id: z.string().optional(),
   name: z.string().min(2),
   permissions: z.array(z.string()).default([]),
+  // Scope is set on create; 'EDIR' (a specific Edir or a cross-Edir template) or
+  // 'SUPER_ADMIN' (a platform role). Edir Admins always create EDIR roles.
+  scope: z.enum(['EDIR', 'SUPER_ADMIN']).default('EDIR'),
+  edirId: z.string().nullable().optional(), // EDIR scope: target Edir, or null = template for all Edirs
 });
 
 export async function saveRole(input: z.infer<typeof roleSchema>) {
@@ -220,31 +224,53 @@ export async function saveRole(input: z.infer<typeof roleSchema>) {
     const actor = await getActor();
     await assertPermission(actor, 'manage_roles');
     const data = roleSchema.parse(input);
-    const valid = data.permissions.filter(p => (ALL_PERMISSION_IDS as string[]).includes(p));
-    // Edir (non-super) roles can never carry platform/global permissions.
-    const platform = new Set(PLATFORM_PERMISSION_IDS as string[]);
-    const filtered = actor.isSuperAdmin ? valid : valid.filter(p => !platform.has(p));
-    const permissions = filtered.join(',');
 
-    let edirId: string | null;
     if (data.id) {
-      // Editing: scope to the role's own Edir (so a Super-Admin, who has no Edir
-      // of their own, can edit any tenant's role).
+      // ── Editing an existing role ──────────────────────────────────────────
       const existing = await prisma.role.findUnique({ where: { id: data.id } });
       if (!existing) return { success: false as const, error: 'Role not found.' };
-      if (!actor.isSuperAdmin) assertSameTenant(actor, existing.edirId);
-      await prisma.role.update({ where: { id: data.id }, data: { name: data.name, permissions } });
-      edirId = existing.edirId;
-    } else {
-      // Creating: an Edir context is required (Super-Admins create roles from
-      // within an Edir; new Edirs are auto-provisioned with default roles).
-      if (actor.isSuperAdmin && !actor.edirId) {
-        return { success: false as const, error: 'Roles are created within an Edir. Open the Edir’s role management, or create the Edir (which provisions default roles).' };
+      // Non-supers may only edit EDIR roles within their own tenant.
+      if (!actor.isSuperAdmin) {
+        if (existing.scope !== 'EDIR' || existing.edirId !== actor.edirId) {
+          return { success: false as const, error: 'You can only manage roles within your own Edir.' };
+        }
       }
-      edirId = resolveEdirId(actor);
-      await prisma.role.create({ data: { name: data.name, permissions, scope: 'EDIR', edirId } });
+      const scopeKind: RoleScopeKind = existing.scope === 'SUPER_ADMIN' ? 'PLATFORM' : 'EDIR';
+      const permissions = filterPermissionsForScope(data.permissions, scopeKind).join(',');
+      await prisma.role.update({ where: { id: data.id }, data: { name: data.name, permissions } });
+      await writeAudit({ edirId: existing.edirId, userId: actor.id, action: 'ROLE_SAVED', targetType: 'Role', targetId: data.id, details: data.name });
+      revalidatePath('/dashboard/admin/roles');
+      return { success: true as const };
     }
-    await writeAudit({ edirId, userId: actor.id, action: 'ROLE_SAVED', targetType: 'Role', targetId: data.id ?? null, details: data.name });
+
+    // ── Creating a new role ─────────────────────────────────────────────────
+    const scopeKind: RoleScopeKind = data.scope === 'SUPER_ADMIN' ? 'PLATFORM' : 'EDIR';
+    if (scopeKind === 'PLATFORM' && !actor.isSuperAdmin) {
+      return { success: false as const, error: 'Only Super Administrators can create platform roles.' };
+    }
+
+    let scope: 'EDIR' | 'SUPER_ADMIN';
+    let edirId: string | null;
+    if (scopeKind === 'PLATFORM') {
+      scope = 'SUPER_ADMIN';
+      edirId = null;
+    } else {
+      scope = 'EDIR';
+      if (actor.isSuperAdmin) {
+        edirId = data.edirId ?? null; // specific Edir, or null = cross-Edir template
+        if (edirId) {
+          const edir = await prisma.edir.findUnique({ where: { id: edirId }, select: { id: true } });
+          if (!edir) return { success: false as const, error: 'Edir not found.' };
+        }
+      } else {
+        if (!actor.edirId) return { success: false as const, error: 'Your account is not assigned to an Edir.' };
+        edirId = actor.edirId; // forced to own Edir
+      }
+    }
+
+    const permissions = filterPermissionsForScope(data.permissions, scopeKind).join(',');
+    await prisma.role.create({ data: { name: data.name, permissions, scope, edirId } });
+    await writeAudit({ edirId, userId: actor.id, action: 'ROLE_SAVED', targetType: 'Role', targetId: null, details: data.name });
     revalidatePath('/dashboard/admin/roles');
     return { success: true as const };
   } catch (error) {
@@ -273,7 +299,8 @@ export async function deleteRole(id: string) {
 
 // Default roles every Edir needs so it can be configured and operated. "Edir
 // Admin" carries the full Edir catalog (never the platform super_admin switch).
-const EDIR_ADMIN_PERMISSIONS = (ALL_PERMISSION_IDS as string[]).filter(p => p !== 'super_admin');
+// Full Edir catalog = every permission except platform/global ones.
+const EDIR_ADMIN_PERMISSIONS = (ALL_PERMISSION_IDS as string[]).filter(p => !(PLATFORM_PERMISSION_IDS as string[]).includes(p));
 const DEFAULT_EDIR_ROLES: { name: string; permissions: string[] }[] = [
   { name: 'Edir Admin', permissions: EDIR_ADMIN_PERMISSIONS },
   { name: 'Member', permissions: ['view_dashboard'] },
