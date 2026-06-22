@@ -31,6 +31,7 @@ function HistoryInner() {
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<'all' | 'success' | 'failed'>('all');
+  const [receipt, setReceipt] = useState<any | null>(null);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -100,7 +101,7 @@ function HistoryInner() {
                 {items.map(h => {
                   const ok = SUCCESS.has(h.status);
                   return (
-                    <Card key={h.transactionId}>
+                    <Card key={h.transactionId} className="card-interactive cursor-pointer" onClick={() => ok && setReceipt(h)}>
                       <CardContent className="flex items-center justify-between gap-3 p-3">
                         <div className="flex min-w-0 items-center gap-3">
                           <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${ok ? 'bg-success/10 text-success' : 'bg-destructive/10 text-destructive'}`}>{ok ? <CheckCircle2 className="h-5 w-5" /> : <XCircle className="h-5 w-5" />}</span>
@@ -118,7 +119,7 @@ function HistoryInner() {
                         </div>
                         <div className="flex shrink-0 flex-col items-end gap-1">
                           <Badge variant="outline" className={ok ? 'border-success/20 bg-success/10 text-success' : 'border-destructive/20 bg-destructive/10 text-destructive'}>{ok ? t('PAID') : 'Failed'}</Badge>
-                          {h.receiptUrl && <a href={h.receiptUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-[11px] text-primary hover:underline"><Receipt className="h-3 w-3" /> Receipt</a>}
+                          {ok && <button type="button" onClick={(e) => { e.stopPropagation(); setReceipt(h); }} className="inline-flex items-center gap-1 text-[11px] text-primary hover:underline"><Receipt className="h-3 w-3" /> {t('viewReceipt')}</button>}
                         </div>
                       </CardContent>
                     </Card>
@@ -128,6 +129,68 @@ function HistoryInner() {
             )}
           </div>
         )}
+      </div>
+
+      {receipt && member && <ReceiptModal h={receipt} member={member} onClose={() => setReceipt(null)} />}
+    </div>
+  );
+}
+
+function ReceiptModal({ h, member, onClose }: { h: any; member: Member; onClose: () => void }) {
+  const { t } = useLang();
+  const m = member as any;
+  const cur = member.currency ?? 'ETB';
+  const partial = h.status === 'partial';
+
+  const Row = ({ label, value, mono }: { label: string; value: React.ReactNode; mono?: boolean }) => (
+    <div className="flex items-start justify-between gap-3 py-1.5 text-sm">
+      <span className="shrink-0 text-muted-foreground">{label}</span>
+      <span className={`text-right ${mono ? 'font-mono text-xs' : 'font-medium'}`}>{value}</span>
+    </div>
+  );
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-0 sm:items-center sm:p-4" onClick={onClose}>
+      <div className="w-full max-w-md page-enter" onClick={(e) => e.stopPropagation()}>
+        <Card className="overflow-hidden rounded-b-none sm:rounded-2xl">
+          {/* Header */}
+          <div className="flex items-center justify-between gap-2 border-b bg-gradient-to-r from-primary/10 to-transparent p-4">
+            <div className="flex items-center gap-2.5">
+              {m.edirLogoUrl ? <img src={m.edirLogoUrl} alt="" className="h-9 w-9 rounded-lg object-contain" /> : <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/15 text-primary"><Building2 className="h-5 w-5" /></span>}
+              <div className="min-w-0">
+                <div className="truncate text-sm font-bold">{m.edirName}</div>
+                <div className="text-xs text-muted-foreground">{t('receiptTitle')}</div>
+              </div>
+            </div>
+            <button onClick={onClose} className="rounded-md p-1 text-muted-foreground hover:bg-muted"><XCircle className="h-5 w-5" /></button>
+          </div>
+
+          <CardContent className="p-4">
+            {/* Amount + status */}
+            <div className="flex flex-col items-center gap-1.5 border-b pb-4 text-center">
+              <span className="flex h-12 w-12 items-center justify-center rounded-full bg-success/10 text-success"><CheckCircle2 className="h-7 w-7" /></span>
+              <div className="text-2xl font-bold">{money(h.amount, cur)}</div>
+              <Badge variant="outline" className="border-success/20 bg-success/10 text-success">{partial ? 'Partial' : t('PAID')}</Badge>
+            </div>
+
+            {/* Details */}
+            <div className="divide-y pt-1">
+              <Row label={t('member')} value={`${member.name} · ${member.memberId}`} />
+              <Row label={t('amountPaid')} value={money(h.amount, cur)} />
+              {h.coverage && (
+                <Row label={t('paidForMonths')} value={`${monthFmt(h.coverage.from)}${h.coverage.months > 1 ? ` – ${monthFmt(h.coverage.to)}` : ''} (${h.coverage.months} ${t('monthsUnit')})`} />
+              )}
+              <Row label={t('paidOn')} value={fmt(h.createdAt)} />
+              <Row label={t('method')} value={h.method} />
+              <Row label={t('reference')} value={h.transactionId} mono />
+              {h.receiptUrl && <Row label={t('bankReference')} value={h.receiptUrl} mono />}
+            </div>
+          </CardContent>
+
+          <div className="border-t p-3">
+            <Button variant="outline" className="w-full" onClick={onClose}>{t('close')}</Button>
+          </div>
+        </Card>
       </div>
     </div>
   );
