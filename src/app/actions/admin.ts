@@ -59,10 +59,10 @@ export async function getRoles() {
   await assertPermission(actor, ['view_roles', 'manage_roles', 'view_users', 'manage_users']);
   const roles = await prisma.role.findMany({
     where: actor.isSuperAdmin ? {} : { OR: [{ edirId: actor.edirId }, { scope: 'EDIR', edirId: null }] },
-    include: { _count: { select: { users: true } } },
-    orderBy: { name: 'asc' },
+    include: { _count: { select: { users: true } }, edir: { select: { name: true } } },
+    orderBy: [{ edir: { name: 'asc' } }, { name: 'asc' }],
   });
-  return roles.map(r => ({ id: r.id, name: r.name, scope: r.scope, permissions: r.permissions, userCount: r._count.users, edirId: r.edirId }));
+  return roles.map(r => ({ id: r.id, name: r.name, scope: r.scope, permissions: r.permissions, userCount: r._count.users, edirId: r.edirId, edirName: r.edir?.name ?? null }));
 }
 
 const inviteSchema = z.object({
