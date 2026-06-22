@@ -217,7 +217,8 @@ const roleSchema = z.object({
 
 export async function saveRole(input: z.infer<typeof roleSchema>) {
   try {
-    const { actor, edirId } = await requireActor('manage_roles');
+    const actor = await getActor();
+    await assertPermission(actor, 'manage_roles');
     const data = roleSchema.parse(input);
     const valid = data.permissions.filter(p => (ALL_PERMISSION_IDS as string[]).includes(p));
     // Edir (non-super) roles can never carry platform/global permissions.
@@ -225,12 +226,22 @@ export async function saveRole(input: z.infer<typeof roleSchema>) {
     const filtered = actor.isSuperAdmin ? valid : valid.filter(p => !platform.has(p));
     const permissions = filtered.join(',');
 
+    let edirId: string | null;
     if (data.id) {
+      // Editing: scope to the role's own Edir (so a Super-Admin, who has no Edir
+      // of their own, can edit any tenant's role).
       const existing = await prisma.role.findUnique({ where: { id: data.id } });
       if (!existing) return { success: false as const, error: 'Role not found.' };
       if (!actor.isSuperAdmin) assertSameTenant(actor, existing.edirId);
       await prisma.role.update({ where: { id: data.id }, data: { name: data.name, permissions } });
+      edirId = existing.edirId;
     } else {
+      // Creating: an Edir context is required (Super-Admins create roles from
+      // within an Edir; new Edirs are auto-provisioned with default roles).
+      if (actor.isSuperAdmin && !actor.edirId) {
+        return { success: false as const, error: 'Roles are created within an Edir. Open the Edir’s role management, or create the Edir (which provisions default roles).' };
+      }
+      edirId = resolveEdirId(actor);
       await prisma.role.create({ data: { name: data.name, permissions, scope: 'EDIR', edirId } });
     }
     await writeAudit({ edirId, userId: actor.id, action: 'ROLE_SAVED', targetType: 'Role', targetId: data.id ?? null, details: data.name });
