@@ -137,7 +137,7 @@ export async function setPassword(token: string, newPassword: string) {
 
     const user = await prisma.user.findUnique({
         where: { email: result.email },
-        select: { id: true, name: true, email: true, onboardingCompleted: true },
+        select: { id: true, name: true, email: true, onboardingCompleted: true, status: true },
     });
 
     if (!user) {
@@ -148,7 +148,16 @@ export async function setPassword(token: string, newPassword: string) {
 
     await prisma.user.update({
         where: { id: user.id },
-        data: { hashedPassword, onboardingCompleted: true },
+        data: {
+            hashedPassword,
+            onboardingCompleted: true,
+            // The user has now set their own password — clear the first-login flag,
+            // and activate an invited account so they can sign in. (Don't reactivate
+            // a SUSPENDED/INACTIVE account via a reset.)
+            mustChangePassword: false,
+            tokenVersion: { increment: 1 },
+            ...(user.status === 'INVITED' ? { status: 'ACTIVE' as const } : {}),
+        },
     });
 
     await prisma.passwordResetToken.delete({ where: { token } });

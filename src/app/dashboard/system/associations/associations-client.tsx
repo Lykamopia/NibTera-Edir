@@ -11,13 +11,14 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
-import { Loader2, Network, Search, UserPlus, ArrowRightLeft, UserMinus, Building2, ScrollText, Users, UserCog } from 'lucide-react';
+import { Loader2, Network, Search, UserPlus, ArrowRightLeft, UserMinus, Building2, ScrollText, Users, UserCog, Crown, KeyRound } from 'lucide-react';
 import { PageHeader, LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
 import { useConfirm } from '@/components/ui/confirm-provider';
+import { CredentialsDialog, type Credentials } from '@/components/credentials-dialog';
 import {
   getAssociationEdirs, getAssociationUsers, getEdirUsers, getEdirRolesForAssociation,
   associateUsers, removeUserFromEdir, setAssociationUserStatus, getAssociationAudit,
-  createPlatformUser, createPlatformAdmin, getPlatformRoles,
+  createPlatformUser, createPlatformAdmin, getPlatformRoles, getPlatformUsers, resetAssociationUserPassword,
 } from '@/app/actions/associations';
 import { getEdirContext } from '@/app/actions/edir-context';
 
@@ -33,6 +34,8 @@ export default function AssociationsClient({ embedded }: { embedded?: boolean } 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [cred, setCred] = useState<{ name: string; credentials: Credentials } | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   const loadEdirs = useCallback(() => {
     setLoading(true); setError(false);
@@ -41,6 +44,8 @@ export default function AssociationsClient({ embedded }: { embedded?: boolean } 
   useEffect(() => { loadEdirs(); }, [loadEdirs]);
   useEffect(() => { getEdirContext().then(c => setIsSuperAdmin(c.isSuperAdmin)).catch(() => {}); }, []);
 
+  const refreshAll = () => { loadEdirs(); setRefreshKey(k => k + 1); };
+
   if (loading) return <LoadingState label="Loading associations…" className="min-h-[50vh]" />;
   if (error) return <ErrorState variant="page" onRetry={loadEdirs} />;
 
@@ -48,21 +53,80 @@ export default function AssociationsClient({ embedded }: { embedded?: boolean } 
 
   return (
     <div className="space-y-4">
+      {cred && <CredentialsDialog memberName={cred.name} credentials={cred.credentials} onClose={() => setCred(null)} />}
       {embedded
         ? <div className="flex justify-end">{createBtn}</div>
         : <PageHeader title="User Associations" description="Create users, then associate, reassign, transfer, or remove them across Edirs — with role assignment and a full audit trail." icon={Network} actions={createBtn} />}
-      {creating && <CreateUserDialog edirs={edirs} canPlatform={isSuperAdmin} onClose={() => setCreating(false)} onDone={() => { setCreating(false); loadEdirs(); }} />}
+      {creating && <CreateUserDialog edirs={edirs} canPlatform={isSuperAdmin} onClose={() => setCreating(false)}
+        onDone={(c) => { setCreating(false); if (c) setCred(c); refreshAll(); }} />}
       <Tabs defaultValue="edir">
         <TabsList>
           <TabsTrigger value="edir"><Building2 className="mr-1.5 h-4 w-4" /> By Edir</TabsTrigger>
           <TabsTrigger value="user"><Users className="mr-1.5 h-4 w-4" /> By User</TabsTrigger>
+          {isSuperAdmin && <TabsTrigger value="platform"><Crown className="mr-1.5 h-4 w-4" /> Platform Users</TabsTrigger>}
           <TabsTrigger value="audit"><ScrollText className="mr-1.5 h-4 w-4" /> Audit Trail</TabsTrigger>
         </TabsList>
-        <TabsContent value="edir" className="mt-4"><ByEdirTab edirs={edirs} onChanged={loadEdirs} /></TabsContent>
-        <TabsContent value="user" className="mt-4"><ByUserTab edirs={edirs} onChanged={loadEdirs} /></TabsContent>
+        <TabsContent value="edir" className="mt-4"><ByEdirTab edirs={edirs} onChanged={refreshAll} /></TabsContent>
+        <TabsContent value="user" className="mt-4"><ByUserTab edirs={edirs} onChanged={refreshAll} /></TabsContent>
+        {isSuperAdmin && <TabsContent value="platform" className="mt-4"><PlatformUsersTab refreshKey={refreshKey} onCredentials={setCred} /></TabsContent>}
         <TabsContent value="audit" className="mt-4"><AuditTab /></TabsContent>
       </Tabs>
     </div>
+  );
+}
+
+// ─── Platform Users ──────────────────────────────────────────────────────────
+
+function PlatformUsersTab({ refreshKey, onCredentials }: { refreshKey: number; onCredentials: (c: { name: string; credentials: Credentials }) => void }) {
+  const [users, setUsers] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const confirm = useConfirm();
+
+  const load = useCallback(() => {
+    setLoading(true);
+    getPlatformUsers().then(setUsers).catch(() => toast.error('Failed to load platform users.')).finally(() => setLoading(false));
+  }, []);
+  useEffect(() => { load(); }, [load, refreshKey]);
+
+  const onStatus = async (u: any, status: any) => {
+    const res = await setAssociationUserStatus(u.id, status);
+    if (res?.success) load(); else toast.error(res?.error || 'Failed.');
+  };
+  const onReset = async (u: any) => {
+    if (!(await confirm({ title: 'Reset password', description: `Issue a new temporary password for ${u.name || u.email}?`, confirmText: 'Reset' }))) return;
+    const res = await resetAssociationUserPassword(u.id);
+    if (res?.success && res.credentials) { toast.success('Temporary password issued.'); onCredentials({ name: u.name || u.email, credentials: res.credentials as Credentials }); load(); }
+    else toast.error(res?.error || 'Failed.');
+  };
+
+  if (loading) return <LoadingState />;
+  return (
+    <Card><CardContent className="p-0">
+      {users.length === 0 ? <EmptyState icon={Crown} title="No platform users yet" description="Use “Create User → Platform user” to add one." /> : (
+        <div className="divide-y">
+          {users.map(u => (
+            <div key={u.id} className="flex flex-col gap-2 p-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-medium">{u.name || u.email || u.phone}</span>
+                  <Badge variant="outline" className={STATUS[u.status] ?? ''}>{u.status}</Badge>
+                  {u.roleName && <Badge variant="secondary">{u.roleName}</Badge>}
+                  {u.mustChangePassword && <Badge variant="outline" className="border-info/20 bg-info/10 text-info">Pending first login</Badge>}
+                </div>
+                <div className="text-xs text-muted-foreground">{u.phone || u.email} · last login {fmt(u.lastLoginAt)}</div>
+              </div>
+              <div className="flex shrink-0 flex-wrap gap-1.5">
+                <Select value={u.status} onValueChange={(v) => onStatus(u, v)}>
+                  <SelectTrigger className="h-8 w-32 text-xs"><SelectValue /></SelectTrigger>
+                  <SelectContent><SelectItem value="ACTIVE">Active</SelectItem><SelectItem value="INACTIVE">Inactive</SelectItem><SelectItem value="SUSPENDED">Suspended</SelectItem></SelectContent>
+                </Select>
+                <Button size="sm" variant="outline" onClick={() => onReset(u)}><KeyRound className="mr-1 h-4 w-4" /> Reset password</Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </CardContent></Card>
   );
 }
 
@@ -300,7 +364,7 @@ function ReassignDialog({ user, edirs, onClose, onDone }: { user: any; edirs: an
   );
 }
 
-function CreateUserDialog({ edirs, canPlatform, onClose, onDone }: { edirs: any[]; canPlatform: boolean; onClose: () => void; onDone: () => void }) {
+function CreateUserDialog({ edirs, canPlatform, onClose, onDone }: { edirs: any[]; canPlatform: boolean; onClose: () => void; onDone: (cred?: { name: string; credentials: Credentials }) => void }) {
   const [kind, setKind] = useState<'edir' | 'platform'>('edir');
   const [form, setForm] = useState({ name: '', email: '', phone: '', edirId: '', roleId: '' });
   const [edirRoles, setEdirRoles] = useState<any[]>([]);
@@ -332,8 +396,10 @@ function CreateUserDialog({ edirs, canPlatform, onClose, onDone }: { edirs: any[
       res = await createPlatformUser({ name: form.name, email: form.email, phone: form.phone, edirId: form.edirId, roleId: form.roleId || null });
     }
     setSaving(false);
-    if (res?.success) { toast.success(kind === 'platform' ? 'Platform user created and invited.' : 'User created and invited to set a password.'); onDone(); }
-    else toast.error(res?.error || 'Failed to create user.');
+    if (res?.success) {
+      toast.success(kind === 'platform' ? 'Platform user created.' : 'User created.');
+      onDone(res.credentials ? { name: form.name, credentials: res.credentials as Credentials } : undefined);
+    } else toast.error(res?.error || 'Failed to create user.');
   };
 
   return (
@@ -343,8 +409,8 @@ function CreateUserDialog({ edirs, canPlatform, onClose, onDone }: { edirs: any[
           <DialogTitle>Create User</DialogTitle>
           <DialogDescription>
             {kind === 'platform'
-              ? 'Create a platform user (no Edir) holding a platform role such as “Edir Creator”. They can register Edirs and assign users across tenants.'
-              : 'Create a login account directly in an Edir. They are invited to set a password and enrolled as a member of the Edir.'}
+              ? 'Create a platform user (no Edir) holding a platform role such as “Edir Creator”. They get a temporary password to sign in (changed on first login) and can register Edirs and assign users.'
+              : 'Create a login account directly in an Edir. They get a temporary password to sign in (changed on first login) and are enrolled as a member of the Edir.'}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">

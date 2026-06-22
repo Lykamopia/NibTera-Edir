@@ -2,12 +2,14 @@
 
 import { z } from 'zod';
 import crypto from 'crypto';
+import bcrypt from 'bcrypt';
 import prisma from '@/lib/prisma';
 import { getActor, actorHasPermission } from '@/lib/tenant-scope';
 import { AccessDeniedError } from '@/lib/errors';
 import { writeAudit } from '@/lib/audit';
 import { ensureMembershipForUser } from '@/app/actions/members';
 import { normalizeEthiopianPhone, isValidEthiopianPhone } from '@/lib/utils';
+import { generateTempPassword } from '@/lib/temp-password';
 import { sendVerificationEmail } from '@/lib/email';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
@@ -121,8 +123,12 @@ export async function createPlatformAdmin(input: z.infer<typeof createPlatformAd
     if (emailTaken) return { success: false as const, error: 'A user with this email already exists.' };
     if (phoneTaken) return { success: false as const, error: 'A user with this phone already exists.' };
 
+    // Create ACTIVE with a temporary password so the platform user can sign in
+    // immediately (forced to change it on first login). Also email a link.
+    const tempPassword = generateTempPassword();
+    const hashed = await bcrypt.hash(tempPassword, 12);
     const user = await prisma.user.create({
-      data: { name: data.name, email, phone, edirId: null, roleId: data.roleId, status: 'INVITED', mustChangePassword: true },
+      data: { name: data.name, email, phone, edirId: null, roleId: data.roleId, status: 'ACTIVE', hashedPassword: hashed, mustChangePassword: true, onboardingCompleted: false },
     });
 
     const token = crypto.randomBytes(32).toString('hex');
@@ -135,7 +141,47 @@ export async function createPlatformAdmin(input: z.infer<typeof createPlatformAd
 
     await writeAudit({ userId: actor.id, action: 'PLATFORM_USER_CREATED', targetType: 'User', targetId: user.id, details: `Created platform user ${email} with role "${role.name}".` });
     revalidatePath('/dashboard/system/associations');
-    return { success: true as const, userId: user.id };
+    return { success: true as const, userId: user.id, credentials: { username: phone ?? email, tempPassword, channel: phone ? 'SMS' : 'email' } };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/** Platform users (no Edir, Super-Admin-scope role) for the Platform Users list. */
+export async function getPlatformUsers() {
+  const actor = await getActor();
+  if (!actor.isSuperAdmin) throw new AccessDeniedError('Only Super Administrators can view platform users.');
+  const users = await prisma.user.findMany({
+    where: { role: { is: { scope: 'SUPER_ADMIN' } } },
+    include: { role: { select: { name: true, scope: true } } },
+    orderBy: { createdAt: 'desc' },
+  });
+  return users.map(u => ({
+    id: u.id, name: u.name, email: u.email, phone: u.phone,
+    status: u.status, mustChangePassword: u.mustChangePassword,
+    roleId: u.roleId, roleName: u.role?.name ?? null, lastLoginAt: u.lastLoginAt,
+  }));
+}
+
+/** Issue a fresh temporary password for a user who cannot sign in (recovery). */
+export async function resetAssociationUserPassword(userId: string) {
+  try {
+    const actor = await requireSuperAdmin();
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true, phone: true, email: true, edirId: true, role: { select: { scope: true } } } });
+    if (!user) return { success: false as const, error: 'User not found.' };
+    // Resetting a platform user is full-Super-Admin only (containment).
+    if (user.role?.scope === 'SUPER_ADMIN' && !actor.isSuperAdmin) {
+      return { success: false as const, error: 'Only Super Administrators can reset platform users.' };
+    }
+    const tempPassword = generateTempPassword();
+    const hashed = await bcrypt.hash(tempPassword, 12);
+    await prisma.user.update({
+      where: { id: userId },
+      data: { hashedPassword: hashed, mustChangePassword: true, status: 'ACTIVE', failedLoginAttempts: 0, lockoutUntil: null, tokenVersion: { increment: 1 } },
+    });
+    await writeAudit({ edirId: user.edirId, userId: actor.id, action: 'USER_PASSWORD_RESET', targetType: 'User', targetId: userId, details: 'Temporary password issued.' });
+    revalidatePath('/dashboard/system/associations');
+    return { success: true as const, credentials: { username: user.phone ?? user.email ?? '', tempPassword, channel: user.phone ? 'SMS' : 'email' } };
   } catch (error) {
     return failure(error);
   }
@@ -181,11 +227,14 @@ export async function createPlatformUser(input: z.infer<typeof createUserSchema>
       if (role.edirId && role.edirId !== data.edirId) return { success: false as const, error: 'That role belongs to a different Edir.' };
     }
 
+    // Create ACTIVE with a temporary password so the user can sign in right away
+    // (forced to change it on first login). Also email a set-password link.
+    const tempPassword = generateTempPassword();
+    const hashed = await bcrypt.hash(tempPassword, 12);
     const user = await prisma.user.create({
-      data: { name: data.name, email, phone, edirId: data.edirId, roleId: data.roleId || null, status: 'INVITED', mustChangePassword: true },
+      data: { name: data.name, email, phone, edirId: data.edirId, roleId: data.roleId || null, status: 'ACTIVE', hashedPassword: hashed, mustChangePassword: true, onboardingCompleted: false },
     });
 
-    // 48h single-use set-password token + invite email (reuses PasswordResetToken).
     const token = crypto.randomBytes(32).toString('hex');
     await prisma.passwordResetToken.upsert({
       where: { email },
@@ -199,7 +248,7 @@ export async function createPlatformUser(input: z.infer<typeof createUserSchema>
     try { await ensureMembershipForUser(user.id); } catch { /* non-fatal */ }
 
     revalidatePath('/dashboard/system/associations');
-    return { success: true as const, userId: user.id };
+    return { success: true as const, userId: user.id, credentials: { username: phone ?? email, tempPassword, channel: phone ? 'SMS' : 'email' } };
   } catch (error) {
     return failure(error);
   }
@@ -282,9 +331,13 @@ export async function removeUserFromEdir(userId: string) {
 export async function setAssociationUserStatus(userId: string, status: 'ACTIVE' | 'INACTIVE' | 'SUSPENDED') {
   try {
     const actor = await requireSuperAdmin();
-    const user = await prisma.user.findUnique({ where: { id: userId }, include: { role: { select: { scope: true } } } });
+    const user = await prisma.user.findUnique({ where: { id: userId }, include: { role: { select: { permissions: true } } } });
     if (!user) return { success: false as const, error: 'User not found.' };
-    if (user.role?.scope === 'SUPER_ADMIN') return { success: false as const, error: 'Platform administrators cannot be changed here.' };
+    // Only the full Super-Admin (super_admin master switch) is protected; limited
+    // platform users (e.g. "Edir Creator") can be activated/deactivated here.
+    if ((user.role?.permissions ?? '').split(',').includes('super_admin')) {
+      return { success: false as const, error: 'The full Super Administrator cannot be changed here.' };
+    }
     await prisma.user.update({ where: { id: userId }, data: { status, ...(status !== 'ACTIVE' ? { tokenVersion: { increment: 1 } } : {}) } });
     await writeAudit({ edirId: user.edirId, userId: actor.id, action: 'USER_STATUS_CHANGED', targetType: 'User', targetId: userId, details: `Status → ${status}` });
     revalidatePath('/dashboard/system/associations');
