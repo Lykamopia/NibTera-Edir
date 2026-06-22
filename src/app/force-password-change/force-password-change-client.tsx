@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Loader2, KeyRound, ShieldCheck, LogOut } from 'lucide-react';
-import { completeFirstLoginPasswordChange } from '@/app/actions/auth';
+import { completeFirstLoginPasswordChange, getFirstAccessiblePage } from '@/app/actions/auth';
 import { getClientBaseUrl } from '@/lib/url';
 
 export default function ForcePasswordChangeClient() {
@@ -26,9 +26,13 @@ export default function ForcePasswordChangeClient() {
     const res = await completeFirstLoginPasswordChange(next);
     if (!res?.success) { setSaving(false); toast.error(res?.error || 'Failed to set password.'); return; }
     toast.success('Password updated. Welcome!');
-    // Refresh the session token so the first-login gate clears, then enter the app.
+    // Refresh the session token so the first-login gate clears, then enter the
+    // first page this user can actually access (Super-Admin → dashboard,
+    // others → a permissible page, falling back to My Account).
     await update();
-    router.replace('/dashboard');
+    let dest = '/dashboard/account';
+    try { dest = await getFirstAccessiblePage(); } catch { /* fall back */ }
+    router.replace(dest);
     router.refresh();
   };
 

@@ -11,6 +11,7 @@ import bcrypt from 'bcrypt';
 import crypto from 'crypto';
 import { AccessDeniedError, NotAuthenticatedError } from '@/lib/errors';
 import { pagePermissions } from '@/lib/permissions';
+import { IMPLEMENTED_PAGES } from '@/lib/nav';
 import { normalizeNibEmail } from '@/lib/utils';
 import { sendPasswordResetEmail, sendPasswordChangedNotificationEmail } from '@/lib/email';
 import { passwordSchema } from '@/lib/password-policy';
@@ -24,38 +25,30 @@ export async function getFirstAccessiblePage(preferredUrl?: string | null): Prom
   if (!user) return '/login';
 
   const userPerms = ((user.role?.permissions ?? '').split(',').filter(Boolean)) as Permission[];
+  const isSuperAdmin = user.role?.scope === 'SUPER_ADMIN' || userPerms.includes('super_admin' as Permission);
 
-  const canAccess = (pageDef: (typeof pagePermissions)[0]): boolean => {
-    return pageDef.accessPermissions.some(p => userPerms.includes(p));
-  };
+  // Super-Admins land on the platform dashboard.
+  if (isSuperAdmin) return '/dashboard';
 
-  // Validate the preferred URL if provided
+  const canAccess = (pageDef: (typeof pagePermissions)[0]): boolean =>
+    pageDef.accessPermissions.some(p => userPerms.includes(p));
+
+  // Honour a valid preferred URL (e.g. NextAuth callbackUrl) when it maps to a
+  // real, implemented page the user can access. Account is always allowed.
   if (preferredUrl && preferredUrl.startsWith('/dashboard')) {
     if (preferredUrl === '/dashboard/account') return preferredUrl;
-
-    if (preferredUrl.startsWith('/dashboard/admin')) {
-      const hasAdmin = pagePermissions
-        .filter(p => p.section !== 'main')
-        .some(p => canAccess(p));
-      if (hasAdmin) return preferredUrl;
-    }
-
-    const matchingPage = pagePermissions.find(p => preferredUrl.startsWith(p.path));
-    if (matchingPage && canAccess(matchingPage)) return preferredUrl;
+    const matching = [...pagePermissions]
+      .filter(p => IMPLEMENTED_PAGES.has(p.id) && preferredUrl.startsWith(p.path))
+      .sort((a, b) => b.path.length - a.path.length)[0];
+    if (matching && canAccess(matching)) return preferredUrl;
   }
 
-  // Walk main pages in definition order
-  for (const page of pagePermissions.filter(p => p.section === 'main')) {
-    if (canAccess(page)) return page.path;
+  // First accessible, implemented page in definition order (Dashboard first).
+  for (const page of pagePermissions) {
+    if (IMPLEMENTED_PAGES.has(page.id) && canAccess(page)) return page.path;
   }
 
-  // Any admin page grants entry to admin dashboard
-  const hasAdmin = pagePermissions
-    .filter(p => p.section !== 'main')
-    .some(p => canAccess(p));
-  if (hasAdmin) return '/dashboard/admin';
-
-  // Account self-service is always accessible
+  // Default for everyone else: self-service account (always available).
   return '/dashboard/account';
 }
 
