@@ -8,6 +8,7 @@ import { getActor, actorHasPermission } from '@/lib/tenant-scope';
 import { AccessDeniedError } from '@/lib/errors';
 import { writeAudit } from '@/lib/audit';
 import { ensureMembershipForUser } from '@/app/actions/members';
+import { ensureDefaultEdirRoles } from '@/app/actions/admin';
 import { normalizeEthiopianPhone, isValidEthiopianPhone } from '@/lib/utils';
 import { generateTempPassword } from '@/lib/temp-password';
 import { sendVerificationEmail } from '@/lib/email';
@@ -77,10 +78,16 @@ export async function getEdirUsers(edirId: string) {
 /** Roles available within an Edir (for role assignment during association). */
 export async function getEdirRolesForAssociation(edirId: string) {
   await requireSuperAdmin();
-  const roles = await prisma.role.findMany({
+  const query = () => prisma.role.findMany({
     where: { scope: 'EDIR', OR: [{ edirId }, { edirId: null }] }, // tenant roles + global templates
     orderBy: { name: 'asc' }, select: { id: true, name: true },
   });
+  let roles = await query();
+  // Guarantee every Edir always has its default roles (Edir Admin, Member, …).
+  if (!roles.some(r => r.name === 'Edir Admin')) {
+    await ensureDefaultEdirRoles(edirId);
+    roles = await query();
+  }
   return roles;
 }
 

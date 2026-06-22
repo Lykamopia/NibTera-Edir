@@ -49,18 +49,48 @@ export default function AssociationsClient({ embedded }: { embedded?: boolean } 
   if (loading) return <LoadingState label="Loading associations…" className="min-h-[50vh]" />;
   if (error) return <ErrorState variant="page" onRetry={loadEdirs} />;
 
-  const createBtn = <Button size="sm" onClick={() => setCreating(true)}><UserCog className="mr-1.5 h-4 w-4" /> Create User</Button>;
+  const createBtn = <Button size="sm" className="shadow-sm" onClick={() => setCreating(true)}><UserCog className="mr-1.5 h-4 w-4" /> Create User</Button>;
+  const totalUsers = edirs.reduce((s, e) => s + (e.users || 0), 0);
+  const stats = [
+    { icon: Building2, label: 'Edirs', value: edirs.length },
+    { icon: Users, label: 'Edir Users', value: totalUsers },
+  ];
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       {cred && <CredentialsDialog memberName={cred.name} credentials={cred.credentials} onClose={() => setCred(null)} />}
-      {embedded
-        ? <div className="flex justify-end">{createBtn}</div>
-        : <PageHeader title="User Associations" description="Create users, then associate, reassign, transfer, or remove them across Edirs — with role assignment and a full audit trail." icon={Network} actions={createBtn} />}
+
+      {embedded ? (
+        <div className="flex justify-end">{createBtn}</div>
+      ) : (
+        <div className="relative overflow-hidden rounded-2xl border bg-gradient-to-br from-primary/10 via-primary/[0.04] to-transparent p-5 sm:p-6">
+          <div className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-primary/10 blur-3xl" />
+          <div className="relative flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex items-start gap-4">
+              <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-lg shadow-primary/25"><Network className="h-7 w-7" /></span>
+              <div>
+                <h1 className="text-2xl font-bold tracking-tight">User Associations</h1>
+                <p className="mt-0.5 max-w-xl text-sm text-muted-foreground">Create users and assign them across Edirs — manage tenant membership, roles, status, and platform operators in one place.</p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {stats.map(s => (
+                <div key={s.label} className="flex items-center gap-2 rounded-xl border bg-card/70 px-3 py-2 backdrop-blur-sm">
+                  <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary"><s.icon className="h-4 w-4" /></span>
+                  <div className="leading-tight"><div className="text-lg font-bold tabular-nums">{s.value.toLocaleString()}</div><div className="text-[10px] uppercase tracking-wide text-muted-foreground">{s.label}</div></div>
+                </div>
+              ))}
+              {createBtn}
+            </div>
+          </div>
+        </div>
+      )}
+
       {creating && <CreateUserDialog edirs={edirs} canPlatform={isSuperAdmin} onClose={() => setCreating(false)}
         onDone={(c) => { setCreating(false); if (c) setCred(c); refreshAll(); }} />}
+
       <Tabs defaultValue="edir">
-        <TabsList>
+        <TabsList className="h-auto flex-wrap gap-1 bg-muted/60 p-1">
           <TabsTrigger value="edir"><Building2 className="mr-1.5 h-4 w-4" /> By Edir</TabsTrigger>
           <TabsTrigger value="user"><Users className="mr-1.5 h-4 w-4" /> By User</TabsTrigger>
           {isSuperAdmin && <TabsTrigger value="platform"><Crown className="mr-1.5 h-4 w-4" /> Platform Users</TabsTrigger>}
@@ -374,7 +404,7 @@ function CreateUserDialog({ edirs, canPlatform, onClose, onDone }: { edirs: any[
   useEffect(() => {
     if (kind !== 'edir' || !form.edirId) { setEdirRoles([]); return; }
     getEdirRolesForAssociation(form.edirId)
-      .then(r => { setEdirRoles(r); setForm(f => ({ ...f, roleId: r.find((x: any) => x.name === 'Member')?.id ?? '' })); })
+      .then(r => { setEdirRoles(r); setForm(f => ({ ...f, roleId: r.find((x: any) => x.name === 'Edir Admin')?.id ?? r.find((x: any) => x.name === 'Member')?.id ?? '' })); })
       .catch(() => setEdirRoles([]));
   }, [kind, form.edirId]);
 

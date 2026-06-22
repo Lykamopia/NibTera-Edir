@@ -49,7 +49,9 @@ export function DashboardContentWrapper({ user, children }: { user: LoggedInUser
   const [pending, setPending] = useState(0);
 
   const permissions = useMemo(() => (user?.role?.permissions?.split(',').filter(Boolean) || []) as Permission[], [user?.role?.permissions]);
-  const isSuperAdmin = useMemo(() => (user?.role as any)?.scope === 'SUPER_ADMIN' || permissions.includes('super_admin'), [user?.role, permissions]);
+  // Full access is the `super_admin` master switch only — a limited platform role
+  // (e.g. Edir Creator) must see only the links its permissions grant.
+  const isSuperAdmin = useMemo(() => permissions.includes('super_admin'), [permissions]);
   const sections = useMemo(() => (user ? buildNav(permissions, isSuperAdmin) : []), [user, permissions, isSuperAdmin]);
 
   useEffect(() => { setIsMounted(true); }, []);
