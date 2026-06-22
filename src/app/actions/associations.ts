@@ -82,6 +82,65 @@ export async function getEdirRolesForAssociation(edirId: string) {
   return roles;
 }
 
+/** Platform (Super-Admin-scope) roles — for creating platform users. */
+export async function getPlatformRoles() {
+  const actor = await getActor();
+  if (!actor.isSuperAdmin) throw new AccessDeniedError('Only Super Administrators can manage platform users.');
+  return prisma.role.findMany({ where: { scope: 'SUPER_ADMIN' }, orderBy: { name: 'asc' }, select: { id: true, name: true, permissions: true } });
+}
+
+const createPlatformAdminSchema = z.object({
+  name: z.string().min(2, 'Name is required.'),
+  email: z.string().email('A valid email is required.'),
+  phone: z.string().min(9, 'A phone number is required.'),
+  roleId: z.string().min(1, 'Select a platform role.'),
+});
+
+/**
+ * Create a PLATFORM user — no Edir, holding a platform (Super-Admin-scope) role
+ * such as "Edir Creator" (manage_edirs + manage_associations). Restricted to a
+ * full Super-Admin, since platform roles carry cross-tenant power. The user is
+ * invited to set a password and is NOT enrolled as a member of any Edir.
+ */
+export async function createPlatformAdmin(input: z.infer<typeof createPlatformAdminSchema>) {
+  try {
+    const actor = await getActor();
+    if (!actor.isSuperAdmin) return { success: false as const, error: 'Only Super Administrators can create platform users.' };
+    const data = createPlatformAdminSchema.parse(input);
+
+    const role = await prisma.role.findUnique({ where: { id: data.roleId }, select: { scope: true, name: true } });
+    if (!role || role.scope !== 'SUPER_ADMIN') return { success: false as const, error: 'Select a valid platform role.' };
+    if (!isValidEthiopianPhone(data.phone)) return { success: false as const, error: 'Enter a valid Ethiopian phone number.' };
+    const phone = normalizeEthiopianPhone(data.phone);
+    const email = data.email.toLowerCase().trim();
+
+    const [emailTaken, phoneTaken] = await Promise.all([
+      prisma.user.findUnique({ where: { email } }),
+      prisma.user.findUnique({ where: { phone } }),
+    ]);
+    if (emailTaken) return { success: false as const, error: 'A user with this email already exists.' };
+    if (phoneTaken) return { success: false as const, error: 'A user with this phone already exists.' };
+
+    const user = await prisma.user.create({
+      data: { name: data.name, email, phone, edirId: null, roleId: data.roleId, status: 'INVITED', mustChangePassword: true },
+    });
+
+    const token = crypto.randomBytes(32).toString('hex');
+    await prisma.passwordResetToken.upsert({
+      where: { email },
+      update: { token, expires: new Date(Date.now() + 48 * 60 * 60 * 1000) },
+      create: { email, token, expires: new Date(Date.now() + 48 * 60 * 60 * 1000) },
+    });
+    sendPasswordResetEmail({ to: email, name: data.name, token }).catch(err => console.error('Failed to send invite email:', err));
+
+    await writeAudit({ userId: actor.id, action: 'PLATFORM_USER_CREATED', targetType: 'User', targetId: user.id, details: `Created platform user ${email} with role "${role.name}".` });
+    revalidatePath('/dashboard/system/associations');
+    return { success: true as const, userId: user.id };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
 const createUserSchema = z.object({
   name: z.string().min(2, 'Name is required.'),
   email: z.string().email('A valid email is required.'),

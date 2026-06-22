@@ -16,8 +16,10 @@ import { PageHeader, LoadingState, ErrorState, EmptyState } from '@/components/u
 import { useConfirm } from '@/components/ui/confirm-provider';
 import {
   getAssociationEdirs, getAssociationUsers, getEdirUsers, getEdirRolesForAssociation,
-  associateUsers, removeUserFromEdir, setAssociationUserStatus, getAssociationAudit, createPlatformUser,
+  associateUsers, removeUserFromEdir, setAssociationUserStatus, getAssociationAudit,
+  createPlatformUser, createPlatformAdmin, getPlatformRoles,
 } from '@/app/actions/associations';
+import { getEdirContext } from '@/app/actions/edir-context';
 
 const STATUS: Record<string, string> = {
   ACTIVE: 'border-success/20 bg-success/10 text-success', INACTIVE: 'bg-muted text-muted-foreground',
@@ -27,6 +29,7 @@ const fmt = (d: any) => (d ? new Date(d).toLocaleDateString() : 'Never');
 
 export default function AssociationsClient({ embedded }: { embedded?: boolean } = {}) {
   const [edirs, setEdirs] = useState<any[]>([]);
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -36,6 +39,7 @@ export default function AssociationsClient({ embedded }: { embedded?: boolean } 
     getAssociationEdirs().then(setEdirs).catch(() => setError(true)).finally(() => setLoading(false));
   }, []);
   useEffect(() => { loadEdirs(); }, [loadEdirs]);
+  useEffect(() => { getEdirContext().then(c => setIsSuperAdmin(c.isSuperAdmin)).catch(() => {}); }, []);
 
   if (loading) return <LoadingState label="Loading associations…" className="min-h-[50vh]" />;
   if (error) return <ErrorState variant="page" onRetry={loadEdirs} />;
@@ -47,7 +51,7 @@ export default function AssociationsClient({ embedded }: { embedded?: boolean } 
       {embedded
         ? <div className="flex justify-end">{createBtn}</div>
         : <PageHeader title="User Associations" description="Create users, then associate, reassign, transfer, or remove them across Edirs — with role assignment and a full audit trail." icon={Network} actions={createBtn} />}
-      {creating && <CreateUserDialog edirs={edirs} onClose={() => setCreating(false)} onDone={() => { setCreating(false); loadEdirs(); }} />}
+      {creating && <CreateUserDialog edirs={edirs} canPlatform={isSuperAdmin} onClose={() => setCreating(false)} onDone={() => { setCreating(false); loadEdirs(); }} />}
       <Tabs defaultValue="edir">
         <TabsList>
           <TabsTrigger value="edir"><Building2 className="mr-1.5 h-4 w-4" /> By Edir</TabsTrigger>
@@ -296,24 +300,39 @@ function ReassignDialog({ user, edirs, onClose, onDone }: { user: any; edirs: an
   );
 }
 
-function CreateUserDialog({ edirs, onClose, onDone }: { edirs: any[]; onClose: () => void; onDone: () => void }) {
+function CreateUserDialog({ edirs, canPlatform, onClose, onDone }: { edirs: any[]; canPlatform: boolean; onClose: () => void; onDone: () => void }) {
+  const [kind, setKind] = useState<'edir' | 'platform'>('edir');
   const [form, setForm] = useState({ name: '', email: '', phone: '', edirId: '', roleId: '' });
-  const [roles, setRoles] = useState<any[]>([]);
+  const [edirRoles, setEdirRoles] = useState<any[]>([]);
+  const [platformRoles, setPlatformRoles] = useState<any[]>([]);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (!form.edirId) { setRoles([]); return; }
+    if (kind !== 'edir' || !form.edirId) { setEdirRoles([]); return; }
     getEdirRolesForAssociation(form.edirId)
-      .then(r => { setRoles(r); setForm(f => ({ ...f, roleId: r.find((x: any) => x.name === 'Member')?.id ?? '' })); })
-      .catch(() => setRoles([]));
-  }, [form.edirId]);
+      .then(r => { setEdirRoles(r); setForm(f => ({ ...f, roleId: r.find((x: any) => x.name === 'Member')?.id ?? '' })); })
+      .catch(() => setEdirRoles([]));
+  }, [kind, form.edirId]);
+
+  useEffect(() => {
+    if (kind !== 'platform') return;
+    getPlatformRoles().then(r => { setPlatformRoles(r); setForm(f => ({ ...f, roleId: r[0]?.id ?? '' })); }).catch(() => setPlatformRoles([]));
+  }, [kind]);
+
+  const switchKind = (k: 'edir' | 'platform') => { setKind(k); setForm(f => ({ ...f, edirId: '', roleId: '' })); };
 
   const submit = async () => {
-    if (!form.edirId) { toast.error('Select an Edir.'); return; }
     setSaving(true);
-    const res = await createPlatformUser({ name: form.name, email: form.email, phone: form.phone, edirId: form.edirId, roleId: form.roleId || null });
+    let res: any;
+    if (kind === 'platform') {
+      if (!form.roleId) { toast.error('Select a platform role.'); setSaving(false); return; }
+      res = await createPlatformAdmin({ name: form.name, email: form.email, phone: form.phone, roleId: form.roleId });
+    } else {
+      if (!form.edirId) { toast.error('Select an Edir.'); setSaving(false); return; }
+      res = await createPlatformUser({ name: form.name, email: form.email, phone: form.phone, edirId: form.edirId, roleId: form.roleId || null });
+    }
     setSaving(false);
-    if (res?.success) { toast.success('User created and invited to set a password.'); onDone(); }
+    if (res?.success) { toast.success(kind === 'platform' ? 'Platform user created and invited.' : 'User created and invited to set a password.'); onDone(); }
     else toast.error(res?.error || 'Failed to create user.');
   };
 
@@ -322,26 +341,52 @@ function CreateUserDialog({ edirs, onClose, onDone }: { edirs: any[]; onClose: (
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Create User</DialogTitle>
-          <DialogDescription>Create a login account directly in an Edir. They receive an email to set their password, sign in with their phone, and are enrolled as a member of the Edir.</DialogDescription>
+          <DialogDescription>
+            {kind === 'platform'
+              ? 'Create a platform user (no Edir) holding a platform role such as “Edir Creator”. They can register Edirs and assign users across tenants.'
+              : 'Create a login account directly in an Edir. They are invited to set a password and enrolled as a member of the Edir.'}
+          </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
+          {canPlatform && (
+            <div className="space-y-1.5">
+              <Label className="text-xs">Account Type</Label>
+              <div className="flex rounded-lg border p-0.5">
+                <button type="button" onClick={() => switchKind('edir')} className={`flex-1 rounded-md px-2 py-1.5 text-xs font-medium ${kind === 'edir' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}>Edir user</button>
+                <button type="button" onClick={() => switchKind('platform')} className={`flex-1 rounded-md px-2 py-1.5 text-xs font-medium ${kind === 'platform' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}>Platform user</button>
+              </div>
+            </div>
+          )}
           <div className="space-y-1.5"><Label className="text-xs">Full Name</Label><Input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} /></div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5"><Label className="text-xs">Email</Label><Input type="email" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} /></div>
             <div className="space-y-1.5"><Label className="text-xs">Phone</Label><Input value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} placeholder="0912345678" /></div>
           </div>
-          <div className="space-y-1.5"><Label className="text-xs">Edir</Label>
-            <Select value={form.edirId} onValueChange={v => setForm(f => ({ ...f, edirId: v, roleId: '' }))}>
-              <SelectTrigger><SelectValue placeholder="Select an Edir" /></SelectTrigger>
-              <SelectContent>{edirs.map(e => <SelectItem key={e.id} value={e.id}>{e.name}</SelectItem>)}</SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1.5"><Label className="text-xs">Role</Label>
-            <Select value={form.roleId || 'none'} onValueChange={v => setForm(f => ({ ...f, roleId: v === 'none' ? '' : v }))} disabled={!form.edirId}>
-              <SelectTrigger><SelectValue placeholder={form.edirId ? 'No role' : 'Select an Edir first'} /></SelectTrigger>
-              <SelectContent><SelectItem value="none">No role</SelectItem>{roles.map(r => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}</SelectContent>
-            </Select>
-          </div>
+
+          {kind === 'edir' ? (
+            <>
+              <div className="space-y-1.5"><Label className="text-xs">Edir</Label>
+                <Select value={form.edirId} onValueChange={v => setForm(f => ({ ...f, edirId: v, roleId: '' }))}>
+                  <SelectTrigger><SelectValue placeholder="Select an Edir" /></SelectTrigger>
+                  <SelectContent>{edirs.map(e => <SelectItem key={e.id} value={e.id}>{e.name}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5"><Label className="text-xs">Role</Label>
+                <Select value={form.roleId || 'none'} onValueChange={v => setForm(f => ({ ...f, roleId: v === 'none' ? '' : v }))} disabled={!form.edirId}>
+                  <SelectTrigger><SelectValue placeholder={form.edirId ? 'No role' : 'Select an Edir first'} /></SelectTrigger>
+                  <SelectContent><SelectItem value="none">No role</SelectItem>{edirRoles.map(r => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+            </>
+          ) : (
+            <div className="space-y-1.5"><Label className="text-xs">Platform Role</Label>
+              <Select value={form.roleId} onValueChange={v => setForm(f => ({ ...f, roleId: v }))}>
+                <SelectTrigger><SelectValue placeholder="Select a platform role" /></SelectTrigger>
+                <SelectContent>{platformRoles.map(r => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}</SelectContent>
+              </Select>
+              {platformRoles.length === 0 && <p className="text-[11px] text-muted-foreground">No platform roles yet — create one on the Roles page (scope “Platform”).</p>}
+            </div>
+          )}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
