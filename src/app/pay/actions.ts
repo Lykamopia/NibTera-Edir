@@ -110,7 +110,15 @@ export async function clearNibSession() {
   ['miniapp_token', 'miniapp_phone', 'miniapp_session', 'last_searched_phone', 'last_searched_path'].forEach(c => cookieStore.delete(c));
 }
 
-/** Step 3 — request a payment token from NIB and create a PENDING PaymentLog. */
+/**
+ * Step 3 — request a payment token from NIB.
+ *
+ * No PENDING record is written to the Edir system here: a payment from the mini
+ * app is only persisted once its outcome is known — SUCCESS/PARTIAL via the
+ * settlement callback (which self-heals the record from validated token claims),
+ * or FAILED here on a hard initiation error. This prevents a still-processing or
+ * abandoned payment from appearing as if it were already paid.
+ */
 export async function getPaymentToken(amount: number, token: string, memberId: string, edirId: string, breakdown: any) {
   const transactionId = crypto.randomUUID();
   const transactionTime = format(new Date(), 'yyyyMMddHHmmss');
@@ -131,24 +139,24 @@ export async function getPaymentToken(amount: number, token: string, memberId: s
   payLog('getPaymentToken', 'signatureString (token masked)', signatureString.replace(token, maskToken(token)));
   payLog('getPaymentToken', 'signature', signature);
 
-  try {
-    await prisma.paymentLog.create({
-      data: {
-        edirId, memberId,
-        amount: new Prisma.Decimal(amount),
-        method: 'NIBTERA_MINI_APP',
-        status: 'PENDING',
-        description: JSON.stringify(breakdown ?? {}),
-        transactionId,
-        signature,
-        verificationType: 'AUTOMATIC',
-      },
-    });
-    payLog('getPaymentToken', 'PENDING PaymentLog created', { transactionId });
-  } catch (e) {
-    payLog('getPaymentToken', 'FAILED to create pending log', String(e));
-    console.error('[NIB] failed to create pending log', e);
-  }
+  // Record a FAILED attempt only on a definite failure (never a PENDING row).
+  const recordFailed = async (reason: string) => {
+    try {
+      await prisma.paymentLog.create({
+        data: {
+          edirId, memberId,
+          amount: new Prisma.Decimal(amount),
+          method: 'NIBTERA_MINI_APP',
+          status: 'FAILED',
+          description: JSON.stringify({ ...(breakdown ?? {}), failureReason: reason }),
+          transactionId, signature, verificationType: 'AUTOMATIC',
+        },
+      });
+      payLog('getPaymentToken', 'FAILED PaymentLog recorded', { transactionId, reason });
+    } catch (e) {
+      payLog('getPaymentToken', 'could not record FAILED log', String(e));
+    }
+  };
 
   const payload = {
     accountNo: NIB_CONFIG.ACCOUNT_NO,
@@ -167,14 +175,17 @@ export async function getPaymentToken(amount: number, token: string, memberId: s
     });
     const raw = await res.text();
     payLog('getPaymentToken', `NIB response status=${res.status}`, { ok: res.ok, body: raw.slice(0, 800) });
-    if (!res.ok) return { status: 'error', message: `Payment token request failed with status ${res.status}`, transactionId };
+    if (!res.ok) { await recordFailed(`NIB responded ${res.status}`); return { status: 'error', message: `Payment token request failed with status ${res.status}`, transactionId }; }
     let data: NibPaymentResponse;
-    try { data = JSON.parse(raw); } catch (e) { payLog('getPaymentToken', 'failed to parse NIB JSON', String(e)); return { status: 'error', message: 'Invalid response from NIB payment server.', transactionId }; }
+    try { data = JSON.parse(raw); } catch (e) { payLog('getPaymentToken', 'failed to parse NIB JSON', String(e)); await recordFailed('invalid NIB response'); return { status: 'error', message: 'Invalid response from NIB payment server.', transactionId }; }
     payLog('getPaymentToken', 'SUCCESS — paymentToken received', { paymentToken: maskToken(data.token), transactionId });
+    // Intentionally no record here: the payment is still pending until the bank
+    // settlement callback confirms it (which creates the SUCCESS/PARTIAL record).
     return { status: 'success', paymentToken: data.token, transactionId };
   } catch (error) {
     payLog('getPaymentToken', 'FETCH THREW (NIB payment server unreachable?)', { url: NIB_CONFIG.PAYMENT_URL, error: String(error) });
     console.error('[NIB] payment token exception', error);
+    await recordFailed('NIB payment server unreachable');
     return { status: 'error', message: 'Failed to obtain payment token from NIB servers.', transactionId };
   }
 }

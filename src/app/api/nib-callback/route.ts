@@ -60,50 +60,67 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ message: 'Account mismatch' }, { status: 400 });
     }
 
-    // Locate the pending payment; self-heal from validated claims if missing.
-    let log = await prisma.paymentLog.findUnique({ where: { transactionId } });
-    payLog('callback', log ? `found PaymentLog (status=${log.status})` : 'no PaymentLog for transactionId — attempting self-heal');
-    if (!log) {
+    // Find an existing record; otherwise resolve the member to self-heal one.
+    const existing = await prisma.paymentLog.findUnique({ where: { transactionId } });
+    payLog('callback', existing ? `found PaymentLog (status=${existing.status})` : 'no PaymentLog for transactionId — attempting self-heal');
+
+    // Idempotency: already settled → ack without re-applying.
+    if (existing && (existing.status === 'SUCCESS' || existing.status === 'PARTIAL')) {
+      payLog('callback', 'already settled → 200 (idempotent)');
+      return NextResponse.json({ message: 'Already processed.' }, { status: 200 });
+    }
+
+    // Resolve the member (from the existing record, or self-healed from claims).
+    let memberId = existing?.memberId ?? null;
+    let logEdirId = existing?.edirId ?? null;
+    if (!existing) {
       const validated = await validate.clone().json().catch(() => null as any);
       const phone = validated?.phone || paidByNumber;
       const member = phone ? await fetchDetailedMemberByPhone(phone) : null;
       if (!member) { payLog('callback', 'self-heal failed — no member → 404', { phone }); return NextResponse.json({ message: 'No matching transaction or member.' }, { status: 404 }); }
-      log = await prisma.paymentLog.create({
-        data: {
-          edirId: member.edirId, memberId: member.id,
-          amount: new Prisma.Decimal(paidAmount), method: 'NIBTERA_MINI_APP',
-          status: 'PENDING', transactionId, receiptUrl: txnRef ?? null, verificationType: 'AUTOMATIC',
-          description: JSON.stringify({ selfHealed: true }),
-        },
-      });
+      memberId = member.id; logEdirId = member.edirId;
     }
-
-    // Idempotency: already settled → ack without re-applying.
-    if (log.status === 'SUCCESS' || log.status === 'PARTIAL') {
-      payLog('callback', 'already settled → 200 (idempotent)');
-      return NextResponse.json({ message: 'Already processed.' }, { status: 200 });
-    }
-    if (!log.memberId) {
-      payLog('callback', 'log has no memberId → 400');
+    if (!memberId || !logEdirId) {
+      payLog('callback', 'no member/edir for transaction → 400');
       return NextResponse.json({ message: 'Transaction has no member.' }, { status: 400 });
     }
 
-    const partial = paidAmount + 0.0001 < Number(log.amount);
-    payLog('callback', 'settling payment', { paidAmount, logAmount: Number(log.amount), partial });
+    // An existing record may have been initiated for a larger amount → partial.
+    const expectedAmount = existing ? Number(existing.amount) : paidAmount;
+    const partial = paidAmount + 0.0001 < expectedAmount;
+    payLog('callback', 'settling payment', { paidAmount, expectedAmount, partial, selfHealed: !existing });
 
     await prisma.$transaction(async (tx) => {
-      await tx.paymentLog.update({ where: { id: log!.id }, data: { receiptUrl: txnRef ?? log!.receiptUrl } });
-      // Settlement order (penalties → installments → monthly fee) lives in settlePaymentTx.
+      // The record is created (when self-healing) INSIDE the transaction and
+      // immediately settled, so a mini-app payment is never committed in a
+      // PENDING state — it is born and settled atomically, or rolled back.
+      let paymentLogId: string;
+      if (existing) {
+        await tx.paymentLog.update({ where: { id: existing.id }, data: { receiptUrl: txnRef ?? existing.receiptUrl } });
+        paymentLogId = existing.id;
+      } else {
+        const created = await tx.paymentLog.create({
+          data: {
+            edirId: logEdirId!, memberId: memberId!,
+            amount: new Prisma.Decimal(paidAmount), method: 'NIBTERA_MINI_APP',
+            status: 'PENDING', transactionId, receiptUrl: txnRef ?? null, verificationType: 'AUTOMATIC',
+            description: JSON.stringify({ selfHealed: true }),
+          },
+        });
+        paymentLogId = created.id;
+      }
+      // Settlement order (penalties → installments → monthly fee) lives in
+      // settlePaymentTx, which finalizes the log to SUCCESS/PARTIAL.
       await settlePaymentTx(tx, {
-        memberId: log!.memberId!,
-        paymentLogId: log!.id,
+        memberId: memberId!,
+        paymentLogId,
         total: new Prisma.Decimal(paidAmount),
         method: 'NIBTERA_MINI_APP',
         partial,
       });
       await writeAudit({
-        edirId: log!.edirId, action: 'NIB_PAYMENT_SETTLED',
-        targetType: 'PaymentLog', targetId: log!.id,
+        edirId: logEdirId!, action: 'NIB_PAYMENT_SETTLED',
+        targetType: 'PaymentLog', targetId: paymentLogId,
         details: `Settled ${paidAmount} via NIB (txn ${transactionId})${partial ? ' [partial]' : ''}.`,
       }, tx);
     });
