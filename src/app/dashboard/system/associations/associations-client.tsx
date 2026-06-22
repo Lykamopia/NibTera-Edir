@@ -11,12 +11,12 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
-import { Loader2, Network, Search, UserPlus, ArrowRightLeft, UserMinus, Building2, ScrollText, Users } from 'lucide-react';
+import { Loader2, Network, Search, UserPlus, ArrowRightLeft, UserMinus, Building2, ScrollText, Users, UserCog } from 'lucide-react';
 import { PageHeader, LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
 import { useConfirm } from '@/components/ui/confirm-provider';
 import {
   getAssociationEdirs, getAssociationUsers, getEdirUsers, getEdirRolesForAssociation,
-  associateUsers, removeUserFromEdir, setAssociationUserStatus, getAssociationAudit,
+  associateUsers, removeUserFromEdir, setAssociationUserStatus, getAssociationAudit, createPlatformUser,
 } from '@/app/actions/associations';
 
 const STATUS: Record<string, string> = {
@@ -29,6 +29,7 @@ export default function AssociationsClient({ embedded }: { embedded?: boolean } 
   const [edirs, setEdirs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  const [creating, setCreating] = useState(false);
 
   const loadEdirs = useCallback(() => {
     setLoading(true); setError(false);
@@ -39,9 +40,14 @@ export default function AssociationsClient({ embedded }: { embedded?: boolean } 
   if (loading) return <LoadingState label="Loading associations…" className="min-h-[50vh]" />;
   if (error) return <ErrorState variant="page" onRetry={loadEdirs} />;
 
+  const createBtn = <Button size="sm" onClick={() => setCreating(true)}><UserCog className="mr-1.5 h-4 w-4" /> Create User</Button>;
+
   return (
     <div className="space-y-4">
-      {!embedded && <PageHeader title="User Associations" description="Associate, reassign, transfer, or remove users across Edirs — with role assignment and a full audit trail." icon={Network} />}
+      {embedded
+        ? <div className="flex justify-end">{createBtn}</div>
+        : <PageHeader title="User Associations" description="Create users, then associate, reassign, transfer, or remove them across Edirs — with role assignment and a full audit trail." icon={Network} actions={createBtn} />}
+      {creating && <CreateUserDialog edirs={edirs} onClose={() => setCreating(false)} onDone={() => { setCreating(false); loadEdirs(); }} />}
       <Tabs defaultValue="edir">
         <TabsList>
           <TabsTrigger value="edir"><Building2 className="mr-1.5 h-4 w-4" /> By Edir</TabsTrigger>
@@ -284,6 +290,62 @@ function ReassignDialog({ user, edirs, onClose, onDone }: { user: any; edirs: an
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
           <Button onClick={submit} disabled={saving}>{saving && <Loader2 className="mr-1 h-4 w-4 animate-spin" />} {user.edirId ? 'Transfer' : 'Assign'}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function CreateUserDialog({ edirs, onClose, onDone }: { edirs: any[]; onClose: () => void; onDone: () => void }) {
+  const [form, setForm] = useState({ name: '', email: '', phone: '', edirId: '', roleId: '' });
+  const [roles, setRoles] = useState<any[]>([]);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!form.edirId) { setRoles([]); return; }
+    getEdirRolesForAssociation(form.edirId)
+      .then(r => { setRoles(r); setForm(f => ({ ...f, roleId: r.find((x: any) => x.name === 'Member')?.id ?? '' })); })
+      .catch(() => setRoles([]));
+  }, [form.edirId]);
+
+  const submit = async () => {
+    if (!form.edirId) { toast.error('Select an Edir.'); return; }
+    setSaving(true);
+    const res = await createPlatformUser({ name: form.name, email: form.email, phone: form.phone, edirId: form.edirId, roleId: form.roleId || null });
+    setSaving(false);
+    if (res?.success) { toast.success('User created and invited to set a password.'); onDone(); }
+    else toast.error(res?.error || 'Failed to create user.');
+  };
+
+  return (
+    <Dialog open onOpenChange={o => { if (!o) onClose(); }}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Create User</DialogTitle>
+          <DialogDescription>Create a login account directly in an Edir. They receive an email to set their password, sign in with their phone, and are enrolled as a member of the Edir.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="space-y-1.5"><Label className="text-xs">Full Name</Label><Input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} /></div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5"><Label className="text-xs">Email</Label><Input type="email" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} /></div>
+            <div className="space-y-1.5"><Label className="text-xs">Phone</Label><Input value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} placeholder="0912345678" /></div>
+          </div>
+          <div className="space-y-1.5"><Label className="text-xs">Edir</Label>
+            <Select value={form.edirId} onValueChange={v => setForm(f => ({ ...f, edirId: v, roleId: '' }))}>
+              <SelectTrigger><SelectValue placeholder="Select an Edir" /></SelectTrigger>
+              <SelectContent>{edirs.map(e => <SelectItem key={e.id} value={e.id}>{e.name}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5"><Label className="text-xs">Role</Label>
+            <Select value={form.roleId || 'none'} onValueChange={v => setForm(f => ({ ...f, roleId: v === 'none' ? '' : v }))} disabled={!form.edirId}>
+              <SelectTrigger><SelectValue placeholder={form.edirId ? 'No role' : 'Select an Edir first'} /></SelectTrigger>
+              <SelectContent><SelectItem value="none">No role</SelectItem>{roles.map(r => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
+          <Button onClick={submit} disabled={saving}>{saving && <Loader2 className="mr-1 h-4 w-4 animate-spin" />} Create &amp; Invite</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -38,7 +38,7 @@ export const pagePermissions: PagePermissionDef[] = [
   },
   {
     id: 'people', label: 'People', path: '/dashboard/people', icon: 'UsersRound', section: 'operations',
-    accessPermissions: ['view_members', 'manage_members', 'view_users', 'manage_users', 'manage_edirs', 'super_admin'],
+    accessPermissions: ['view_members', 'manage_members', 'view_users', 'manage_users', 'super_admin'],
     actions: [{ id: 'view_members', label: 'People Management', description: 'Unified members & users management (adapts to your role)', isAccess: true }],
   },
   {

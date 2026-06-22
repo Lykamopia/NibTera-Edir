@@ -1,11 +1,14 @@
 'use server';
 
 import { z } from 'zod';
+import crypto from 'crypto';
 import prisma from '@/lib/prisma';
 import { getActor, actorHasPermission } from '@/lib/tenant-scope';
 import { AccessDeniedError } from '@/lib/errors';
 import { writeAudit } from '@/lib/audit';
 import { ensureMembershipForUser } from '@/app/actions/members';
+import { normalizeEthiopianPhone, isValidEthiopianPhone } from '@/lib/utils';
+import { sendPasswordResetEmail } from '@/lib/email';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
 
@@ -72,8 +75,75 @@ export async function getEdirUsers(edirId: string) {
 /** Roles available within an Edir (for role assignment during association). */
 export async function getEdirRolesForAssociation(edirId: string) {
   await requireSuperAdmin();
-  const roles = await prisma.role.findMany({ where: { edirId, scope: 'EDIR' }, orderBy: { name: 'asc' }, select: { id: true, name: true } });
+  const roles = await prisma.role.findMany({
+    where: { scope: 'EDIR', OR: [{ edirId }, { edirId: null }] }, // tenant roles + global templates
+    orderBy: { name: 'asc' }, select: { id: true, name: true },
+  });
   return roles;
+}
+
+const createUserSchema = z.object({
+  name: z.string().min(2, 'Name is required.'),
+  email: z.string().email('A valid email is required.'),
+  phone: z.string().min(9, 'A phone number is required.'),
+  edirId: z.string().min(1, 'Select an Edir.'),
+  roleId: z.string().optional().nullable(),
+});
+
+/**
+ * Create a new login account directly in an Edir (platform capability). Lets a
+ * platform role (super_admin or manage_associations) do the full "create Edir →
+ * create user → assign to Edir" flow without full super-admin. The user is
+ * invited to set their password and enrolled as a member of the Edir.
+ */
+export async function createPlatformUser(input: z.infer<typeof createUserSchema>) {
+  try {
+    const actor = await requireSuperAdmin();
+    const data = createUserSchema.parse(input);
+
+    const edir = await prisma.edir.findUnique({ where: { id: data.edirId }, select: { id: true, name: true } });
+    if (!edir) return { success: false as const, error: 'Edir not found.' };
+    if (!isValidEthiopianPhone(data.phone)) return { success: false as const, error: 'Enter a valid Ethiopian phone number.' };
+    const phone = normalizeEthiopianPhone(data.phone);
+    const email = data.email.toLowerCase().trim();
+
+    const [emailTaken, phoneTaken] = await Promise.all([
+      prisma.user.findUnique({ where: { email } }),
+      prisma.user.findUnique({ where: { phone } }),
+    ]);
+    if (emailTaken) return { success: false as const, error: 'A user with this email already exists.' };
+    if (phoneTaken) return { success: false as const, error: 'A user with this phone already exists.' };
+
+    // A platform (Super-Admin-scope) role must never be assignable to an Edir user.
+    if (data.roleId) {
+      const role = await prisma.role.findUnique({ where: { id: data.roleId }, select: { scope: true, edirId: true } });
+      if (!role) return { success: false as const, error: 'Role not found.' };
+      if (role.scope === 'SUPER_ADMIN') return { success: false as const, error: 'A platform role cannot be assigned to an Edir user.' };
+      if (role.edirId && role.edirId !== data.edirId) return { success: false as const, error: 'That role belongs to a different Edir.' };
+    }
+
+    const user = await prisma.user.create({
+      data: { name: data.name, email, phone, edirId: data.edirId, roleId: data.roleId || null, status: 'INVITED', mustChangePassword: true },
+    });
+
+    // 48h single-use set-password token + invite email (reuses PasswordResetToken).
+    const token = crypto.randomBytes(32).toString('hex');
+    await prisma.passwordResetToken.upsert({
+      where: { email },
+      update: { token, expires: new Date(Date.now() + 48 * 60 * 60 * 1000) },
+      create: { email, token, expires: new Date(Date.now() + 48 * 60 * 60 * 1000) },
+    });
+    sendPasswordResetEmail({ to: email, name: data.name, token }).catch(err => console.error('Failed to send invite email:', err));
+
+    await writeAudit({ edirId: data.edirId, userId: actor.id, action: 'USER_CREATED', targetType: 'User', targetId: user.id, details: `Created ${email} in ${edir.name}.` });
+    // Enroll as a member of the Edir (obligations follow the bylaws).
+    try { await ensureMembershipForUser(user.id); } catch { /* non-fatal */ }
+
+    revalidatePath('/dashboard/system/associations');
+    return { success: true as const, userId: user.id };
+  } catch (error) {
+    return failure(error);
+  }
 }
 
 const associateSchema = z.object({

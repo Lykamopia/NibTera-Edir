@@ -9,7 +9,7 @@ const FRAMABLE_PREFIXES = ["/pay", "/portal", "/api/nib-callback"];
 // stays in the edge runtime without importing the Prisma-backed permission
 // registry. Mirrors src/lib/permissions.ts `pagePermissions`; longest-match wins.
 const ROUTE_PERMISSIONS: { path: string; perms: string[] }[] = [
-  { path: '/dashboard/people', perms: ['view_members', 'manage_members', 'view_users', 'manage_users', 'manage_edirs', 'super_admin'] },
+  { path: '/dashboard/people', perms: ['view_members', 'manage_members', 'view_users', 'manage_users', 'super_admin'] },
   { path: '/dashboard/members', perms: ['view_members', 'manage_members'] },
   { path: '/dashboard/payments', perms: ['view_payments', 'record_payment'] },
   { path: '/dashboard/approvals', perms: ['view_approvals', 'approve_payment', 'approve_member_removal', 'approve_penalty_waiver', 'approve_emergency_claim', 'approve_emergency_disbursement', 'approve_asset_issuance', 'approve_rule_change'] },
