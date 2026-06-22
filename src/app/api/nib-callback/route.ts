@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { headers } from 'next/headers';
 import { Prisma } from '@prisma/client';
 import { NIB_CONFIG } from '@/lib/nib-config';
 import prisma from '@/lib/prisma';
@@ -41,28 +40,42 @@ export async function POST(request: NextRequest) {
   const { paidAmount, paidByNumber, txnRef, transactionId, accountNo } = parsed.data;
   payLog('callback', 'parsed', { paidAmount, paidByNumber, txnRef, transactionId, accountNo });
 
-  // Validate the callback token with NIB (Step-1 procedure).
-  const headerList = await headers();
-  const authHeader = headerList.get('Authorization');
-  if (!authHeader?.startsWith('Bearer ')) {
-    payLog('callback', 'missing/!Bearer Authorization header → 401');
-    return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+  // ── Authenticate via the payment token the bank echoes back ────────────────
+  // The bank returns the payment JWT we obtained in Step 3 (sometimes wrapped as
+  // "{token: <jwt>}"). It embeds OUR transaction reference, the credited account
+  // and an expiry, so we bind the callback to a payment WE initiated rather than
+  // trusting the body. The body `signature` is informational, never a gate.
+  //
+  // NOTE: the bank sends ITS financial reference in `transactionId` and OUR
+  // original reference in `txnRef` — so our records are keyed on `txnRef`.
+  const ourRef = txnRef || transactionId; // our original reference (UUID from Step 3)
+  const rawToken = (parsed.data as any).token as string | undefined;
+  const jwt = rawToken?.match(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/)?.[0] ?? null;
+  let claims: any = null;
+  if (jwt) {
+    try { claims = JSON.parse(Buffer.from(jwt.split('.')[1], 'base64url').toString('utf8')); }
+    catch (e) { payLog('callback', 'failed to decode body token', String(e)); }
   }
+  payLog('callback', 'token claims', claims ? { transactionId: claims.transactionId, accountNo: claims.accountNo, amount: claims.amount, exp: claims.exp, phone: claims.phone } : null);
+
+  const refMatches = !!claims && String(claims.transactionId) === String(ourRef);
+  const accountMatches = !claims?.accountNo || NIB_CONFIG.ACCOUNT_NO === 'YOUR_ACCOUNT_NO' || String(claims.accountNo) === NIB_CONFIG.ACCOUNT_NO;
+  const notExpired = !claims?.exp || Number(claims.exp) * 1000 > Date.now();
+  if (!claims || !refMatches || !accountMatches || !notExpired) {
+    payLog('callback', 'anti-forgery binding failed → 401', { hasClaims: !!claims, refMatches, accountMatches, notExpired });
+    return NextResponse.json({ message: 'Invalid Token' }, { status: 401 });
+  }
+
+  // Anti-forgery: the credited account in the body must also be ours (when sent).
+  if (accountNo && NIB_CONFIG.ACCOUNT_NO !== 'YOUR_ACCOUNT_NO' && accountNo !== NIB_CONFIG.ACCOUNT_NO) {
+    payLog('callback', 'account mismatch → 400', { accountNo });
+    return NextResponse.json({ message: 'Account mismatch' }, { status: 400 });
+  }
+
   try {
-    const validate = await fetch(NIB_CONFIG.VALIDATE_TOKEN_URL, {
-      method: 'GET', headers: { Authorization: authHeader, Accept: 'application/json' }, cache: 'no-store',
-    });
-    payLog('callback', `token validation status=${validate.status}`);
-    if (!validate.ok) return NextResponse.json({ message: 'Invalid Token' }, { status: 401 });
-
-    // Anti-forgery: account must match ours (when provided).
-    if (accountNo && NIB_CONFIG.ACCOUNT_NO !== 'YOUR_ACCOUNT_NO' && accountNo !== NIB_CONFIG.ACCOUNT_NO) {
-      return NextResponse.json({ message: 'Account mismatch' }, { status: 400 });
-    }
-
-    // Find an existing record; otherwise resolve the member to self-heal one.
-    const existing = await prisma.paymentLog.findUnique({ where: { transactionId } });
-    payLog('callback', existing ? `found PaymentLog (status=${existing.status})` : 'no PaymentLog for transactionId — attempting self-heal');
+    // Locate our record by OUR reference; self-heal from the token claims if absent.
+    const existing = await prisma.paymentLog.findUnique({ where: { transactionId: ourRef } });
+    payLog('callback', existing ? `found PaymentLog (status=${existing.status})` : 'no PaymentLog for our ref — self-healing');
 
     // Idempotency: already settled → ack without re-applying.
     if (existing && (existing.status === 'SUCCESS' || existing.status === 'PARTIAL')) {
@@ -70,12 +83,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ message: 'Already processed.' }, { status: 200 });
     }
 
-    // Resolve the member (from the existing record, or self-healed from claims).
+    // Resolve the member (from the existing record, or the token's phone claim).
     let memberId = existing?.memberId ?? null;
     let logEdirId = existing?.edirId ?? null;
-    if (!existing) {
-      const validated = await validate.clone().json().catch(() => null as any);
-      const phone = validated?.phone || paidByNumber;
+    if (!memberId) {
+      const phone = claims?.phone || paidByNumber;
       const member = phone ? await fetchDetailedMemberByPhone(phone) : null;
       if (!member) { payLog('callback', 'self-heal failed — no member → 404', { phone }); return NextResponse.json({ message: 'No matching transaction or member.' }, { status: 404 }); }
       memberId = member.id; logEdirId = member.edirId;
@@ -88,7 +100,7 @@ export async function POST(request: NextRequest) {
     // An existing record may have been initiated for a larger amount → partial.
     const expectedAmount = existing ? Number(existing.amount) : paidAmount;
     const partial = paidAmount + 0.0001 < expectedAmount;
-    payLog('callback', 'settling payment', { paidAmount, expectedAmount, partial, selfHealed: !existing });
+    payLog('callback', 'settling payment', { ourRef, bankRef: transactionId, paidAmount, expectedAmount, partial, selfHealed: !existing });
 
     await prisma.$transaction(async (tx) => {
       // The record is created (when self-healing) INSIDE the transaction and
@@ -96,15 +108,15 @@ export async function POST(request: NextRequest) {
       // PENDING state — it is born and settled atomically, or rolled back.
       let paymentLogId: string;
       if (existing) {
-        await tx.paymentLog.update({ where: { id: existing.id }, data: { receiptUrl: txnRef ?? existing.receiptUrl } });
+        await tx.paymentLog.update({ where: { id: existing.id }, data: { receiptUrl: transactionId ?? existing.receiptUrl } });
         paymentLogId = existing.id;
       } else {
         const created = await tx.paymentLog.create({
           data: {
             edirId: logEdirId!, memberId: memberId!,
             amount: new Prisma.Decimal(paidAmount), method: 'NIBTERA_MINI_APP',
-            status: 'PENDING', transactionId, receiptUrl: txnRef ?? null, verificationType: 'AUTOMATIC',
-            description: JSON.stringify({ selfHealed: true }),
+            status: 'PENDING', transactionId: ourRef, receiptUrl: transactionId ?? null, verificationType: 'AUTOMATIC',
+            description: JSON.stringify({ selfHealed: !existing, bankRef: transactionId }),
           },
         });
         paymentLogId = created.id;
@@ -121,11 +133,11 @@ export async function POST(request: NextRequest) {
       await writeAudit({
         edirId: logEdirId!, action: 'NIB_PAYMENT_SETTLED',
         targetType: 'PaymentLog', targetId: paymentLogId,
-        details: `Settled ${paidAmount} via NIB (txn ${transactionId})${partial ? ' [partial]' : ''}.`,
+        details: `Settled ${paidAmount} via NIB (ref ${ourRef}, bank ${transactionId})${partial ? ' [partial]' : ''}.`,
       }, tx);
     });
 
-    payLog('callback', '✓ settled → 200', { transactionId, paidAmount, partial });
+    payLog('callback', '✓ settled → 200', { ourRef, bankRef: transactionId, paidAmount, partial });
     return NextResponse.json({ message: 'Payment confirmed and updated.' }, { status: 200 });
   } catch (error) {
     payLog('callback', 'processing EXCEPTION → 500', String(error));
