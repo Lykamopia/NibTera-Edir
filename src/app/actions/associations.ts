@@ -8,7 +8,7 @@ import { AccessDeniedError } from '@/lib/errors';
 import { writeAudit } from '@/lib/audit';
 import { ensureMembershipForUser } from '@/app/actions/members';
 import { normalizeEthiopianPhone, isValidEthiopianPhone } from '@/lib/utils';
-import { sendPasswordResetEmail } from '@/lib/email';
+import { sendVerificationEmail } from '@/lib/email';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
 
@@ -131,7 +131,7 @@ export async function createPlatformAdmin(input: z.infer<typeof createPlatformAd
       update: { token, expires: new Date(Date.now() + 48 * 60 * 60 * 1000) },
       create: { email, token, expires: new Date(Date.now() + 48 * 60 * 60 * 1000) },
     });
-    sendPasswordResetEmail({ to: email, name: data.name, token }).catch(err => console.error('Failed to send invite email:', err));
+    sendVerificationEmail({ to: email, name: data.name, token }).catch(err => console.error('Failed to send invite email:', err));
 
     await writeAudit({ userId: actor.id, action: 'PLATFORM_USER_CREATED', targetType: 'User', targetId: user.id, details: `Created platform user ${email} with role "${role.name}".` });
     revalidatePath('/dashboard/system/associations');
@@ -192,7 +192,7 @@ export async function createPlatformUser(input: z.infer<typeof createUserSchema>
       update: { token, expires: new Date(Date.now() + 48 * 60 * 60 * 1000) },
       create: { email, token, expires: new Date(Date.now() + 48 * 60 * 60 * 1000) },
     });
-    sendPasswordResetEmail({ to: email, name: data.name, token }).catch(err => console.error('Failed to send invite email:', err));
+    sendVerificationEmail({ to: email, name: data.name, token }).catch(err => console.error('Failed to send invite email:', err));
 
     await writeAudit({ edirId: data.edirId, userId: actor.id, action: 'USER_CREATED', targetType: 'User', targetId: user.id, details: `Created ${email} in ${edir.name}.` });
     // Enroll as a member of the Edir (obligations follow the bylaws).

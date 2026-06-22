@@ -8,7 +8,7 @@ import { getActor, requireActor, assertPermission, assertSameTenant, tenantWhere
 import { writeAudit } from '@/lib/audit';
 import { ALL_PERMISSION_IDS, PLATFORM_PERMISSION_IDS, filterPermissionsForScope, type RoleScopeKind } from '@/lib/permissions';
 import { normalizeEthiopianPhone, isValidEthiopianPhone } from '@/lib/utils';
-import { sendPasswordResetEmail } from '@/lib/email';
+import { sendPasswordResetEmail, sendVerificationEmail } from '@/lib/email';
 import { ensureMembershipForUser } from '@/app/actions/members';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
@@ -114,7 +114,8 @@ export async function inviteUser(input: z.infer<typeof inviteSchema>) {
       update: { token, expires: new Date(Date.now() + 48 * 60 * 60 * 1000) },
       create: { email, token, expires: new Date(Date.now() + 48 * 60 * 60 * 1000) },
     });
-    sendPasswordResetEmail({ to: email, name: data.name, token })
+    // New account → "account created, set your password" email (not a reset).
+    sendVerificationEmail({ to: email, name: data.name, token })
       .catch(err => console.error('Failed to send invite email:', err));
 
     await writeAudit({ edirId, userId: actor.id, action: 'USER_INVITED', targetType: 'User', targetId: user.id, details: `Invited ${email}.` });
