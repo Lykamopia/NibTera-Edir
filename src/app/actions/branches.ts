@@ -88,12 +88,49 @@ export async function saveBranch(input: { id?: string; name: string; code: strin
       const branch = await prisma.branch.create({
         data: { name, code, districtId: input.districtId, description: input.description ?? null },
       });
+
+      // Auto-provision default roles for the branch
+      const BRANCH_MANAGER_PERMISSIONS = [
+        'view_dashboard',
+        'view_branches',
+        'register_edir', 'approve_edir_registration', 'approve_edir_update',
+        'view_members', 'manage_members',
+        'view_payments', 'record_payment', 'approve_payment',
+        'view_approvals', 'view_audit_log',
+        'view_branch_dashboard',
+      ];
+      const BRANCH_OPERATOR_PERMISSIONS = [
+        'view_dashboard',
+        'view_branches',
+        'register_edir',
+        'view_members',
+        'view_payments',
+        'view_branch_dashboard',
+      ];
+
+      await prisma.role.createMany({
+        data: [
+          {
+            name: 'Branch Manager',
+            scope: 'BRANCH',
+            branchId: branch.id,
+            permissions: BRANCH_MANAGER_PERMISSIONS.join(','),
+          },
+          {
+            name: 'Branch Operator',
+            scope: 'BRANCH',
+            branchId: branch.id,
+            permissions: BRANCH_OPERATOR_PERMISSIONS.join(','),
+          },
+        ],
+      });
+
       await writeAudit({
         userId: actor.id,
         action: 'BRANCH_CREATED',
         targetType: 'Branch',
         targetId: branch.id,
-        details: `Created branch: ${name}`,
+        details: `Created branch: ${name} with default roles`,
       });
     }
 

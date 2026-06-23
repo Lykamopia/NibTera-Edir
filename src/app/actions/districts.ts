@@ -66,12 +66,47 @@ export async function saveDistrict(input: { id?: string; name: string; code: str
       const district = await prisma.district.create({
         data: { name, code, description: input.description ?? null },
       });
+
+      // Auto-provision default roles for the district
+      const DISTRICT_MANAGER_PERMISSIONS = [
+        'view_dashboard',
+        'view_districts', 'manage_branches', 'view_branches',
+        'register_edir', 'approve_edir_registration', 'approve_edir_update',
+        'view_members', 'manage_members', 'view_payments', 'record_payment',
+        'view_approvals', 'view_audit_log',
+        'view_district_dashboard',
+      ];
+      const DISTRICT_OPERATOR_PERMISSIONS = [
+        'view_dashboard',
+        'view_districts', 'view_branches',
+        'register_edir',
+        'view_members',
+        'view_district_dashboard',
+      ];
+
+      await prisma.role.createMany({
+        data: [
+          {
+            name: 'District Manager',
+            scope: 'DISTRICT',
+            districtId: district.id,
+            permissions: DISTRICT_MANAGER_PERMISSIONS.join(','),
+          },
+          {
+            name: 'District Operator',
+            scope: 'DISTRICT',
+            districtId: district.id,
+            permissions: DISTRICT_OPERATOR_PERMISSIONS.join(','),
+          },
+        ],
+      });
+
       await writeAudit({
         userId: actor.id,
         action: 'DISTRICT_CREATED',
         targetType: 'District',
         targetId: district.id,
-        details: `Created district: ${name}`,
+        details: `Created district: ${name} with default roles`,
       });
     }
 
