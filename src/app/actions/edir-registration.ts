@@ -1,0 +1,195 @@
+'use server';
+
+import { getActor, assertPermission, resolveEdirId, assertSameTenant } from '@/lib/tenant-scope';
+import prisma from '@/lib/prisma';
+import { submitForApproval } from '@/lib/approval-engine';
+import { revalidatePath } from 'next/cache';
+import { writeAudit } from '@/lib/audit-logger';
+
+function failure(error: unknown): { success: false; error: string } {
+  console.error('Edir registration error:', error);
+  const message = error instanceof Error ? error.message : 'An error occurred';
+  return { success: false, error: message };
+}
+
+export interface EdirRegistrationInput {
+  name: string;
+  description?: string;
+  address?: string;
+  accountNumber?: string;
+  branchId: string;
+  contactPersonName?: string;
+  contactAddress?: string;
+  contactMobile?: string;
+  contactEmail?: string;
+  agreementDocUrl?: string;
+}
+
+export async function submitEdirRegistration(input: EdirRegistrationInput) {
+  try {
+    const actor = await getActor();
+    await assertPermission(actor, ['register_edir', 'super_admin']);
+
+    const name = input.name?.trim();
+    if (!name) return { success: false as const, error: 'Edir name is required.' };
+
+    // Verify branch exists and belongs to actor's scope
+    const branch = await prisma.branch.findUnique({
+      where: { id: input.branchId },
+      select: { id: true, districtId: true },
+    });
+    if (!branch) return { success: false as const, error: 'Selected branch not found.' };
+
+    // Verify actor can register in this branch
+    if (actor.orgScope === 'BRANCH' && actor.branchId && actor.branchId !== input.branchId) {
+      return { success: false as const, error: 'You can only register Edirs in your branch.' };
+    }
+    if (actor.orgScope === 'DISTRICT' && actor.districtId && actor.districtId !== branch.districtId) {
+      return { success: false as const, error: 'You can only register Edirs in branches within your district.' };
+    }
+
+    // Create Edir with PENDING status
+    const edir = await prisma.edir.create({
+      data: {
+        name,
+        description: input.description ?? null,
+        branchId: input.branchId,
+        address: input.address ?? null,
+        accountNumber: input.accountNumber ?? null,
+        contactPersonName: input.contactPersonName ?? null,
+        contactAddress: input.contactAddress ?? null,
+        contactMobile: input.contactMobile ?? null,
+        contactEmail: input.contactEmail ?? null,
+        agreementDocUrl: input.agreementDocUrl ?? null,
+        status: 'PENDING',
+      },
+    });
+
+    // Submit for approval via maker-checker workflow
+    await submitForApproval({
+      module: 'EDIR_REGISTRATION',
+      edirId: edir.id,
+      makerId: actor.id,
+      payload: { edirId: edir.id },
+      comment: `Edir registration submitted: ${name}`,
+    });
+
+    await writeAudit({
+      userId: actor.id,
+      action: 'EDIR_REGISTRATION_SUBMITTED',
+      targetType: 'Edir',
+      targetId: edir.id,
+      details: `Submitted Edir registration: ${name}`,
+    });
+
+    revalidatePath('/dashboard/edir-registration');
+    return { success: true as const, edirId: edir.id };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+export async function getEdirRegistrations(filters?: { status?: 'PENDING' | 'APPROVED' | 'REJECTED' | 'RETURNED'; page?: number }) {
+  try {
+    const actor = await getActor();
+    await assertPermission(actor, ['register_edir', 'approve_edir_registration', 'super_admin']);
+
+    const page = Math.max(1, filters?.page ?? 1);
+    const limit = 25;
+
+    // Build where clause based on actor scope
+    const where: any = { status: 'PENDING' };
+    if (filters?.status) {
+      where.status = filters.status;
+    }
+
+    if (actor.orgScope === 'BRANCH' && actor.branchId) {
+      where.branchId = actor.branchId;
+    } else if (actor.orgScope === 'DISTRICT' && actor.districtId) {
+      where.branch = { districtId: actor.districtId };
+    }
+    // HEAD_OFFICE and SUPER_ADMIN see all
+
+    const [edirs, total] = await Promise.all([
+      prisma.edir.findMany({
+        where,
+        include: {
+          branch: { select: { id: true, name: true, districtId: true } },
+          approvalRequest: {
+            where: { module: 'EDIR_REGISTRATION' },
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+            include: {
+              events: { orderBy: { createdAt: 'desc' }, take: 1 },
+            },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      prisma.edir.count({ where }),
+    ]);
+
+    return {
+      success: true as const,
+      data: edirs.map(e => ({
+        id: e.id,
+        name: e.name,
+        status: e.status,
+        branchId: e.branchId,
+        branchName: e.branch?.name ?? 'Unknown',
+        contactPersonName: e.contactPersonName,
+        createdAt: e.createdAt,
+        approvalStatus: e.approvalRequest[0]?.status ?? null,
+        lastEvent: e.approvalRequest[0]?.events[0],
+      })),
+      total,
+      page,
+      pages: Math.ceil(total / limit),
+    };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+export async function getEdirRegistration(edirId: string) {
+  try {
+    const actor = await getActor();
+    await assertPermission(actor, ['register_edir', 'approve_edir_registration', 'super_admin']);
+
+    const edir = await prisma.edir.findUnique({
+      where: { id: edirId },
+      include: {
+        branch: { select: { id: true, name: true, districtId: true } },
+        approvalRequest: {
+          where: { module: 'EDIR_REGISTRATION' },
+          include: {
+            events: { orderBy: { createdAt: 'desc' } },
+            checker: { select: { id: true, name: true, email: true } },
+          },
+        },
+      },
+    });
+
+    if (!edir) return { success: false as const, error: 'Edir registration not found.' };
+
+    // Verify actor can view this registration
+    if (actor.orgScope === 'BRANCH' && actor.branchId && actor.branchId !== edir.branchId) {
+      return { success: false as const, error: 'Access denied.' };
+    }
+    if (actor.orgScope === 'DISTRICT' && actor.districtId && actor.districtId !== edir.branch?.districtId) {
+      return { success: false as const, error: 'Access denied.' };
+    }
+
+    return {
+      success: true as const,
+      data: {
+        ...edir,
+        approvalRequest: edir.approvalRequest[0] ?? null,
+      },
+    };
+  } catch (error) {
+    return failure(error);
+  }
+}

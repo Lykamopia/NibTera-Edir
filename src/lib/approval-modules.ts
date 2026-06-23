@@ -11,6 +11,7 @@
 import { registerModule } from '@/lib/approval-engine';
 import { settlePaymentTx, type ManualPaymentPayload } from '@/lib/payment-settlement';
 import { Prisma } from '@prisma/client';
+import bcrypt from 'bcrypt';
 
 let registered = false;
 
@@ -150,6 +151,77 @@ export function ensureApprovalModules() {
         }
         return;
       }
+    },
+  });
+
+  // ── Edir Registration (approve the registration → Edir becomes ACTIVE) ─────────
+  registerModule('EDIR_REGISTRATION', {
+    async execute(payload: { edirId: string }, { tx }) {
+      // Transition Edir from PENDING to ACTIVE upon approval
+      const edir = await tx.edir.update({
+        where: { id: payload.edirId },
+        data: { status: 'ACTIVE' },
+      });
+
+      // Create default EdirSettings if not already present
+      const existing = await tx.edirSettings.count({ where: { edirId: edir.id } });
+      if (existing === 0) {
+        await tx.edirSettings.create({ data: { edirId: edir.id } });
+      }
+
+      // Create default Edir roles (idempotent)
+      const EDIR_ADMIN_PERMISSIONS = ['view_dashboard', 'view_members', 'manage_members', 'remove_members', 'approve_member_removal', 'view_payments', 'record_payment', 'approve_payment', 'waive_penalty', 'approve_penalty_waiver', 'void_payment', 'view_approvals', 'view_emergencies', 'manage_emergencies', 'approve_emergency_claim', 'approve_emergency_disbursement', 'view_events', 'manage_events', 'finalize_attendance', 'view_assets', 'manage_assets', 'manage_asset_categories', 'approve_asset_issuance', 'view_rules', 'manage_rules', 'approve_rule_change', 'view_committee_oversight', 'handle_member_requests', 'view_documents', 'manage_edir_settings', 'manage_committee', 'view_users', 'manage_users', 'view_roles', 'manage_roles', 'reset_password', 'lock_user', 'unlock_user', 'view_audit_log', 'manage_audit_log', 'view_payment_log'];
+      const DEFAULT_EDIR_ROLES = [
+        { name: 'Edir Admin', permissions: EDIR_ADMIN_PERMISSIONS },
+        { name: 'Member', permissions: ['view_dashboard'] },
+        { name: 'Committee (Oversight)', permissions: ['view_dashboard', 'view_committee_oversight', 'view_members', 'view_payments', 'view_audit_log', 'view_payment_log', 'view_approvals', 'view_documents'] },
+      ];
+      const roleCount = await tx.role.count({ where: { edirId: edir.id } });
+      if (roleCount === 0) {
+        await tx.role.createMany({
+          data: DEFAULT_EDIR_ROLES.map(r => ({ name: r.name, scope: 'EDIR' as const, edirId: edir.id, permissions: r.permissions.join(',') })),
+        });
+      }
+    },
+  });
+
+  // ── Edir Update (apply changed fields from payload to Edir) ────────────────────
+  registerModule('EDIR_UPDATE', {
+    async execute(payload: { edirId: string; changes: Record<string, any> }, { tx }) {
+      // Only allow updates to specific fields
+      const allowedFields = ['name', 'description', 'address', 'accountNumber', 'contactPersonName', 'contactAddress', 'contactMobile', 'contactEmail', 'agreementDocUrl'];
+      const updates: Record<string, any> = {};
+      for (const [key, value] of Object.entries(payload.changes)) {
+        if (allowedFields.includes(key)) {
+          updates[key] = value;
+        }
+      }
+      if (Object.keys(updates).length > 0) {
+        await tx.edir.update({ where: { id: payload.edirId }, data: updates });
+      }
+    },
+  });
+
+  // ── User Creation (create User + hashed password + membership) ────────────────
+  registerModule('USER_CREATION', {
+    async execute(payload: { edirId: string; email: string; phone: string; name: string; roleId: string }, { tx, actor }) {
+      const hashedPassword = await bcrypt.hash(Math.random().toString(36).slice(-8), 10);
+      const user = await tx.user.create({
+        data: {
+          email: payload.email,
+          phone: payload.phone,
+          name: payload.name,
+          edirId: payload.edirId,
+          roleId: payload.roleId,
+          hashedPassword,
+          status: 'ACTIVE',
+          mustChangePassword: true,
+        },
+      });
+      // Create a default membership association
+      await tx.userEdirAssociation.create({
+        data: { userId: user.id, edirId: payload.edirId, role: 'USER', createdAt: new Date() },
+      });
     },
   });
 }

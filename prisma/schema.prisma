@@ -12,31 +12,81 @@ datasource db {
 
 // ─── Tenancy & Identity ──────────────────────────────────────────────────────
 
+enum EdirStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  CLOSED
+}
+
 model Edir {
+  id                  String       @id @default(cuid())
+  name                String
+  description         String?
+  logoUrl             String?
+  branchId            String?
+  branch              Branch?      @relation(fields: [branchId], references: [id])
+  status              EdirStatus   @default(ACTIVE)
+  accountNumber       String?
+  address             String?
+  contactPersonName   String?
+  contactAddress      String?
+  contactMobile       String?
+  contactEmail        String?
+  agreementDocUrl     String?
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  users              User[]
+  roles              Role[]
+  members            Member[]
+  settings           EdirSettings?
+  paymentLogs        PaymentLog[]
+  approvals          ApprovalRequest[]
+  notifications      Notification[]
+  auditLogs          AuditLog[]
+  emergencyTypes     EmergencyType[]
+  emergencyClaims    EmergencyClaim[]
+  events             Event[]
+  assetCategories    AssetCategory[]
+  assets             Asset[]
+  ruleChangeLogs     RuleChangeLog[]
+  bylaws             Bylaw[]
+  rulesVersions      RulesVersion[]
+  memberRequests     MemberRequest[]
+
+  @@index([branchId])
+}
+
+// ─── Bank Operational Structure ──────────────────────────────────────────────
+
+model District {
   id          String   @id @default(cuid())
-  name        String
+  name        String   @unique
+  code        String?  @unique
   description String?
-  logoUrl     String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  users         User[]
-  roles         Role[]
-  members       Member[]
-  settings      EdirSettings?
-  paymentLogs   PaymentLog[]
-  approvals     ApprovalRequest[]
-  notifications Notification[]
-  auditLogs     AuditLog[]
-  emergencyTypes EmergencyType[]
-  emergencyClaims EmergencyClaim[]
-  events        Event[]
-  assetCategories AssetCategory[]
-  assets        Asset[]
-  ruleChangeLogs RuleChangeLog[]
-  bylaws        Bylaw[]
-  rulesVersions RulesVersion[]
-  memberRequests MemberRequest[]
+  branches Branch[]
+  users    User[]   @relation("DistrictUsers")
+}
+
+model Branch {
+  id          String   @id @default(cuid())
+  districtId  String
+  district    District @relation(fields: [districtId], references: [id])
+  name        String
+  code        String?  @unique
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  edirs Edir[]
+  users User[] @relation("BranchUsers")
+
+  @@unique([districtId, name])
+  @@index([districtId])
 }
 
 model User {
@@ -65,30 +115,39 @@ model User {
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
 
-  roleId String?
-  role   Role?   @relation(fields: [roleId], references: [id])
-  edirId String?
-  edir   Edir?   @relation(fields: [edirId], references: [id])
+  roleId     String?
+  role       Role?      @relation(fields: [roleId], references: [id])
+  edirId     String?
+  edir       Edir?      @relation(fields: [edirId], references: [id])
+  branchId   String?
+  branch     Branch?    @relation("BranchUsers", fields: [branchId], references: [id])
+  districtId String?
+  district   District?  @relation("DistrictUsers", fields: [districtId], references: [id])
 
-  member               Member?               @relation("MemberLogin")
-  securityLogs         SecurityLog[]
-  notifications        Notification[]
-  auditLogs            AuditLog[]
-  approvalsMade        ApprovalRequest[]     @relation("ApprovalMaker")
-  approvalsChecked     ApprovalRequest[]     @relation("ApprovalChecker")
-  approvalEvents       ApprovalEvent[]
-  rulesAuthored        RulesVersion[]        @relation("RulesAuthor")
-  rulesApproved        RulesVersion[]        @relation("RulesApprover")
-  memberRequestsReviewed MemberRequest[]     @relation("MemberRequestReviewer")
+  member                    Member?               @relation("MemberLogin")
+  securityLogs              SecurityLog[]
+  notifications             Notification[]
+  auditLogs                 AuditLog[]
+  approvalsMade             ApprovalRequest[]     @relation("ApprovalMaker")
+  approvalsChecked          ApprovalRequest[]     @relation("ApprovalChecker")
+  approvalEvents            ApprovalEvent[]
+  rulesAuthored             RulesVersion[]        @relation("RulesAuthor")
+  rulesApproved             RulesVersion[]        @relation("RulesApprover")
+  memberRequestsReviewed    MemberRequest[]       @relation("MemberRequestReviewer")
 
   @@index([roleId])
   @@index([edirId])
   @@index([phone])
+  @@index([branchId])
+  @@index([districtId])
 }
 
 // Organizational scope of a role (system roles span all tenants).
 enum RoleScope {
   SUPER_ADMIN
+  HEAD_OFFICE
+  DISTRICT
+  BRANCH
   EDIR
 }
 
@@ -310,6 +369,9 @@ enum ApprovalModule {
   MEMBER_REMOVAL
   RULE_CHANGE
   PENALTY_WAIVER
+  EDIR_REGISTRATION
+  EDIR_UPDATE
+  USER_CREATION
 }
 
 enum ApprovalStatus {

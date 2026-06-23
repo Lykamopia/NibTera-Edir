@@ -69,8 +69,17 @@ export const pagePermissions: PagePermissionDef[] = [
     accessPermissions: [
       'view_approvals', 'approve_payment', 'approve_member_removal', 'approve_penalty_waiver',
       'approve_emergency_claim', 'approve_emergency_disbursement', 'approve_asset_issuance', 'approve_rule_change',
+      'approve_edir_registration', 'approve_edir_update', 'approve_user_creation',
     ],
     actions: [{ id: 'view_approvals', label: 'View Approvals', description: 'Access the Approvals Center', isAccess: true }],
+  },
+  {
+    id: 'edir-registration', label: 'Edir Registration', path: '/dashboard/edir-registration', icon: 'Building2', section: 'operations',
+    accessPermissions: ['register_edir', 'approve_edir_registration', 'super_admin'],
+    actions: [
+      { id: 'register_edir', label: 'Register Edir', description: 'Submit new Edir for registration (maker)', isAccess: true },
+      { id: 'approve_edir_registration', label: 'Approve Registration', description: 'Review and approve Edir registrations (checker)' },
+    ],
   },
   {
     id: 'emergencies', label: 'Emergencies', path: '/dashboard/emergencies', icon: 'Siren', section: 'operations',
@@ -166,7 +175,23 @@ export const pagePermissions: PagePermissionDef[] = [
       { id: 'manage_committee', label: 'Manage Committee', description: 'Invite/role/remove committee members' },
     ],
   },
-  // ── System (Super Admin) ─────────────────────────────────────────────────
+  // ── System (Super Admin / District & Branch Management) ─────────────────────
+  {
+    id: 'system-districts', label: 'Districts', path: '/dashboard/system/districts', icon: 'MapPin', section: 'system',
+    accessPermissions: ['manage_districts', 'super_admin'],
+    actions: [
+      { id: 'manage_districts', label: 'Create & Manage Districts', description: 'Create and manage districts', isAccess: true },
+      { id: 'view_districts', label: 'View Districts', description: 'View district information' },
+    ],
+  },
+  {
+    id: 'system-branches', label: 'Branches', path: '/dashboard/system/branches', icon: 'Building', section: 'system',
+    accessPermissions: ['manage_branches', 'manage_districts', 'super_admin'],
+    actions: [
+      { id: 'manage_branches', label: 'Create & Manage Branches', description: 'Create and manage branches within districts', isAccess: true },
+      { id: 'view_branches', label: 'View Branches', description: 'View branch information' },
+    ],
+  },
   {
     id: 'system-edirs', label: 'Edirs', path: '/dashboard/system/edirs', icon: 'Building2', section: 'system',
     accessPermissions: ['manage_edirs', 'super_admin'],
@@ -190,6 +215,9 @@ export const MODULE_CHECKER_PERMISSION: Record<ApprovalModule, Permission> = {
   MEMBER_REMOVAL: 'approve_member_removal',
   RULE_CHANGE: 'approve_rule_change',
   PENALTY_WAIVER: 'approve_penalty_waiver',
+  EDIR_REGISTRATION: 'approve_edir_registration',
+  EDIR_UPDATE: 'approve_edir_update',
+  USER_CREATION: 'approve_user_creation',
 };
 
 export const MODULE_LABEL: Record<ApprovalModule, string> = {
@@ -200,6 +228,9 @@ export const MODULE_LABEL: Record<ApprovalModule, string> = {
   MEMBER_REMOVAL: 'Member Removal',
   RULE_CHANGE: 'Rule Change',
   PENALTY_WAIVER: 'Penalty Waiver',
+  EDIR_REGISTRATION: 'Edir Registration',
+  EDIR_UPDATE: 'Edir Update',
+  USER_CREATION: 'User Creation',
 };
 
 // All access permissions that gate an admin/system page — used to decide whether
@@ -289,7 +320,12 @@ const ACTION_OVERRIDES: Partial<Record<Permission, ActionKind>> = {
   manage_committee: 'Assign',
   manage_associations: 'Assign',
   manage_edirs: 'Create',
+  manage_districts: 'Create',
+  manage_branches: 'Create',
   manage_asset_categories: 'Manage',
+  register_edir: 'Create',
+  view_branch_dashboard: 'View',
+  view_district_dashboard: 'View',
   super_admin: 'Other',
 };
 

@@ -12,7 +12,7 @@ const ROUTE_PERMISSIONS: { path: string; perms: string[] }[] = [
   { path: '/dashboard/people', perms: ['view_members', 'manage_members', 'view_users', 'manage_users', 'super_admin'] },
   { path: '/dashboard/members', perms: ['view_members', 'manage_members'] },
   { path: '/dashboard/payments', perms: ['view_payments', 'record_payment'] },
-  { path: '/dashboard/approvals', perms: ['view_approvals', 'approve_payment', 'approve_member_removal', 'approve_penalty_waiver', 'approve_emergency_claim', 'approve_emergency_disbursement', 'approve_asset_issuance', 'approve_rule_change'] },
+  { path: '/dashboard/approvals', perms: ['view_approvals', 'approve_payment', 'approve_member_removal', 'approve_penalty_waiver', 'approve_emergency_claim', 'approve_emergency_disbursement', 'approve_asset_issuance', 'approve_rule_change', 'approve_edir_registration', 'approve_edir_update', 'approve_user_creation'] },
   { path: '/dashboard/requests', perms: ['handle_member_requests'] },
   { path: '/dashboard/documents', perms: ['view_documents'] },
   { path: '/dashboard/emergencies', perms: ['view_emergencies', 'manage_emergencies'] },
@@ -25,8 +25,11 @@ const ROUTE_PERMISSIONS: { path: string; perms: string[] }[] = [
   { path: '/dashboard/admin/users', perms: ['view_users', 'manage_users'] },
   { path: '/dashboard/admin/roles', perms: ['view_roles', 'manage_roles'] },
   { path: '/dashboard/admin/settings', perms: ['manage_edir_settings', 'manage_committee'] },
+  { path: '/dashboard/system/districts', perms: ['manage_districts', 'super_admin'] },
+  { path: '/dashboard/system/branches', perms: ['manage_branches', 'manage_districts', 'super_admin'] },
   { path: '/dashboard/system/edirs', perms: ['manage_edirs', 'super_admin'] },
   { path: '/dashboard/system/associations', perms: ['manage_associations', 'manage_edirs', 'super_admin'] },
+  { path: '/dashboard/edir-registration', perms: ['register_edir', 'approve_edir_registration', 'super_admin'] },
 ].sort((a, b) => b.path.length - a.path.length);
 
 function generateCsp(nonce: string, framable: boolean) {

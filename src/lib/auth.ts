@@ -13,6 +13,15 @@ import { normalizeNibEmail, normalizeEthiopianPhone } from './utils';
 const MAX_FAILED_ATTEMPTS = parseInt(process.env.MAX_FAILED_LOGIN_ATTEMPTS || '5', 10);
 const LOCKOUT_DURATION_MINUTES = parseInt(process.env.LOCKOUT_DURATION_MINUTES || '15', 10);
 
+type OrgScope = 'HEAD_OFFICE' | 'DISTRICT' | 'BRANCH' | 'EDIR';
+
+function deriveOrgScope(edirId: string | null, branchId: string | null, districtId: string | null, isSuperAdmin: boolean): OrgScope {
+  if (isSuperAdmin || (!edirId && !branchId && !districtId)) return 'HEAD_OFFICE';
+  if (districtId && !branchId) return 'DISTRICT';
+  if (branchId && !edirId) return 'BRANCH';
+  return 'EDIR';
+}
+
 /**
  * Handles a failed login attempt: increments the counter and locks the account
  * once the threshold is reached.
@@ -174,7 +183,7 @@ export const authOptions: NextAuthOptions = {
       }
 
       if (user) { // Initial sign-in
-        const dbUser = await prisma.user.findUnique({ where: { id: user.id } });
+        const dbUser = await prisma.user.findUnique({ where: { id: user.id }, include: { role: true } });
         if (dbUser) {
           await prisma.user.update({
             where: { id: dbUser.id },
@@ -184,6 +193,12 @@ export const authOptions: NextAuthOptions = {
           token.onboardingCompleted = dbUser.onboardingCompleted;
           token.mustChangePassword = dbUser.mustChangePassword;
           token.edirId = dbUser.edirId;
+          token.branchId = dbUser.branchId;
+          token.districtId = dbUser.districtId;
+          const perms = (dbUser.role?.permissions ?? '').split(',').map(p => p.trim()).filter(Boolean);
+          token.permissions = perms;
+          token.isSuperAdmin = perms.includes('super_admin');
+          token.orgScope = deriveOrgScope(dbUser.edirId, dbUser.branchId, dbUser.districtId, token.isSuperAdmin);
         }
         token.id = user.id;
         token.ip = ipAddress;
@@ -218,16 +233,20 @@ export const authOptions: NextAuthOptions = {
         if (typeof token.tokenVersion !== 'number') return {};
         const dbUser = await prisma.user.findUnique({
           where: { id: token.id as string },
-          select: { tokenVersion: true, onboardingCompleted: true, mustChangePassword: true, edirId: true, role: { select: { permissions: true, scope: true } } },
+          select: { tokenVersion: true, onboardingCompleted: true, mustChangePassword: true, edirId: true, branchId: true, districtId: true, role: { select: { permissions: true, scope: true } } },
         });
         if (!dbUser || dbUser.tokenVersion !== token.tokenVersion) return {};
         token.onboardingCompleted = dbUser.onboardingCompleted;
         token.mustChangePassword = dbUser.mustChangePassword;
         token.edirId = dbUser.edirId;
+        token.branchId = dbUser.branchId;
+        token.districtId = dbUser.districtId;
         const perms = (dbUser.role?.permissions ?? '').split(',').map(p => p.trim()).filter(Boolean);
         token.permissions = perms;
         // Full access requires the `super_admin` master switch (not merely the scope).
         token.isSuperAdmin = perms.includes('super_admin');
+        // Derive organizational scope from user's branch/district/edir assignment.
+        token.orgScope = deriveOrgScope(dbUser.edirId, dbUser.branchId, dbUser.districtId, token.isSuperAdmin);
       }
 
       return token;
@@ -241,6 +260,9 @@ export const authOptions: NextAuthOptions = {
         (session.user as any).onboardingCompleted = token.onboardingCompleted;
         (session.user as any).mustChangePassword = token.mustChangePassword;
         (session.user as any).edirId = token.edirId;
+        (session.user as any).branchId = token.branchId;
+        (session.user as any).districtId = token.districtId;
+        (session.user as any).orgScope = token.orgScope;
         (session.user as any).showConcurrentAlert = token.showConcurrentAlert;
         (session.user as any).concurrentDetails = token.concurrentDetails;
       }

@@ -72,6 +72,20 @@ export type Permission =
   | 'reset_password'
   | 'lock_user'
   | 'unlock_user'
+  // District & Branch management
+  | 'manage_districts'
+  | 'view_districts'
+  | 'manage_branches'
+  | 'view_branches'
+  // Edir registration lifecycle
+  | 'register_edir'
+  | 'approve_edir_registration'
+  | 'approve_edir_update'
+  // User creation approval
+  | 'approve_user_creation'
+  // Scope dashboards
+  | 'view_branch_dashboard'
+  | 'view_district_dashboard'
   // System (Super Admin / platform)
   | 'manage_edirs'
   | 'manage_associations'
