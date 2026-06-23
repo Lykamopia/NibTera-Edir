@@ -11,7 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { submitEdirRegistration, getEdirRegistrations, type EdirRegistrationInput } from '@/app/actions/edir-registration';
 import { getBranches } from '@/app/actions/branches';
 import { type Actor } from '@/lib/tenant-scope';
-import { AlertCircle, Check, Clock, X } from 'lucide-react';
+import { AlertCircle, Check, Clock, X, Upload } from 'lucide-react';
 
 interface Branch {
   id: string;
@@ -34,8 +34,9 @@ interface Registration {
 
 const FORM_STEPS = [
   { id: 'details', label: 'Edir Details' },
-  { id: 'location', label: 'Branch/Location' },
-  { id: 'contact', label: 'Contact Person' },
+  { id: 'location', label: 'Branch/District' },
+  { id: 'contact', label: 'Chairperson Info' },
+  { id: 'address', label: 'Address Details' },
   { id: 'documents', label: 'Agreement' },
   { id: 'review', label: 'Review & Submit' },
 ];
@@ -49,7 +50,11 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
   const [success, setSuccess] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<'PENDING' | 'ACTIVE' | 'REJECTED' | 'RETURNED' | 'ALL'>('PENDING');
 
-  const [formData, setFormData] = useState<EdirRegistrationInput>({
+  const [formData, setFormData] = useState<EdirRegistrationInput & {
+    chairpersonName: string;
+    chairpersonMobile: string;
+    chairpersonEmail: string;
+  }>({
     name: '',
     description: '',
     address: '',
@@ -60,6 +65,9 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
     contactMobile: '',
     contactEmail: '',
     agreementDocUrl: '',
+    chairpersonName: '',
+    chairpersonMobile: '',
+    chairpersonEmail: '',
   });
 
   // Load branches
@@ -283,50 +291,84 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
               </div>
             )}
 
-            {/* Step 2: Contact Person */}
+            {/* Step 2: Chairperson Information */}
             {currentStep === 2 && (
               <div className="space-y-4">
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+                  <h3 className="font-semibold text-blue-900 mb-2">Edir Chairperson/Chief Information</h3>
+                  <p className="text-sm text-blue-800">Please provide details of the Edir's primary leadership contact</p>
+                </div>
                 <div>
-                  <label className="block text-sm font-medium mb-1">Contact Person Name</label>
+                  <label className="block text-sm font-medium mb-1">Chairperson/Contact Person Name *</label>
                   <Input
-                    name="contactPersonName"
-                    value={formData.contactPersonName}
+                    name="chairpersonName"
+                    value={formData.chairpersonName}
                     onChange={handleInputChange}
-                    placeholder="Chairperson or primary contact"
+                    placeholder="Full name of the Edir Chairperson"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium mb-1">Contact Address</label>
+                  <label className="block text-sm font-medium mb-1">Mobile Number *</label>
                   <Input
-                    name="contactAddress"
-                    value={formData.contactAddress}
-                    onChange={handleInputChange}
-                    placeholder="Contact's address"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium mb-1">Mobile Number</label>
-                  <Input
-                    name="contactMobile"
-                    value={formData.contactMobile}
+                    name="chairpersonMobile"
+                    value={formData.chairpersonMobile}
                     onChange={handleInputChange}
                     placeholder="+251 9xx xxx xxxx"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium mb-1">Email Address</label>
+                  <label className="block text-sm font-medium mb-1">Email Address *</label>
                   <Input
-                    name="contactEmail"
-                    value={formData.contactEmail}
+                    name="chairpersonEmail"
+                    value={formData.chairpersonEmail}
                     onChange={handleInputChange}
-                    placeholder="contact@edir.com"
+                    placeholder="chairperson@edir.com"
                   />
                 </div>
               </div>
             )}
 
-            {/* Step 3: Agreement Document */}
+            {/* Step 3: Address Details */}
             {currentStep === 3 && (
+              <div className="space-y-4">
+                <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-6">
+                  <h3 className="font-semibold text-green-900 mb-2">Edir & Contact Address</h3>
+                  <p className="text-sm text-green-800">Provide both the Edir location and chairperson's contact address</p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Edir Address/Location *</label>
+                  <Textarea
+                    name="address"
+                    value={formData.address}
+                    onChange={handleInputChange}
+                    placeholder="Street name, building number, neighborhood"
+                    rows={2}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Account/Bank Number *</label>
+                  <Input
+                    name="accountNumber"
+                    value={formData.accountNumber}
+                    onChange={handleInputChange}
+                    placeholder="e.g., 1234567890"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Chairperson Contact Address</label>
+                  <Textarea
+                    name="contactAddress"
+                    value={formData.contactAddress}
+                    onChange={handleInputChange}
+                    placeholder="Street name, building number, neighborhood"
+                    rows={2}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Step 4: Agreement Document */}
+            {currentStep === 4 && (
               <div className="space-y-4">
                 <div>
                   <label className="block text-sm font-medium mb-1">Agreement Document (PDF)</label>
@@ -362,37 +404,89 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
               </div>
             )}
 
-            {/* Step 4: Review & Submit */}
-            {currentStep === 4 && (
+            {/* Step 5: Review & Submit */}
+            {currentStep === 5 && (
               <div className="space-y-6">
-                <div className="bg-gray-50 rounded-lg p-4 space-y-4">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <p className="text-sm text-gray-600">Edir Name</p>
-                      <p className="font-medium">{formData.name}</p>
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-600">Branch</p>
-                      <p className="font-medium">{branches.find(b => b.id === formData.branchId)?.name}</p>
-                    </div>
-                    {formData.description && (
-                      <div className="col-span-2">
-                        <p className="text-sm text-gray-600">Description</p>
-                        <p className="font-medium">{formData.description}</p>
+                <div className="bg-gray-50 rounded-lg p-4 space-y-6">
+                  {/* Edir Details */}
+                  <div className="border-b pb-4">
+                    <h4 className="font-semibold text-gray-900 mb-3">Edir Information</h4>
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div>
+                        <p className="text-gray-600">Edir Name</p>
+                        <p className="font-medium">{formData.name}</p>
                       </div>
-                    )}
-                    {formData.contactPersonName && (
-                      <div className="col-span-2">
-                        <p className="text-sm text-gray-600">Contact Person</p>
-                        <p className="font-medium">{formData.contactPersonName}</p>
+                      <div>
+                        <p className="text-gray-600">Branch</p>
+                        <p className="font-medium">{branches.find(b => b.id === formData.branchId)?.name}</p>
                       </div>
-                    )}
+                      <div>
+                        <p className="text-gray-600">Account Number</p>
+                        <p className="font-medium">{formData.accountNumber || 'N/A'}</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-600">Edir Address</p>
+                        <p className="font-medium">{formData.address || 'N/A'}</p>
+                      </div>
+                      {formData.description && (
+                        <div className="col-span-2">
+                          <p className="text-gray-600">Description</p>
+                          <p className="font-medium">{formData.description}</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Chairperson Details */}
+                  <div className="border-b pb-4">
+                    <h4 className="font-semibold text-gray-900 mb-3">Chairperson/Contact Information</h4>
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div>
+                        <p className="text-gray-600">Chairperson Name</p>
+                        <p className="font-medium">{formData.chairpersonName || 'N/A'}</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-600">Mobile Number</p>
+                        <p className="font-medium">{formData.chairpersonMobile || 'N/A'}</p>
+                      </div>
+                      <div className="col-span-2">
+                        <p className="text-gray-600">Email Address</p>
+                        <p className="font-medium">{formData.chairpersonEmail || 'N/A'}</p>
+                      </div>
+                      {formData.contactAddress && (
+                        <div className="col-span-2">
+                          <p className="text-gray-600">Contact Address</p>
+                          <p className="font-medium">{formData.contactAddress}</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Agreement Document */}
+                  <div>
+                    <h4 className="font-semibold text-gray-900 mb-3">Agreement Document</h4>
+                    <div className="text-sm">
+                      <p className="text-gray-600">Uploaded Document</p>
+                      <p className="font-medium text-blue-600">
+                        {formData.agreementDocUrl ? (
+                          <>
+                            <Check className="w-4 h-4 inline mr-1 text-green-600" />
+                            {formData.agreementDocUrl}
+                          </>
+                        ) : (
+                          'No document uploaded'
+                        )}
+                      </p>
+                    </div>
                   </div>
                 </div>
-                <Alert>
-                  <AlertCircle className="h-4 w-4" />
-                  <AlertDescription>
-                    Your registration will be submitted for approval. The approver will review all details and contact information.
+
+                <Alert className="bg-blue-50 border-blue-200">
+                  <AlertCircle className="h-4 w-4 text-blue-600" />
+                  <AlertDescription className="text-blue-900">
+                    <strong>Maker-Checker Workflow:</strong> Your registration will be submitted for approval by an authorized reviewer.
+                    The approver will review all details, verify the agreement document, and either approve (Edir becomes ACTIVE) or
+                    return it for revision. You will receive notifications on approval status.
                   </AlertDescription>
                 </Alert>
               </div>
