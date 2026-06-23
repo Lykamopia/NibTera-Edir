@@ -25,6 +25,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { PageHeader, LoadingState, EmptyState, StatCard } from '@/components/ui/states';
+import { Pagination, usePagination } from '@/components/ui/pagination';
 import { submitEdirRegistration, getEdirRegistrations, type EdirRegistrationInput } from '@/app/actions/edir-registration';
 import { getBranches } from '@/app/actions/branches';
 import { getEdirs } from '@/app/actions/admin';
@@ -209,6 +210,8 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
 
   const totalMembers = edirs.reduce((sum, e) => sum + e.members, 0);
   const totalUsers = edirs.reduce((sum, e) => sum + e.users, 0);
+  const edirsPage = usePagination(edirs, 10);
+  const regsPage = usePagination(registrations, 10);
 
   return (
     <div className="space-y-6">
@@ -265,7 +268,7 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {edirs.map(edir => (
+                    {edirsPage.pageItems.map(edir => (
                       <TableRow key={edir.id}>
                         <TableCell className="font-medium">{edir.name}</TableCell>
                         <TableCell className="max-w-md truncate text-muted-foreground">{edir.description || '—'}</TableCell>
@@ -277,6 +280,11 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
                 </Table>
               )}
             </CardContent>
+            {edirs.length > 0 && (
+              <div className="border-t p-4">
+                <Pagination page={edirsPage.page} pageCount={edirsPage.pageCount} total={edirsPage.total} pageSize={10} itemLabel="Edir" onPageChange={edirsPage.setPage} />
+              </div>
+            )}
           </Card>
         </TabsContent>
 
@@ -535,7 +543,7 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {registrations.map(reg => (
+                      {regsPage.pageItems.map(reg => (
                         <TableRow key={reg.id}>
                           <TableCell className="font-medium">{reg.name}</TableCell>
                           <TableCell className="text-muted-foreground">{reg.branchName}</TableCell>
@@ -548,6 +556,9 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
                       ))}
                     </TableBody>
                   </Table>
+                  <div className="pt-4">
+                    <Pagination page={regsPage.page} pageCount={regsPage.pageCount} total={regsPage.total} pageSize={10} itemLabel="registration" onPageChange={regsPage.setPage} />
+                  </div>
                 </div>
               )}
             </CardContent>

@@ -230,11 +230,29 @@ export async function getPaymentLogs(params: { status?: string; query?: string; 
   const pageSize = 25;
   const where = paymentLogWhere(actor, params);
   const [items, total] = await Promise.all([
-    prisma.paymentLog.findMany({ where, include: { member: true }, orderBy: { createdAt: 'desc' }, skip: (page - 1) * pageSize, take: pageSize }),
+    prisma.paymentLog.findMany({
+      where,
+      include: { member: { select: { name: true, memberId: true, phone: true } }, edir: { select: { name: true } } },
+      orderBy: { createdAt: 'desc' }, skip: (page - 1) * pageSize, take: pageSize,
+    }),
     prisma.paymentLog.count({ where }),
   ]);
   return {
-    items: items.map(l => ({ ...l, amount: Number(l.amount), memberName: l.member?.name ?? null })),
+    items: items.map(l => ({
+      id: l.id,
+      transactionId: l.transactionId,
+      amount: Number(l.amount),
+      method: l.method,
+      status: l.status,
+      description: l.description,
+      receiptUrl: l.receiptUrl,
+      verificationType: l.verificationType,
+      createdAt: l.createdAt,
+      memberName: l.member?.name ?? null,
+      memberCode: l.member?.memberId ?? null,
+      memberPhone: l.member?.phone ?? null,
+      edirName: l.edir?.name ?? null,
+    })),
     total, page, pages: Math.ceil(total / pageSize),
   };
 }

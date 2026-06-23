@@ -15,6 +15,7 @@ import {
   ChevronUp, ChevronDown, ArrowUpDown, AlertTriangle, Sparkles,
 } from 'lucide-react';
 import { PageHeader, StatCard, LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
+import { Pagination, usePagination } from '@/components/ui/pagination';
 import { getMembers } from '@/app/actions/members';
 import { getMemberOutstanding, recordManualPayment, getPaymentsSummary } from '@/app/actions/payments';
 
@@ -57,6 +58,8 @@ export default function PaymentsClient() {
     });
     return r;
   }, [items, filter, sort]);
+
+  const { page, setPage, pageCount, pageItems, total } = usePagination(rows, 12);
 
   const toggleSort = (key: SortKey) => setSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: key === 'balance' ? 'desc' : 'asc' });
   const SortIcon = ({ k }: { k: SortKey }) => sort.key !== k ? <ArrowUpDown className="h-3.5 w-3.5 opacity-40" /> : sort.dir === 'asc' ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />;
@@ -115,7 +118,7 @@ export default function PaymentsClient() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {rows.map(m => {
+                {pageItems.map(m => {
                   const b = bal(m);
                   return (
                     <TableRow key={m.id} className="group">
@@ -134,7 +137,7 @@ export default function PaymentsClient() {
           )}
         </CardContent>
       </Card>
-      <p className="text-xs text-muted-foreground">{rows.length} member(s){filter !== 'all' ? ` · ${filter}` : ''}</p>
+      <Pagination page={page} pageCount={pageCount} total={total} pageSize={12} itemLabel="member" onPageChange={setPage} />
 
       {target && <RecordDialog member={target} onClose={() => setTarget(null)} onDone={() => { setTarget(null); load(); }} />}
     </div>

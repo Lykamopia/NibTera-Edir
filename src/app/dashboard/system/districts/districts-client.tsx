@@ -24,6 +24,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { PageHeader, LoadingState, EmptyState, StatCard } from '@/components/ui/states';
+import { Pagination, usePagination } from '@/components/ui/pagination';
 import { useConfirm } from '@/components/ui/confirm-provider';
 import { getDistricts, saveDistrict, deleteDistrict } from '@/app/actions/districts';
 import { MapPin, Plus, Pencil, Trash2, Building, Network } from 'lucide-react';
@@ -119,6 +120,7 @@ export default function DistrictsClient() {
   };
 
   const totalBranches = districts.reduce((sum, d) => sum + d.branches, 0);
+  const { page, setPage, pageCount, pageItems, total } = usePagination(districts, 10);
 
   return (
     <div className="space-y-6">
@@ -172,7 +174,7 @@ export default function DistrictsClient() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {districts.map(district => (
+                {pageItems.map(district => (
                   <TableRow key={district.id}>
                     <TableCell className="font-medium">{district.name}</TableCell>
                     <TableCell>
@@ -204,6 +206,11 @@ export default function DistrictsClient() {
             </Table>
           )}
         </CardContent>
+        {!loading && districts.length > 0 && (
+          <div className="border-t p-4">
+            <Pagination page={page} pageCount={pageCount} total={total} pageSize={10} itemLabel="district" onPageChange={setPage} />
+          </div>
+        )}
       </Card>
 
       <Dialog open={open} onOpenChange={setOpen}>

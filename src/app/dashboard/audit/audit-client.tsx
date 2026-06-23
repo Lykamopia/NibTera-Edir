@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Loader2, Search, Download, ScrollText, Archive } from 'lucide-react';
+import { Pagination } from '@/components/ui/pagination';
 import { getAuditLogs, exportAuditCsv, archiveAuditLog } from '@/app/actions/admin';
 
 const downloadCsv = (csv: string, name: string) => {
@@ -103,14 +104,7 @@ export default function AuditClient() {
         </CardContent>
       </Card>
 
-      <div className="flex items-center justify-between text-sm text-muted-foreground">
-        <span>{total} entr{total === 1 ? 'y' : 'ies'}</span>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>Previous</Button>
-          <span>Page {page} of {pages}</span>
-          <Button variant="outline" size="sm" disabled={page >= pages} onClick={() => setPage(p => p + 1)}>Next</Button>
-        </div>
-      </div>
+      <Pagination page={page} pageCount={pages} total={total} pageSize={25} itemLabel="entry" itemLabelPlural="entries" onPageChange={setPage} />
     </div>
   );
 }

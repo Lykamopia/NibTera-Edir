@@ -31,6 +31,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { PageHeader, LoadingState, EmptyState, StatCard } from '@/components/ui/states';
+import { Pagination, usePagination } from '@/components/ui/pagination';
 import { useConfirm } from '@/components/ui/confirm-provider';
 import { getBranches, saveBranch, deleteBranch } from '@/app/actions/branches';
 import { getDistricts } from '@/app/actions/districts';
@@ -143,6 +144,7 @@ export default function BranchesClient({ actor }: { actor: Actor }) {
   const totalEdirs = branches.reduce((sum, b) => sum + b.edirs, 0);
   const districtsCovered = new Set(branches.map(b => b.districtId)).size;
   const isDistrictScope = actor.orgScope === 'DISTRICT';
+  const { page, setPage, pageCount, pageItems, total } = usePagination(branches, 10);
 
   return (
     <div className="space-y-6">
@@ -194,7 +196,7 @@ export default function BranchesClient({ actor }: { actor: Actor }) {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {branches.map(branch => (
+                {pageItems.map(branch => (
                   <TableRow key={branch.id}>
                     <TableCell className="font-medium">{branch.name}</TableCell>
                     <TableCell>
@@ -227,6 +229,11 @@ export default function BranchesClient({ actor }: { actor: Actor }) {
             </Table>
           )}
         </CardContent>
+        {!loading && branches.length > 0 && (
+          <div className="border-t p-4">
+            <Pagination page={page} pageCount={pageCount} total={total} pageSize={10} itemLabel="branch" itemLabelPlural="branches" onPageChange={setPage} />
+          </div>
+        )}
       </Card>
 
       <Dialog open={open} onOpenChange={setOpen}>
