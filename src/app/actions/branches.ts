@@ -1,9 +1,9 @@
 'use server';
 
-import { getActor, assertPermission, requireActor, tenantWhere } from '@/lib/tenant-scope';
+import { getActor, assertPermission } from '@/lib/tenant-scope';
 import prisma from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
-import { writeAudit } from '@/lib/audit-logger';
+import { writeAudit } from '@/lib/audit';
 
 function failure(error: unknown): { success: false; error: string } {
   console.error('Branch action error:', error);

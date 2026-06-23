@@ -1,10 +1,10 @@
 'use server';
 
-import { getActor, assertPermission, resolveEdirId, assertSameTenant } from '@/lib/tenant-scope';
+import { getActor, assertPermission } from '@/lib/tenant-scope';
 import prisma from '@/lib/prisma';
 import { submitForApproval } from '@/lib/approval-engine';
 import { revalidatePath } from 'next/cache';
-import { writeAudit } from '@/lib/audit-logger';
+import { writeAudit } from '@/lib/audit';
 
 function failure(error: unknown): { success: false; error: string } {
   console.error('Edir registration error:', error);
