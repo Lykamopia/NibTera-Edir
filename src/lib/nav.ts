@@ -8,7 +8,7 @@ export const IMPLEMENTED_PAGES = new Set<string>([
   'people', // unified Members + Users + Associations (adapts to role)
   'payments',
   'approvals',
-  'edir-registration', // Edir registration with maker-checker workflow
+  'edir-registration', // Unified Edir management: browse directory, register new, track submissions
   'member-requests',
   'emergencies',
   'events',
@@ -22,7 +22,6 @@ export const IMPLEMENTED_PAGES = new Set<string>([
   'admin-settings',
   'system-districts', // District management (Super Admin / DISTRICT scope)
   'system-branches', // Branch management (Super Admin / DISTRICT scope)
-  'system-edirs',
   'system-associations', // standalone access for limited platform roles (manage_associations)
 ]);
 

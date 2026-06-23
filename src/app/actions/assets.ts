@@ -55,7 +55,7 @@ export async function saveAssetCategory(input: z.infer<typeof categorySchema>) {
     if (data.id) {
       const existing = await prisma.assetCategory.findUnique({ where: { id: data.id } });
       if (!existing) return { success: false as const, error: 'Category not found.' };
-      assertSameTenant(actor, existing.edirId);
+      await assertSameTenant(actor, existing.edirId);
       await prisma.assetCategory.update({ where: { id: data.id }, data: { name: data.name } });
     } else {
       await prisma.assetCategory.create({ data: { edirId, name: data.name } });
@@ -73,7 +73,7 @@ export async function deleteAssetCategory(id: string) {
     const { actor, edirId } = await requireActor('manage_asset_categories');
     const existing = await prisma.assetCategory.findUnique({ where: { id } });
     if (!existing) return { success: false as const, error: 'Category not found.' };
-    assertSameTenant(actor, existing.edirId);
+    await assertSameTenant(actor, existing.edirId);
     await prisma.assetCategory.delete({ where: { id } }); // assets keep history (categoryId set null)
     await writeAudit({ edirId, userId: actor.id, action: 'ASSET_CATEGORY_DELETED', targetType: 'AssetCategory', targetId: id, details: existing.name });
     revalidatePath('/dashboard/assets');
@@ -129,7 +129,7 @@ export async function saveAsset(input: z.infer<typeof assetSchema>) {
     if (data.id) {
       const existing = await prisma.asset.findUnique({ where: { id: data.id } });
       if (!existing) return { success: false as const, error: 'Asset not found.' };
-      assertSameTenant(actor, existing.edirId);
+      await assertSameTenant(actor, existing.edirId);
       if (data.quantity < existing.issuedQuantity) {
         return { success: false as const, error: `Quantity cannot be below the ${existing.issuedQuantity} already issued.` };
       }
@@ -166,7 +166,7 @@ export async function deleteAsset(id: string) {
     const { actor, edirId } = await requireActor('manage_assets');
     const existing = await prisma.asset.findUnique({ where: { id }, include: { _count: { select: { issuances: true } } } });
     if (!existing) return { success: false as const, error: 'Asset not found.' };
-    assertSameTenant(actor, existing.edirId);
+    await assertSameTenant(actor, existing.edirId);
     if (existing.issuedQuantity > 0) return { success: false as const, error: 'Return all issued units before deleting this asset.' };
     await prisma.asset.delete({ where: { id } });
     await writeAudit({ edirId, userId: actor.id, action: 'ASSET_DELETED', targetType: 'Asset', targetId: id, details: existing.name });
@@ -230,7 +230,7 @@ export async function requestIssuance(input: z.infer<typeof issueSchema>) {
 
     const asset = await prisma.asset.findUnique({ where: { id: data.assetId } });
     if (!asset) return { success: false as const, error: 'Asset not found.' };
-    assertSameTenant(actor, asset.edirId);
+    await assertSameTenant(actor, asset.edirId);
     const available = asset.quantity - asset.issuedQuantity;
     if (data.qty > available) return { success: false as const, error: `Only ${available} unit(s) available.` };
 
@@ -279,7 +279,7 @@ export async function recordReturn(input: z.infer<typeof returnSchema>) {
 
     const issuance = await prisma.assetIssuance.findUnique({ where: { id: data.issuanceId }, include: { asset: true, member: true } });
     if (!issuance) return { success: false as const, error: 'Issuance not found.' };
-    assertSameTenant(actor, issuance.asset.edirId);
+    await assertSameTenant(actor, issuance.asset.edirId);
     if (issuance.status !== 'ISSUED') return { success: false as const, error: 'Only issued assets can be returned.' };
     if (data.returnedQty > issuance.issuedQty) return { success: false as const, error: `Cannot return more than the ${issuance.issuedQty} issued.` };
 

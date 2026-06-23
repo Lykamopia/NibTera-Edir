@@ -120,7 +120,7 @@ export async function proposeBylawChange(input: z.infer<typeof bylawSchema>) {
     if (data.id) {
       const existing = await prisma.bylaw.findUnique({ where: { id: data.id } });
       if (!existing) return { success: false as const, error: 'Bylaw not found.' };
-      assertSameTenant(actor, existing.edirId);
+      await assertSameTenant(actor, existing.edirId);
       previous = { title: existing.title, content: existing.content, section: existing.section };
     }
 
@@ -153,7 +153,7 @@ export async function proposeBylawDeletion(bylawId: string, comment?: string) {
     const { actor, edirId } = await requireActor('manage_rules');
     const existing = await prisma.bylaw.findUnique({ where: { id: bylawId } });
     if (!existing) return { success: false as const, error: 'Bylaw not found.' };
-    assertSameTenant(actor, existing.edirId);
+    await assertSameTenant(actor, existing.edirId);
 
     const requestId = await submitForApproval(actor, {
       edirId,

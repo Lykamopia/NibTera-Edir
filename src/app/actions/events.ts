@@ -76,7 +76,7 @@ export async function getEvent(id: string) {
     },
   });
   if (!event) return null;
-  assertSameTenant(actor, event.edirId);
+  await assertSameTenant(actor, event.edirId);
   return {
     id: event.id,
     title: event.title,
@@ -117,7 +117,7 @@ export async function saveEvent(input: z.infer<typeof eventSchema>) {
     if (data.id) {
       const existing = await prisma.event.findUnique({ where: { id: data.id } });
       if (!existing) return { success: false as const, error: 'Event not found.' };
-      assertSameTenant(actor, existing.edirId);
+      await assertSameTenant(actor, existing.edirId);
       if (existing.status === 'COMPLETED') return { success: false as const, error: 'A finalized event cannot be edited.' };
       await prisma.event.update({
         where: { id: data.id },
@@ -151,7 +151,7 @@ export async function cancelEvent(id: string) {
     const { actor, edirId } = await requireActor('manage_events');
     const event = await prisma.event.findUnique({ where: { id } });
     if (!event) return { success: false as const, error: 'Event not found.' };
-    assertSameTenant(actor, event.edirId);
+    await assertSameTenant(actor, event.edirId);
     if (event.status === 'COMPLETED') return { success: false as const, error: 'A finalized event cannot be cancelled.' };
     await prisma.event.update({ where: { id }, data: { status: 'CANCELLED' } });
     await writeAudit({ edirId, userId: actor.id, action: 'EVENT_CANCELLED', targetType: 'Event', targetId: id, details: event.title });
@@ -169,7 +169,7 @@ export async function addParticipants(eventId: string, memberIds: string[]) {
     const { actor, edirId } = await requireActor('manage_events');
     const event = await prisma.event.findUnique({ where: { id: eventId } });
     if (!event) return { success: false as const, error: 'Event not found.' };
-    assertSameTenant(actor, event.edirId);
+    await assertSameTenant(actor, event.edirId);
     if (event.status !== 'SCHEDULED') return { success: false as const, error: 'Participants can only be added to scheduled events.' };
 
     // Only members of this tenant are eligible.
@@ -202,7 +202,7 @@ export async function removeParticipant(participantId: string) {
     const { actor, edirId } = await requireActor('manage_events');
     const participant = await prisma.eventParticipant.findUnique({ where: { id: participantId }, include: { event: true } });
     if (!participant) return { success: false as const, error: 'Participant not found.' };
-    assertSameTenant(actor, participant.event.edirId);
+    await assertSameTenant(actor, participant.event.edirId);
     if (participant.event.status !== 'SCHEDULED') return { success: false as const, error: 'Participants can only be removed from scheduled events.' };
     if (participant.penalized) return { success: false as const, error: 'A penalized participant cannot be removed.' };
     await prisma.eventParticipant.delete({ where: { id: participantId } });
@@ -222,7 +222,7 @@ export async function setAttendance(participantId: string, status: (typeof atten
     if (!attendanceStatuses.includes(status)) return { success: false as const, error: 'Invalid status.' };
     const participant = await prisma.eventParticipant.findUnique({ where: { id: participantId }, include: { event: true } });
     if (!participant) return { success: false as const, error: 'Participant not found.' };
-    assertSameTenant(actor, participant.event.edirId);
+    await assertSameTenant(actor, participant.event.edirId);
     if (participant.event.status === 'COMPLETED') return { success: false as const, error: 'Attendance is locked for a finalized event.' };
     await prisma.eventParticipant.update({ where: { id: participantId }, data: { status } });
     revalidatePath('/dashboard/events');
@@ -248,7 +248,7 @@ export async function finalizeAttendance(eventId: string) {
       include: { participants: { where: { status: 'ABSENT', penalized: false }, include: { member: { select: { id: true, name: true, userId: true } } } } },
     });
     if (!event) return { success: false as const, error: 'Event not found.' };
-    assertSameTenant(actor, event.edirId);
+    await assertSameTenant(actor, event.edirId);
     if (event.status !== 'SCHEDULED') return { success: false as const, error: 'Only a scheduled event can be finalized.' };
 
     const penalty = Number(event.absencePenalty);

@@ -83,7 +83,7 @@ export async function inviteUser(input: z.infer<typeof inviteSchema>) {
     if (actor.isSuperAdmin && !data.edirId) {
       return { success: false as const, error: 'Select an Edir for the new user.' };
     }
-    const edirId = resolveEdirId(actor, data.edirId);
+    const edirId = await resolveEdirId(actor, data.edirId);
     if (!isValidEthiopianPhone(data.phone)) return { success: false as const, error: 'Enter a valid Ethiopian phone number.' };
     const phone = normalizeEthiopianPhone(data.phone);
     const email = data.email.toLowerCase().trim();
@@ -134,7 +134,7 @@ export async function setUserRole(userId: string, roleId: string | null) {
     await assertPermission(actor, 'manage_users');
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (!user) return { success: false as const, error: 'User not found.' };
-    assertSameTenant(actor, user.edirId);
+    await assertSameTenant(actor, user.edirId);
     if (roleId) {
       const role = await prisma.role.findUnique({ where: { id: roleId }, select: { scope: true, edirId: true } });
       if (!role) return { success: false as const, error: 'Role not found.' };
@@ -156,7 +156,7 @@ export async function setUserStatus(userId: string, status: 'ACTIVE' | 'INACTIVE
     await assertPermission(actor, 'manage_users');
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (!user) return { success: false as const, error: 'User not found.' };
-    assertSameTenant(actor, user.edirId);
+    await assertSameTenant(actor, user.edirId);
     await prisma.user.update({ where: { id: userId }, data: { status, tokenVersion: { increment: 1 } } });
     await writeAudit({ edirId: user.edirId, userId: actor.id, action: 'USER_STATUS_CHANGED', targetType: 'User', targetId: userId, details: `→ ${status}` });
     revalidatePath('/dashboard/admin/users');
@@ -174,7 +174,7 @@ async function setUserLock(userId: string, lock: boolean) {
     await assertPermission(actor, lock ? 'lock_user' : 'unlock_user');
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (!user) return { success: false as const, error: 'User not found.' };
-    assertSameTenant(actor, user.edirId);
+    await assertSameTenant(actor, user.edirId);
     await prisma.user.update({
       where: { id: userId },
       data: { lockoutUntil: lock ? new Date(Date.now() + 365 * 24 * 60 * 60 * 1000) : null, failedLoginAttempts: 0 },
@@ -193,7 +193,7 @@ export async function adminResetUserPassword(userId: string) {
     await assertPermission(actor, 'reset_password');
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (!user?.email) return { success: false as const, error: 'User has no email for reset.' };
-    assertSameTenant(actor, user.edirId);
+    await assertSameTenant(actor, user.edirId);
     const token = crypto.randomBytes(32).toString('hex');
     await prisma.passwordResetToken.upsert({
       where: { email: user.email },
@@ -285,7 +285,7 @@ export async function deleteRole(id: string) {
     await assertPermission(actor, 'manage_roles');
     const role = await prisma.role.findUnique({ where: { id }, include: { _count: { select: { users: true } } } });
     if (!role) return { success: false as const, error: 'Role not found.' };
-    if (!actor.isSuperAdmin) assertSameTenant(actor, role.edirId);
+    if (!actor.isSuperAdmin) await assertSameTenant(actor, role.edirId);
     if (role._count.users > 0) return { success: false as const, error: 'Cannot delete a role still assigned to users.' };
     await prisma.role.delete({ where: { id } });
     await writeAudit({ edirId: role.edirId, userId: actor.id, action: 'ROLE_DELETED', targetType: 'Role', targetId: id, details: role.name });
@@ -341,7 +341,7 @@ export async function saveEdir(input: { id?: string; name: string; description?:
       await ensureDefaultEdirRoles(edir.id); // so the Edir can be staffed & configured immediately
     }
     await writeAudit({ userId: actor.id, action: 'EDIR_SAVED', targetType: 'Edir', targetId: input.id ?? null, details: name });
-    revalidatePath('/dashboard/system/edirs');
+    revalidatePath('/dashboard/edir-registration');
     return { success: true as const };
   } catch (error) {
     return failure(error);
@@ -387,7 +387,7 @@ export async function archiveAuditLog(id: string) {
     const { actor, edirId } = await requireActor('manage_audit_log');
     const log = await prisma.auditLog.findUnique({ where: { id } });
     if (!log) return { success: false as const, error: 'Audit entry not found.' };
-    if (log.edirId) assertSameTenant(actor, log.edirId);
+    if (log.edirId) await assertSameTenant(actor, log.edirId);
     await prisma.auditLog.update({ where: { id }, data: { archived: true } });
     await writeAudit({ edirId, userId: actor.id, action: 'AUDIT_ENTRY_ARCHIVED', targetType: 'AuditLog', targetId: id });
     revalidatePath('/dashboard/audit');

@@ -42,7 +42,7 @@ function serialize(v: any, reqStatus?: string) {
 export async function getCurrentRules() {
   const actor = await getActor();
   await assertPermission(actor, ['view_rules', 'manage_rules']);
-  const edirId = resolveEdirId(actor);
+  const edirId = await resolveEdirId(actor);
   const v = await prisma.rulesVersion.findFirst({
     where: { edirId, status: 'APPROVED' },
     include: { author: true, approver: true, attachments: true },
@@ -55,7 +55,7 @@ export async function getCurrentRules() {
 export async function getRulesHistory() {
   const actor = await getActor();
   await assertPermission(actor, ['view_rules', 'manage_rules']);
-  const edirId = resolveEdirId(actor);
+  const edirId = await resolveEdirId(actor);
   const versions = await prisma.rulesVersion.findMany({
     where: { edirId },
     include: { author: true, approver: true, attachments: true },
@@ -71,7 +71,7 @@ export async function getRulesPage() {
   const actor = await getActor();
   await assertPermission(actor, ['view_rules', 'manage_rules']);
   if (actor.isSuperAdmin && !actor.activeEdirId) return { needsEdir: true as const, canManage: false, current: null, history: [] as any[] };
-  const edirId = resolveEdirId(actor);
+  const edirId = await resolveEdirId(actor);
   const versions = await prisma.rulesVersion.findMany({
     where: { edirId },
     include: { author: true, approver: true, attachments: true },
@@ -89,7 +89,7 @@ export async function getRulesVersion(id: string) {
   await assertPermission(actor, ['view_rules', 'manage_rules']);
   const v = await prisma.rulesVersion.findUnique({ where: { id }, include: { author: true, approver: true, attachments: true } });
   if (!v) return null;
-  assertSameTenant(actor, v.edirId);
+  await assertSameTenant(actor, v.edirId);
   const reqMap = await openRequestMap([v.id]);
   return serialize(v, reqMap.get(v.id));
 }
@@ -146,7 +146,7 @@ export async function cloneCurrentToDraft() {
 async function loadEditableDraft(actor: Awaited<ReturnType<typeof getActor>>, id: string) {
   const v = await prisma.rulesVersion.findUnique({ where: { id } });
   if (!v) return { error: 'Version not found.' as const };
-  assertSameTenant(actor, v.edirId);
+  await assertSameTenant(actor, v.edirId);
   if (v.status !== 'DRAFT') return { error: 'Only draft versions can be edited.' as const };
   const open = await prisma.approvalRequest.count({ where: { module: 'RULE_CHANGE', targetType: 'RulesVersion', targetId: id, status: OPEN } });
   if (open > 0) return { error: 'This version is awaiting approval and cannot be edited.' as const };
@@ -234,7 +234,7 @@ export async function removeRulesAttachment(attachmentId: string) {
     const { actor, edirId } = await requireActor('manage_rules');
     const att = await prisma.rulesAttachment.findUnique({ where: { id: attachmentId }, include: { version: true } });
     if (!att) return { success: false as const, error: 'Attachment not found.' };
-    assertSameTenant(actor, att.version.edirId);
+    await assertSameTenant(actor, att.version.edirId);
     if (att.version.status !== 'DRAFT') return { success: false as const, error: 'Attachments can only be changed on a draft.' };
     await prisma.rulesAttachment.delete({ where: { id: attachmentId } });
     await writeAudit({ edirId, userId: actor.id, action: 'RULES_ATTACHMENT_REMOVED', targetType: 'RulesVersion', targetId: att.versionId });
@@ -249,7 +249,7 @@ export async function removeRulesAttachment(attachmentId: string) {
 export async function searchRules(query: string) {
   const actor = await getActor();
   await assertPermission(actor, ['view_rules', 'manage_rules']);
-  const edirId = resolveEdirId(actor);
+  const edirId = await resolveEdirId(actor);
   const q = query.trim().toLowerCase();
   if (!q) return [];
   const versions = await prisma.rulesVersion.findMany({ where: { edirId }, orderBy: { createdAt: 'desc' } });

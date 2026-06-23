@@ -10,9 +10,5 @@ export default async function EdirRegistrationPage() {
     redirect('/forbidden');
   }
 
-  return (
-    <div className="container mx-auto py-8">
-      <RegistrationClient actor={actor} />
-    </div>
-  );
+  return <RegistrationClient actor={actor} />;
 }

@@ -54,7 +54,7 @@ export async function getRuleConfig() {
   const actor = await getActor();
   await assertPermission(actor, 'manage_edir_settings');
   if (actor.isSuperAdmin && !actor.activeEdirId) return { needsEdir: true as const, settings: null, emergencyTypes: [], changeLog: [] };
-  const edirId = resolveEdirId(actor);
+  const edirId = await resolveEdirId(actor);
 
   const [settings, emergencyTypes, changeLogRaw] = await Promise.all([
     prisma.edirSettings.findUnique({ where: { edirId } }),

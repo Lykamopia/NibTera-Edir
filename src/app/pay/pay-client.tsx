@@ -21,6 +21,12 @@ declare global {
 }
 
 const money = (n: number, cur = 'ETB') => `${Number(n || 0).toLocaleString()} ${cur}`;
+/** Loose phone equality — compares the last 9 significant digits (ignores 0/251/+251 prefixes). */
+const sameNumber = (a?: string | null, b?: string | null) => {
+  const tail = (s?: string | null) => (s || '').replace(/\D/g, '').slice(-9);
+  const ta = tail(a), tb = tail(b);
+  return !!ta && ta === tb;
+};
 const fmt = (d: any) => (d ? new Date(d).toLocaleDateString(undefined, { dateStyle: 'medium' }) : '—');
 const monthFmt = (d: any) => (d ? new Date(d).toLocaleDateString(undefined, { month: 'short', year: 'numeric' }) : '—');
 const addMonths = (d: any, n: number) => { const x = new Date(d); return new Date(x.getFullYear(), x.getMonth() + n, 1); };
@@ -33,6 +39,9 @@ function PayInner() {
   const { t } = useLang();
   const [token, setToken] = useState<string | null>(null);
   const [phone, setPhone] = useState('');
+  // The payer = the logged-in Super App user's phone (from the validated token).
+  // Preserved separately from `phone`, which the user may change to pay for someone else.
+  const [payerPhone, setPayerPhone] = useState<string | null>(null);
   const [member, setMember] = useState<Member | null>(null);
   const [amount, setAmount] = useState('');
   const [fetching, setFetching] = useState(false);
@@ -53,7 +62,7 @@ function PayInner() {
     validateNibToken(params.get('token') || undefined)
       .then((res) => {
         payLog('client/init', 'validateNibToken result', { status: res.status, phone: (res as any).phone });
-        if (res.status === 'success') { setToken(res.token || null); setPhone(res.phone || params.get('phone') || ''); setSessionReady(true); }
+        if (res.status === 'success') { setToken(res.token || null); setPayerPhone(res.phone || null); setPhone(res.phone || params.get('phone') || ''); setSessionReady(true); }
         else { setSessionReady(false); setPhone(params.get('phone') || ''); }
       })
       .catch((e) => { payLog('client/init', 'validateNibToken threw', String(e)); setSessionReady(false); });
@@ -200,7 +209,7 @@ function PayInner() {
       </Card>
 
       {fetching && !member && <div className="flex items-center justify-center py-10"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>}
-      {member && <MemberPanel member={member} amount={amount} setAmount={setAmount} paying={paying} error={error} txn={txn} onPay={pay} onChange={reset} />}
+      {member && <MemberPanel member={member} payerPhone={payerPhone} amount={amount} setAmount={setAmount} paying={paying} error={error} txn={txn} onPay={pay} onChange={reset} />}
     </Shell>
   );
 }
@@ -231,16 +240,27 @@ function Shell({ children, edir }: { children: React.ReactNode; edir?: { edirNam
   );
 }
 
-function MemberPanel({ member, amount, setAmount, paying, error, txn, onPay, onChange }: {
-  member: Member; amount: string; setAmount: (v: string) => void; paying: boolean; error: string; txn: string | null; onPay: () => void; onChange: () => void;
+function MemberPanel({ member, payerPhone, amount, setAmount, paying, error, txn, onPay, onChange }: {
+  member: Member; payerPhone: string | null; amount: string; setAmount: (v: string) => void; paying: boolean; error: string; txn: string | null; onPay: () => void; onChange: () => void;
 }) {
   const { t } = useLang();
   const cur = member.currency;
   const m = member as any;
   const amountDue = Number(m.totalOutstanding) + Number(m.monthlyFee);
+  // On-behalf detection: the fetched member's phone differs from the payer's phone.
+  const onBehalf = !!payerPhone && !sameNumber(payerPhone, m.phone);
 
   return (
     <>
+      {/* Who you are paying for — explicit when it differs from your own number */}
+      <div className={`page-enter flex items-start gap-2 rounded-lg border p-3 text-xs ${onBehalf ? 'border-warning/30 bg-warning/10 text-warning' : 'border-success/20 bg-success/10 text-success'}`}>
+        {onBehalf ? <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> : <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />}
+        <div>
+          <div className="font-semibold">{onBehalf ? t('onBehalfTitle') : t('payingForSelf')}</div>
+          {onBehalf && <div className="mt-0.5 text-foreground/80">{t('onBehalfDesc')}</div>}
+        </div>
+      </div>
+
       {/* Edir identity — which Edir you are paying for */}
       <Card className="page-enter overflow-hidden border-primary/20">
         <div className="flex items-center gap-3 bg-gradient-to-r from-primary/10 to-transparent p-3">

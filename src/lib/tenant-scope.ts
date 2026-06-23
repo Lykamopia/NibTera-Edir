@@ -33,6 +33,12 @@ export interface Actor {
   orgScope: OrgScope;
   /** Super-Admin's selected Edir context (from the top-bar switcher). Null = all Edirs. */
   activeEdirId: string | null;
+  /**
+   * Edir IDs this actor may access, precomputed at getActor() time so tenant
+   * scoping stays synchronous. `null` = unrestricted (HEAD_OFFICE). EDIR → the
+   * actor's own Edir; BRANCH/DISTRICT → the active Edirs under their org unit.
+   */
+  accessibleEdirIds: string[] | null;
   isSuperAdmin: boolean;
   permissions: Permission[];
   role: Role | null;
@@ -74,6 +80,24 @@ export async function getActor(): Promise<Actor> {
 
   const orgScope = deriveOrgScope(user.edirId, user.branchId, user.districtId, isSuperAdmin);
 
+  // Precompute the set of Edirs this actor may touch so tenant scoping (tenantWhere)
+  // can stay synchronous at its ~25 call sites. HEAD_OFFICE = null (unrestricted).
+  let accessibleEdirIds: string[] | null;
+  if (orgScope === 'HEAD_OFFICE') {
+    accessibleEdirIds = null;
+  } else if (orgScope === 'EDIR') {
+    accessibleEdirIds = user.edirId ? [user.edirId] : [];
+  } else if (orgScope === 'BRANCH') {
+    accessibleEdirIds = user.branchId
+      ? (await prisma.edir.findMany({ where: { branchId: user.branchId, status: 'ACTIVE' }, select: { id: true } })).map(e => e.id)
+      : [];
+  } else {
+    // DISTRICT
+    accessibleEdirIds = user.districtId
+      ? (await prisma.edir.findMany({ where: { branch: { districtId: user.districtId }, status: 'ACTIVE' }, select: { id: true } })).map(e => e.id)
+      : [];
+  }
+
   return {
     id: user.id,
     name: user.name,
@@ -83,6 +107,7 @@ export async function getActor(): Promise<Actor> {
     districtId: user.districtId,
     orgScope,
     activeEdirId,
+    accessibleEdirIds,
     isSuperAdmin,
     permissions,
     role: user.role ?? null,
@@ -112,30 +137,16 @@ export async function assertPermission(actor: Actor, permission: Permission | Pe
 }
 
 /**
- * Get the list of Edir IDs accessible by the actor, or null if unrestricted.
- * - HEAD_OFFICE: null (unrestricted, all active Edirs)
- * - DISTRICT: all Edirs in all branches of the district with status ACTIVE
- * - BRANCH: all Edirs in the branch with status ACTIVE
+ * The list of Edir IDs accessible by the actor, or null if unrestricted.
+ * Precomputed at getActor() time (see Actor.accessibleEdirIds), so this is a
+ * synchronous accessor.
+ * - HEAD_OFFICE: null (unrestricted, all Edirs)
+ * - DISTRICT: all active Edirs in branches of the district
+ * - BRANCH: all active Edirs in the branch
  * - EDIR: just the actor's Edir
  */
-export async function tenantEdirIds(actor: Actor): Promise<string[] | null> {
-  if (actor.orgScope === 'HEAD_OFFICE') return null;
-  if (actor.orgScope === 'EDIR') return actor.edirId ? [actor.edirId] : [];
-  if (actor.orgScope === 'BRANCH' && actor.branchId) {
-    const edirs = await prisma.edir.findMany({
-      where: { branchId: actor.branchId, status: 'ACTIVE' },
-      select: { id: true },
-    });
-    return edirs.map(e => e.id);
-  }
-  if (actor.orgScope === 'DISTRICT' && actor.districtId) {
-    const edirs = await prisma.edir.findMany({
-      where: { branch: { districtId: actor.districtId }, status: 'ACTIVE' },
-      select: { id: true },
-    });
-    return edirs.map(e => e.id);
-  }
-  return [];
+export function tenantEdirIds(actor: Actor): string[] | null {
+  return actor.accessibleEdirIds;
 }
 
 /**
@@ -159,7 +170,7 @@ export async function resolveEdirId(actor: Actor, requestedEdirId?: string | nul
 
   // BRANCH or DISTRICT: must specify an Edir and validate it's in scope
   if (!requestedEdirId) throw new AccessDeniedError('Select an Edir to perform this operation.');
-  const accessibleIds = await tenantEdirIds(actor);
+  const accessibleIds = tenantEdirIds(actor);
   if (!accessibleIds || !accessibleIds.includes(requestedEdirId)) {
     throw new AccessDeniedError('The selected Edir is not within your organizational scope.');
   }
@@ -202,19 +213,14 @@ export async function assertSameTenant(actor: Actor, edirId: string | null | und
  * - BRANCH/DISTRICT: returns { edirId: { in: ids } } where ids are the accessible Edirs
  * - EDIR: returns { edirId: actor.edirId } (or sentinel '__none__' if unassigned)
  *
- * Note: This must be called inside async context. For synchronous use, build the scope
- * first via tenantEdirIds() and then call tenantWhereFromIds().
+ * Synchronous: the actor's accessible Edir set is precomputed at getActor() time.
  */
-export async function tenantWhere(actor: Actor, requestedEdirId?: string | null): Promise<{ edirId?: string | { in: string[] } }> {
+export function tenantWhere(actor: Actor, requestedEdirId?: string | null): { edirId?: string | { in: string[] } } {
   if (actor.orgScope === 'HEAD_OFFICE') {
     const edirId = requestedEdirId ?? actor.activeEdirId;
     return edirId ? { edirId } : {};
   }
-  const ids = await tenantEdirIds(actor);
-  if (ids === null) return {};
-  if (ids.length === 0) return { edirId: '__none__' };
-  if (ids.length === 1) return { edirId: ids[0] };
-  return { edirId: { in: ids } };
+  return tenantWhereFromIds(actor.accessibleEdirIds);
 }
 
 /** Synchronous variant: build a where fragment from pre-computed Edir IDs. */

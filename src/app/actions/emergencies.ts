@@ -80,7 +80,7 @@ export async function saveEmergencyType(input: z.infer<typeof typeSchema>) {
     if (data.id) {
       const existing = await prisma.emergencyType.findUnique({ where: { id: data.id } });
       if (!existing) return { success: false as const, error: 'Emergency type not found.' };
-      assertSameTenant(actor, existing.edirId);
+      await assertSameTenant(actor, existing.edirId);
       await prisma.emergencyType.update({ where: { id: data.id }, data: payload });
       await writeAudit({ edirId, userId: actor.id, action: 'EMERGENCY_TYPE_UPDATED', targetType: 'EmergencyType', targetId: data.id, details: data.name });
       await prisma.ruleChangeLog.create({ data: { edirId, field: `Emergency Type: ${data.name}`, previousValue: existing.name, newValue: `Payout ${data.basePayout}${data.isActive ? '' : ' (inactive)'}`, changedById: actor.id } });
@@ -103,7 +103,7 @@ export async function deleteEmergencyType(id: string) {
     const { actor, edirId } = await requireActor(['manage_emergencies', 'manage_edir_settings']);
     const existing = await prisma.emergencyType.findUnique({ where: { id }, include: { _count: { select: { claims: true } } } });
     if (!existing) return { success: false as const, error: 'Emergency type not found.' };
-    assertSameTenant(actor, existing.edirId);
+    await assertSameTenant(actor, existing.edirId);
     if (existing._count.claims > 0) {
       // Preserve history — deactivate instead of deleting a type with claims.
       await prisma.emergencyType.update({ where: { id }, data: { isActive: false } });
@@ -199,7 +199,7 @@ export async function getEmergencyClaim(id: string) {
     },
   });
   if (!claim) return null;
-  assertSameTenant(actor, claim.edirId);
+  await assertSameTenant(actor, claim.edirId);
   return {
     ...claim,
     approvedAmount: claim.approvedAmount != null ? Number(claim.approvedAmount) : null,
@@ -227,7 +227,7 @@ export async function reportClaim(input: z.infer<typeof reportSchema>) {
 
     const member = await prisma.member.findUnique({ where: { id: data.memberId } });
     if (!member) return { success: false as const, error: 'Member not found.' };
-    assertSameTenant(actor, member.edirId);
+    await assertSameTenant(actor, member.edirId);
     assertGoodStanding(member);
 
     // Rules-driven eligibility: tenure must satisfy the Edir minimum and the
@@ -273,7 +273,7 @@ export async function rejectReportedClaim(claimId: string, reason?: string) {
     const { actor, edirId } = await requireActor('manage_emergencies');
     const claim = await prisma.emergencyClaim.findUnique({ where: { id: claimId } });
     if (!claim) return { success: false as const, error: 'Claim not found.' };
-    assertSameTenant(actor, claim.edirId);
+    await assertSameTenant(actor, claim.edirId);
     if (claim.status !== 'REPORTED') return { success: false as const, error: 'Only reported claims can be rejected directly.' };
 
     await prisma.emergencyClaim.update({
@@ -293,7 +293,7 @@ export async function addClaimNote(claimId: string, note: string) {
     const { actor, edirId } = await requireActor('manage_emergencies');
     const claim = await prisma.emergencyClaim.findUnique({ where: { id: claimId } });
     if (!claim) return { success: false as const, error: 'Claim not found.' };
-    assertSameTenant(actor, claim.edirId);
+    await assertSameTenant(actor, claim.edirId);
     if (!note.trim()) return { success: false as const, error: 'Note cannot be empty.' };
 
     await prisma.emergencyNote.create({ data: { claimId, note: note.trim() } });
@@ -328,7 +328,7 @@ export async function submitClaimForApproval(input: z.infer<typeof submitClaimSc
       include: { member: { select: { name: true, memberId: true, status: true } }, type: { select: { name: true } } },
     });
     if (!claim) return { success: false as const, error: 'Claim not found.' };
-    assertSameTenant(actor, claim.edirId);
+    await assertSameTenant(actor, claim.edirId);
     if (claim.status !== 'REPORTED') return { success: false as const, error: 'Only reported claims can be submitted for approval.' };
     if (await hasOpenRequest('EMERGENCY_CLAIM', claim.id)) return { success: false as const, error: 'This claim already has a pending approval.' };
     if (data.approvedAmount <= 0) return { success: false as const, error: 'Approved amount must be greater than zero.' };
@@ -368,7 +368,7 @@ export async function requestDisbursement(input: z.infer<typeof disburseSchema>)
       include: { member: { select: { name: true } } },
     });
     if (!claim) return { success: false as const, error: 'Claim not found.' };
-    assertSameTenant(actor, claim.edirId);
+    await assertSameTenant(actor, claim.edirId);
     if (claim.status !== 'ACTIVE') return { success: false as const, error: 'Only approved (active) claims can be disbursed.' };
     if (await hasOpenRequest('EMERGENCY_DISBURSEMENT', claim.id)) return { success: false as const, error: 'This claim already has a pending disbursement.' };
     if (data.amount <= 0) return { success: false as const, error: 'Disbursement amount must be greater than zero.' };

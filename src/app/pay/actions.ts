@@ -122,7 +122,21 @@ export async function clearNibSession() {
 export async function getPaymentToken(amount: number, token: string, memberId: string, edirId: string, breakdown: any) {
   const transactionId = crypto.randomUUID();
   const transactionTime = format(new Date(), 'yyyyMMddHHmmss');
-  payLog('getPaymentToken', 'STEP 3 START', { amount, memberId, edirId, transactionId, transactionTime, token: maskToken(token) });
+
+  // Resolve the two parties authoritatively on the server:
+  //  • PAYER       — the phone bound to the validated Super App token (who pays).
+  //  • BENEFICIARY — the fetched member whose obligations are settled (who we pay for).
+  // Deriving both server-side prevents the client from spoofing either identity.
+  const v = await validateToken(token);
+  const payerPhone = v.ok ? (v.phone ?? null) : null;
+  const beneficiary = await prisma.member.findUnique({
+    where: { id: memberId },
+    select: { phone: true, edirId: true, memberId: true, name: true },
+  });
+  // Always trust the member's actual Edir over a client-supplied one.
+  const resolvedEdirId = beneficiary?.edirId ?? edirId;
+  const beneficiaryPhone = beneficiary?.phone ?? null;
+  payLog('getPaymentToken', 'STEP 3 START', { amount, memberId, edirId: resolvedEdirId, beneficiaryPhone, payerPhone, transactionId, transactionTime, token: maskToken(token) });
 
   const signatureString = [
     `accountNo=${NIB_CONFIG.ACCOUNT_NO}`,
@@ -144,11 +158,11 @@ export async function getPaymentToken(amount: number, token: string, memberId: s
     try {
       await prisma.paymentLog.create({
         data: {
-          edirId, memberId,
+          edirId: resolvedEdirId, memberId,
           amount: new Prisma.Decimal(amount),
           method: 'NIBTERA_MINI_APP',
           status: 'FAILED',
-          description: JSON.stringify({ ...(breakdown ?? {}), failureReason: reason }),
+          description: JSON.stringify({ ...(breakdown ?? {}), failureReason: reason, payerPhone, beneficiaryPhone }),
           transactionId, signature, verificationType: 'AUTOMATIC',
         },
       });
@@ -164,6 +178,11 @@ export async function getPaymentToken(amount: number, token: string, memberId: s
     callBackURL: NIB_CONFIG.CALLBACK_URL,
     companyName: NIB_CONFIG.COMPANY_NAME,
     token, transactionId, transactionTime, signature,
+    // Beneficiary identity travels with the gateway request (informational fields,
+    // outside the signed set) so the transaction references the member being paid
+    // for — never the logged-in payer.
+    memberPhone: beneficiaryPhone,
+    memberId,
   };
   payLog('getPaymentToken', `POST ${NIB_CONFIG.PAYMENT_URL}`, { ...payload, token: maskToken(token) });
 
@@ -179,8 +198,25 @@ export async function getPaymentToken(amount: number, token: string, memberId: s
     let data: NibPaymentResponse;
     try { data = JSON.parse(raw); } catch (e) { payLog('getPaymentToken', 'failed to parse NIB JSON', String(e)); await recordFailed('invalid NIB response'); return { status: 'error', message: 'Invalid response from NIB payment server.', transactionId }; }
     payLog('getPaymentToken', 'SUCCESS — paymentToken received', { paymentToken: maskToken(data.token), transactionId });
-    // Intentionally no record here: the payment is still pending until the bank
-    // settlement callback confirms it (which creates the SUCCESS/PARTIAL record).
+
+    // Bind this transaction to the BENEFICIARY + PAYER so the settlement callback
+    // settles against the fetched member (not the payer's token phone). No real
+    // PaymentLog is written yet — the payment stays unconfirmed until the callback.
+    try {
+      await prisma.paymentIntent.create({
+        data: {
+          transactionId, memberId, edirId: resolvedEdirId,
+          beneficiaryPhone, payerPhone,
+          amount: new Prisma.Decimal(amount),
+          breakdown: JSON.stringify(breakdown ?? {}),
+        },
+      });
+      payLog('getPaymentToken', 'PaymentIntent recorded', { transactionId, memberId, beneficiaryPhone, payerPhone });
+    } catch (e) {
+      // Non-fatal: the callback can still self-heal from the token phone claim.
+      payLog('getPaymentToken', 'could not record PaymentIntent', String(e));
+    }
+
     return { status: 'success', paymentToken: data.token, transactionId };
   } catch (error) {
     payLog('getPaymentToken', 'FETCH THREW (NIB payment server unreachable?)', { url: NIB_CONFIG.PAYMENT_URL, error: String(error) });

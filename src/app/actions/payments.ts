@@ -25,7 +25,7 @@ const settingsSchema = z.object({
 
 export async function getEdirSettings() {
   const actor = await getActor();
-  const edirId = resolveEdirId(actor);
+  const edirId = await resolveEdirId(actor);
   const s = await prisma.edirSettings.findUnique({ where: { edirId } });
   if (!s) return null;
   return {
@@ -64,7 +64,7 @@ export async function getMemberOutstanding(memberId: string) {
     include: { paymentStatus: true, installmentPlans: { include: { installments: { where: { status: 'PENDING' } } } } },
   });
   if (!member) return null;
-  assertSameTenant(actor, member.edirId);
+  await assertSameTenant(actor, member.edirId);
 
   const settings = await prisma.edirSettings.findUnique({ where: { edirId: member.edirId } });
   const dueInstallments = member.installmentPlans.flatMap(p => p.installments);
@@ -165,10 +165,15 @@ const breakdownSchema = z.object({
 
 export async function recordManualPayment(memberId: string, breakdownInput: z.infer<typeof breakdownSchema>) {
   try {
-    const { actor, edirId } = await requireActor('record_payment');
+    const actor = await getActor();
+    await assertPermission(actor, 'record_payment');
     const member = await prisma.member.findUnique({ where: { id: memberId } });
     if (!member) return { success: false as const, error: 'Member not found.' };
-    assertSameTenant(actor, member.edirId);
+    // The payment belongs to the member's Edir — derive scope from the member,
+    // not the top-bar selection, so it works across an "all Edirs" people list
+    // and never mis-logs under a different pinned Edir.
+    await assertSameTenant(actor, member.edirId);
+    const edirId = member.edirId;
 
     const breakdown = breakdownSchema.parse(breakdownInput);
     const total = Object.values(breakdown).reduce((a, b) => a + b, 0);
@@ -253,10 +258,13 @@ export async function exportPaymentLogCsv(params: { status?: string; query?: str
  */
 export async function voidPayment(paymentLogId: string, reason?: string) {
   try {
-    const { actor, edirId } = await requireActor('void_payment');
+    const actor = await getActor();
+    await assertPermission(actor, 'void_payment');
     const log = await prisma.paymentLog.findUnique({ where: { id: paymentLogId } });
     if (!log) return { success: false as const, error: 'Payment not found.' };
-    assertSameTenant(actor, log.edirId);
+    // Scope derives from the payment being voided, not the top-bar selection.
+    await assertSameTenant(actor, log.edirId);
+    const edirId = log.edirId;
     if (log.status === 'SUCCESS' || log.status === 'PARTIAL') {
       return { success: false as const, error: 'Settled payments cannot be voided.' };
     }

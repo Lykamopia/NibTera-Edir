@@ -70,6 +70,7 @@ model District {
 
   branches Branch[]
   users    User[]   @relation("DistrictUsers")
+  roles    Role[]
 }
 
 model Branch {
@@ -84,6 +85,7 @@ model Branch {
 
   edirs Edir[]
   users User[] @relation("BranchUsers")
+  roles Role[]
 
   @@unique([districtId, name])
   @@index([districtId])
@@ -158,10 +160,16 @@ model Role {
   scope       RoleScope @default(EDIR)
   edirId      String? // null = global/system role
   edir        Edir?     @relation(fields: [edirId], references: [id])
+  districtId  String? // set for DISTRICT-scoped roles
+  district    District? @relation(fields: [districtId], references: [id])
+  branchId    String? // set for BRANCH-scoped roles
+  branch      Branch?   @relation(fields: [branchId], references: [id])
   users       User[]
 
   @@unique([edirId, name])
   @@index([edirId])
+  @@index([districtId])
+  @@index([branchId])
 }
 
 // ─── Members ─────────────────────────────────────────────────────────────────
@@ -357,6 +365,28 @@ model PaymentLog {
   @@index([edirId])
   @@index([memberId])
   @@index([status])
+}
+
+// Binds a mini-app payment transaction to the BENEFICIARY member (the member whose
+// obligations are being paid) and records the PAYER (the logged-in Super App user).
+// Written at payment-initiation time so the bank settlement callback settles against
+// the fetched member rather than the payer's token phone. Kept separate from
+// PaymentLog so an abandoned/in-flight payment is never persisted as a real payment
+// record — the PaymentLog is still born-and-settled atomically in the callback.
+model PaymentIntent {
+  id               String    @id @default(cuid())
+  transactionId    String    @unique // our reference (UUID from Step 3); ties to the bank callback
+  memberId         String // beneficiary member
+  edirId           String // beneficiary's Edir
+  beneficiaryPhone String? // phone entered on the Pay page (the fetched member)
+  payerPhone       String? // logged-in Super App user (the token's phone)
+  amount           Decimal   @db.Decimal(15, 2)
+  breakdown        String? // JSON breakdown snapshot at initiation
+  settledAt        DateTime? // set when the callback settles this transaction
+  createdAt        DateTime  @default(now())
+
+  @@index([memberId])
+  @@index([edirId])
 }
 
 // ─── Maker–Checker Engine ────────────────────────────────────────────────────

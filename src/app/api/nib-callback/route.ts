@@ -11,6 +11,13 @@ import { payLog } from '@/lib/pay-log';
 
 export const dynamic = 'force-dynamic';
 
+/** Loose phone equality — compares the last 9 significant digits (ignores 0/251/+251 prefixes). */
+function sameTail(a?: string | null, b?: string | null): boolean {
+  const tail = (s?: string | null) => (s || '').replace(/\D/g, '').slice(-9);
+  const ta = tail(a), tb = tail(b);
+  return !!ta && ta === tb;
+}
+
 /**
  * Step 5 — bank → us settlement callback.
  *
@@ -83,22 +90,48 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ message: 'Already processed.' }, { status: 200 });
     }
 
-    // Resolve the member (from the existing record, or the token's phone claim).
+    // Resolve the BENEFICIARY member. Order of trust:
+    //  1. an existing record's member,
+    //  2. the PaymentIntent recorded at initiation (binds the transaction to the
+    //     fetched member when paying on behalf of someone else),
+    //  3. last-resort self-heal from the token's phone claim (legacy / missing intent;
+    //     note this resolves to the PAYER, so it is only correct when paying for self).
     let memberId = existing?.memberId ?? null;
     let logEdirId = existing?.edirId ?? null;
+    let payerPhone: string | null = null;
+    let beneficiaryPhone: string | null = null;
+
+    const intent = await prisma.paymentIntent.findUnique({ where: { transactionId: ourRef } });
+    if (intent) {
+      payerPhone = intent.payerPhone ?? null;
+      beneficiaryPhone = intent.beneficiaryPhone ?? null;
+      if (!memberId) { memberId = intent.memberId; logEdirId = intent.edirId; }
+      payLog('callback', 'resolved beneficiary from PaymentIntent', { memberId, logEdirId, beneficiaryPhone, payerPhone });
+    }
+
     if (!memberId) {
       const phone = claims?.phone || paidByNumber;
       const member = phone ? await fetchDetailedMemberByPhone(phone) : null;
       if (!member) { payLog('callback', 'self-heal failed — no member → 404', { phone }); return NextResponse.json({ message: 'No matching transaction or member.' }, { status: 404 }); }
       memberId = member.id; logEdirId = member.edirId;
+      beneficiaryPhone = beneficiaryPhone ?? member.phone ?? phone ?? null;
+      payLog('callback', 'self-healed beneficiary from token phone claim', { memberId, phone });
     }
     if (!memberId || !logEdirId) {
       payLog('callback', 'no member/edir for transaction → 400');
       return NextResponse.json({ message: 'Transaction has no member.' }, { status: 400 });
     }
+    if (!payerPhone) payerPhone = claims?.phone ?? paidByNumber ?? null;
 
-    // An existing record may have been initiated for a larger amount → partial.
-    const expectedAmount = existing ? Number(existing.amount) : paidAmount;
+    // Beneficiary identity for the audit trail (name + membership id + phone).
+    const beneficiary = await prisma.member.findUnique({
+      where: { id: memberId },
+      select: { name: true, memberId: true, phone: true },
+    });
+
+    // A payment initiated for a larger amount than was paid → partial. Prefer the
+    // existing record's amount, then the intent's initiated amount, else assume full.
+    const expectedAmount = existing ? Number(existing.amount) : (intent ? Number(intent.amount) : paidAmount);
     const partial = paidAmount + 0.0001 < expectedAmount;
     payLog('callback', 'settling payment', { ourRef, bankRef: transactionId, paidAmount, expectedAmount, partial, selfHealed: !existing });
 
@@ -116,13 +149,15 @@ export async function POST(request: NextRequest) {
             edirId: logEdirId!, memberId: memberId!,
             amount: new Prisma.Decimal(paidAmount), method: 'NIBTERA_MINI_APP',
             status: 'PENDING', transactionId: ourRef, receiptUrl: transactionId ?? null, verificationType: 'AUTOMATIC',
-            description: JSON.stringify({ selfHealed: !existing, bankRef: transactionId }),
+            description: JSON.stringify({ selfHealed: !existing, bankRef: transactionId, payerPhone, beneficiaryPhone }),
           },
         });
         paymentLogId = created.id;
       }
       // Settlement order (penalties → installments → monthly fee) lives in
-      // settlePaymentTx, which finalizes the log to SUCCESS/PARTIAL.
+      // settlePaymentTx, which finalizes the log to SUCCESS/PARTIAL. It operates on
+      // the BENEFICIARY's memberId, so balance, installments, coverage and receipt
+      // all update the member we paid for — not the payer.
       await settlePaymentTx(tx, {
         memberId: memberId!,
         paymentLogId,
@@ -130,12 +165,38 @@ export async function POST(request: NextRequest) {
         method: 'NIBTERA_MINI_APP',
         partial,
       });
+      // Mark the initiation intent settled (idempotent traceability link).
+      if (intent) await tx.paymentIntent.update({ where: { id: intent.id }, data: { settledAt: new Date() } });
+      // Audit records BOTH parties: the payer (logged-in Super App user) and the
+      // beneficiary member whose obligations were settled.
+      const benLabel = beneficiary
+        ? `${beneficiary.name} (${beneficiary.memberId}, ${beneficiary.phone ?? beneficiaryPhone ?? 'n/a'})`
+        : (beneficiaryPhone ?? memberId!);
       await writeAudit({
         edirId: logEdirId!, action: 'NIB_PAYMENT_SETTLED',
         targetType: 'PaymentLog', targetId: paymentLogId,
-        details: `Settled ${paidAmount} via NIB (ref ${ourRef}, bank ${transactionId})${partial ? ' [partial]' : ''}.`,
+        details: `Settled ${paidAmount} via NIB for beneficiary ${benLabel}; paid by ${payerPhone ?? 'unknown payer'} (ref ${ourRef}, bank ${transactionId})${partial ? ' [partial]' : ''}.`,
       }, tx);
     });
+
+    // Notify the BENEFICIARY (the member we paid for), if they have a linked login.
+    // Done post-commit and best-effort so a notification failure can never roll back
+    // a settled payment.
+    try {
+      const benUser = await prisma.member.findUnique({ where: { id: memberId }, select: { userId: true } });
+      if (benUser?.userId) {
+        await prisma.notification.create({
+          data: {
+            userId: benUser.userId, edirId: logEdirId, type: 'payment', priority: 'normal',
+            title: partial ? 'Partial payment received' : 'Payment received',
+            body: `A payment of ${paidAmount} was applied to your Edir account${payerPhone && !sameTail(payerPhone, beneficiaryPhone) ? ` (paid on your behalf by ${payerPhone})` : ''}.`,
+            linkUrl: '/pay/history', entityType: 'PaymentLog',
+          },
+        });
+      }
+    } catch (e) {
+      payLog('callback', 'beneficiary notification failed (non-fatal)', String(e));
+    }
 
     payLog('callback', '✓ settled → 200', { ourRef, bankRef: transactionId, paidAmount, partial });
     return NextResponse.json({ message: 'Payment confirmed and updated.' }, { status: 200 });

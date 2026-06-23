@@ -88,7 +88,7 @@ export default function PlatformDashboard() {
 
       {/* KPI grid */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
-        <Kpi title="Total Edirs" value={k.totalEdirs} sub={`${k.activeEdirs} active`} icon={Building2} accent="primary" href="/dashboard/system/edirs" />
+        <Kpi title="Total Edirs" value={k.totalEdirs} sub={`${k.activeEdirs} active`} icon={Building2} accent="primary" href="/dashboard/edir-registration" />
         <Kpi title="Total Members" value={k.totalMembers} sub={`+${k.newMembers} new (30d)`} icon={Users} accent="info" />
         <Kpi title="Active Users" value={k.activeUsers} icon={UserCheck} accent="success" />
         <Kpi title="Collected" value={money(k.totalCollected)} sub={k.currency} icon={Wallet} accent="success" trend={collectionTrendPct} />

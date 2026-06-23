@@ -9,9 +9,5 @@ export default async function BranchesPage() {
     redirect('/forbidden');
   }
 
-  return (
-    <div className="container mx-auto py-8">
-      <BranchesClient actor={actor} />
-    </div>
-  );
+  return <BranchesClient actor={actor} />;
 }

@@ -66,12 +66,14 @@ export async function submitEdirRegistration(input: EdirRegistrationInput) {
     });
 
     // Submit for approval via maker-checker workflow
-    await submitForApproval({
+    await submitForApproval(actor, {
       module: 'EDIR_REGISTRATION',
       edirId: edir.id,
-      makerId: actor.id,
+      title: `Edir registration: ${name}`,
+      summary: `Edir registration submitted: ${name}`,
       payload: { edirId: edir.id },
-      comment: `Edir registration submitted: ${name}`,
+      targetType: 'Edir',
+      targetId: edir.id,
     });
 
     await writeAudit({
@@ -115,7 +117,7 @@ export async function getEdirRegistrations(filters?: { status?: 'PENDING' | 'APP
         where,
         include: {
           branch: { select: { id: true, name: true, districtId: true } },
-          approvalRequest: {
+          approvals: {
             where: { module: 'EDIR_REGISTRATION' },
             orderBy: { createdAt: 'desc' },
             take: 1,
@@ -141,8 +143,8 @@ export async function getEdirRegistrations(filters?: { status?: 'PENDING' | 'APP
         branchName: e.branch?.name ?? 'Unknown',
         contactPersonName: e.contactPersonName,
         createdAt: e.createdAt,
-        approvalStatus: e.approvalRequest[0]?.status ?? null,
-        lastEvent: e.approvalRequest[0]?.events[0],
+        approvalStatus: e.approvals[0]?.status ?? null,
+        lastEvent: e.approvals[0]?.events[0],
       })),
       total,
       page,
@@ -162,8 +164,9 @@ export async function getEdirRegistration(edirId: string) {
       where: { id: edirId },
       include: {
         branch: { select: { id: true, name: true, districtId: true } },
-        approvalRequest: {
+        approvals: {
           where: { module: 'EDIR_REGISTRATION' },
+          orderBy: { createdAt: 'desc' },
           include: {
             events: { orderBy: { createdAt: 'desc' } },
             checker: { select: { id: true, name: true, email: true } },
@@ -186,7 +189,7 @@ export async function getEdirRegistration(edirId: string) {
       success: true as const,
       data: {
         ...edir,
-        approvalRequest: edir.approvalRequest[0] ?? null,
+        approvalRequest: edir.approvals[0] ?? null,
       },
     };
   } catch (error) {

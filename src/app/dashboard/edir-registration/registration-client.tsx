@@ -1,22 +1,43 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import { PageHeader, LoadingState, EmptyState, StatCard } from '@/components/ui/states';
 import { submitEdirRegistration, getEdirRegistrations, type EdirRegistrationInput } from '@/app/actions/edir-registration';
 import { getBranches } from '@/app/actions/branches';
+import { getEdirs } from '@/app/actions/admin';
 import { type Actor } from '@/lib/tenant-scope';
-import { AlertCircle, Check, Clock, X, Upload } from 'lucide-react';
+import {
+  Building2, Check, Clock, X, RotateCcw, Upload, FileText, ChevronLeft, ChevronRight,
+  Users, UserCircle, ListChecks,
+} from 'lucide-react';
 
 interface Branch {
   id: string;
   name: string;
-  code: string;
+  code: string | null;
   districtId: string;
   districtName: string;
 }
@@ -25,36 +46,58 @@ interface Registration {
   id: string;
   name: string;
   status: 'PENDING' | 'ACTIVE' | 'SUSPENDED' | 'CLOSED';
-  branchId: string;
+  branchId: string | null;
   branchName: string;
   contactPersonName: string | null;
   createdAt: Date;
   approvalStatus: string | null;
 }
 
+interface EdirItem {
+  id: string;
+  name: string;
+  description: string | null;
+  members: number;
+  users: number;
+}
+
 const FORM_STEPS = [
   { id: 'details', label: 'Edir Details' },
-  { id: 'location', label: 'Branch/District' },
-  { id: 'contact', label: 'Chairperson Info' },
-  { id: 'address', label: 'Address Details' },
+  { id: 'location', label: 'Branch & District' },
+  { id: 'contact', label: 'Chairperson' },
+  { id: 'address', label: 'Address' },
   { id: 'documents', label: 'Agreement' },
-  { id: 'review', label: 'Review & Submit' },
+  { id: 'review', label: 'Review' },
 ];
+
+function StatusBadge({ status }: { status: string }) {
+  switch (status) {
+    case 'PENDING':
+      return <Badge variant="outline" className="border-warning/30 bg-warning/10 text-warning"><Clock className="mr-1 h-3 w-3" /> Pending</Badge>;
+    case 'ACTIVE':
+    case 'APPROVED':
+      return <Badge variant="outline" className="border-success/30 bg-success/10 text-success"><Check className="mr-1 h-3 w-3" /> {status === 'ACTIVE' ? 'Active' : 'Approved'}</Badge>;
+    case 'REJECTED':
+      return <Badge variant="outline" className="border-destructive/30 bg-destructive/10 text-destructive"><X className="mr-1 h-3 w-3" /> Rejected</Badge>;
+    case 'RETURNED':
+      return <Badge variant="outline" className="border-info/30 bg-info/10 text-info"><RotateCcw className="mr-1 h-3 w-3" /> Returned</Badge>;
+    default:
+      return <Badge variant="outline" className="text-muted-foreground">{status}</Badge>;
+  }
+}
 
 export default function RegistrationClient({ actor }: { actor: Actor }) {
   const [currentStep, setCurrentStep] = useState(0);
   const [branches, setBranches] = useState<Branch[]>([]);
   const [registrations, setRegistrations] = useState<Registration[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
+  const [edirs, setEdirs] = useState<EdirItem[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+  const [edirsLoading, setEdirsLoading] = useState(true);
+  const [regsLoading, setRegsLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<'PENDING' | 'ACTIVE' | 'REJECTED' | 'RETURNED' | 'ALL'>('PENDING');
+  const [activeTab, setActiveTab] = useState('all-edirs');
 
-  const [formData, setFormData] = useState<EdirRegistrationInput & {
-    chairpersonName: string;
-    chairpersonMobile: string;
-    chairpersonEmail: string;
-  }>({
+  const [formData, setFormData] = useState<EdirRegistrationInput>({
     name: '',
     description: '',
     address: '',
@@ -65,19 +108,14 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
     contactMobile: '',
     contactEmail: '',
     agreementDocUrl: '',
-    chairpersonName: '',
-    chairpersonMobile: '',
-    chairpersonEmail: '',
   });
 
-  // Load branches
   useEffect(() => {
     const loadBranches = async () => {
       try {
         const result = await getBranches(actor.districtId);
         if (result.success) {
           setBranches(result.data);
-          // Pre-select branch for branch users
           if (actor.orgScope === 'BRANCH' && actor.branchId) {
             setFormData(prev => ({ ...prev, branchId: actor.branchId || '' }));
           }
@@ -89,487 +127,449 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
     loadBranches();
   }, [actor.branchId, actor.districtId, actor.orgScope]);
 
-  // Load registrations
+  const loadRegistrations = async (status = statusFilter) => {
+    try {
+      setRegsLoading(true);
+      const result = await getEdirRegistrations({ status: status !== 'ALL' ? (status as any) : undefined });
+      if (result.success) setRegistrations(result.data);
+    } catch (err) {
+      console.error('Failed to load registrations:', err);
+    } finally {
+      setRegsLoading(false);
+    }
+  };
+
   useEffect(() => {
-    const loadRegistrations = async () => {
-      try {
-        const result = await getEdirRegistrations({ status: statusFilter !== 'ALL' ? statusFilter : undefined });
-        if (result.success) {
-          setRegistrations(result.data);
-        }
-      } catch (err) {
-        console.error('Failed to load registrations:', err);
-      }
-    };
-    loadRegistrations();
+    loadRegistrations(statusFilter);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusFilter]);
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
+  useEffect(() => {
+    const loadEdirs = async () => {
+      try {
+        setEdirsLoading(true);
+        const result = await getEdirs();
+        if (result) setEdirs(result);
+      } catch (err) {
+        console.error('Failed to load edirs:', err);
+      } finally {
+        setEdirsLoading(false);
+      }
+    };
+    loadEdirs();
+  }, []);
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      // In a real implementation, upload to cloud storage and get URL
-      // For now, just store the filename as a placeholder
-      setFormData(prev => ({ ...prev, agreementDocUrl: file.name }));
-    }
+    if (file) setFormData(prev => ({ ...prev, agreementDocUrl: file.name }));
   };
 
   const handleSubmit = async () => {
+    if (!formData.name.trim()) {
+      toast.error('Edir name is required');
+      setCurrentStep(0);
+      return;
+    }
+    if (!formData.branchId) {
+      toast.error('Please select a branch');
+      setCurrentStep(1);
+      return;
+    }
     try {
-      setError(null);
-      setLoading(true);
-
-      if (!formData.name.trim()) {
-        setError('Edir name is required');
-        return;
-      }
-      if (!formData.branchId) {
-        setError('Please select a branch');
-        return;
-      }
-
+      setSubmitting(true);
       const result = await submitEdirRegistration(formData);
       if (result.success) {
-        setSuccess('Edir registration submitted successfully! It will be reviewed by the approver.');
+        toast.success('Registration submitted for approval');
         setFormData({
-          name: '',
-          description: '',
-          address: '',
-          accountNumber: '',
-          branchId: actor.branchId || '',
-          contactPersonName: '',
-          contactAddress: '',
-          contactMobile: '',
-          contactEmail: '',
-          agreementDocUrl: '',
+          name: '', description: '', address: '', accountNumber: '',
+          branchId: actor.branchId || '', contactPersonName: '', contactAddress: '',
+          contactMobile: '', contactEmail: '', agreementDocUrl: '',
         });
         setCurrentStep(0);
-        // Reload registrations
-        const regResult = await getEdirRegistrations({ status: statusFilter !== 'ALL' ? statusFilter : undefined });
-        if (regResult.success) {
-          setRegistrations(regResult.data);
-        }
+        await loadRegistrations();
+        setActiveTab('registrations');
       } else {
-        setError(result.error);
+        toast.error(result.error);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'An error occurred');
+      toast.error(err instanceof Error ? err.message : 'An error occurred');
     } finally {
-      setLoading(false);
+      setSubmitting(false);
     }
   };
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case 'PENDING':
-        return <Badge variant="outline" className="bg-yellow-50"><Clock className="w-3 h-3 mr-1" /> Pending</Badge>;
-      case 'ACTIVE':
-        return <Badge variant="outline" className="bg-green-50"><Check className="w-3 h-3 mr-1" /> Active</Badge>;
-      case 'REJECTED':
-        return <Badge variant="outline" className="bg-red-50"><X className="w-3 h-3 mr-1" /> Rejected</Badge>;
-      default:
-        return <Badge variant="outline">{status}</Badge>;
-    }
-  };
-
+  const selectedBranch = branches.find(b => b.id === formData.branchId);
   const canSubmit = formData.name.trim() && formData.branchId;
+  const isLastStep = currentStep === FORM_STEPS.length - 1;
+
+  const totalMembers = edirs.reduce((sum, e) => sum + e.members, 0);
+  const totalUsers = edirs.reduce((sum, e) => sum + e.users, 0);
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-      {/* Form Section */}
-      <div className="lg:col-span-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>Register New Edir</CardTitle>
-            <CardDescription>Submit your Edir for approval in {actor.branchId ? '3' : '5'} steps</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {error && (
-              <Alert variant="destructive" className="mb-6">
-                <AlertCircle className="h-4 w-4" />
-                <AlertDescription>{error}</AlertDescription>
-              </Alert>
-            )}
-            {success && (
-              <Alert className="mb-6 border-green-200 bg-green-50">
-                <Check className="h-4 w-4 text-green-600" />
-                <AlertDescription className="text-green-800">{success}</AlertDescription>
-              </Alert>
-            )}
+    <div className="space-y-6">
+      <PageHeader
+        icon={Building2}
+        title="Edirs"
+        description="Browse the Edir directory, register new Edirs, and track approval status."
+      />
 
-            {/* Steps Navigation */}
-            <div className="mb-8">
-              <div className="flex gap-2 overflow-x-auto pb-2">
-                {FORM_STEPS.map((step, idx) => (
-                  <button
-                    key={step.id}
-                    onClick={() => setCurrentStep(idx)}
-                    className={`px-4 py-2 rounded-lg whitespace-nowrap text-sm font-medium transition-colors ${
-                      currentStep === idx
-                        ? 'bg-blue-600 text-white'
-                        : currentStep > idx
-                        ? 'bg-green-100 text-green-800'
-                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                    }`}
-                  >
-                    {step.label}
-                  </button>
-                ))}
-              </div>
-            </div>
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+        <TabsList>
+          <TabsTrigger value="all-edirs" className="gap-2">
+            <Building2 className="h-4 w-4" /> Directory
+          </TabsTrigger>
+          <TabsTrigger value="register" className="gap-2">
+            <Upload className="h-4 w-4" /> Register New
+          </TabsTrigger>
+          <TabsTrigger value="registrations" className="gap-2">
+            <ListChecks className="h-4 w-4" /> My Registrations
+          </TabsTrigger>
+        </TabsList>
 
-            {/* Step 0: Edir Details */}
-            {currentStep === 0 && (
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium mb-1">Edir Name *</label>
-                  <Input
-                    name="name"
-                    value={formData.name}
-                    onChange={handleInputChange}
-                    placeholder="e.g., Addis Ababa Community Edir"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium mb-1">Description</label>
-                  <Textarea
-                    name="description"
-                    value={formData.description}
-                    onChange={handleInputChange}
-                    placeholder="Brief overview of the Edir"
-                    rows={3}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium mb-1">Edir Address</label>
-                  <Input
-                    name="address"
-                    value={formData.address}
-                    onChange={handleInputChange}
-                    placeholder="Street address or location"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium mb-1">Account Number</label>
-                  <Input
-                    name="accountNumber"
-                    value={formData.accountNumber}
-                    onChange={handleInputChange}
-                    placeholder="Bank account number if applicable"
-                  />
-                </div>
-              </div>
-            )}
+        {/* ── Directory ─────────────────────────────────────────────── */}
+        <TabsContent value="all-edirs" className="mt-6 space-y-6">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <StatCard title="Total Edirs" value={edirs.length} icon={Building2} accent="primary" />
+            <StatCard title="Total Members" value={totalMembers} icon={Users} accent="success" hint="across all Edirs" />
+            <StatCard title="Linked Users" value={totalUsers} icon={UserCircle} accent="info" />
+          </div>
 
-            {/* Step 1: Branch/Location */}
-            {currentStep === 1 && (
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium mb-1">Branch *</label>
-                  <select
-                    name="branchId"
-                    value={formData.branchId}
-                    onChange={handleInputChange}
-                    className="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    disabled={actor.orgScope === 'BRANCH'}
-                  >
-                    <option value="">Select a branch...</option>
-                    {branches.map(branch => (
-                      <option key={branch.id} value={branch.id}>
-                        {branch.name} ({branch.code}) - {branch.districtName}
-                      </option>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Edir Directory</CardTitle>
+              <CardDescription>All Edirs visible within your scope.</CardDescription>
+            </CardHeader>
+            <CardContent className="p-0">
+              {edirsLoading ? (
+                <LoadingState label="Loading Edirs…" rows={5} />
+              ) : edirs.length === 0 ? (
+                <EmptyState
+                  icon={Building2}
+                  title="No Edirs found"
+                  description="Register a new Edir to populate the directory."
+                  action={<Button variant="outline" className="gap-2" onClick={() => setActiveTab('register')}><Upload className="h-4 w-4" /> Register Edir</Button>}
+                />
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Name</TableHead>
+                      <TableHead>Description</TableHead>
+                      <TableHead className="text-right">Members</TableHead>
+                      <TableHead className="text-right">Users</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {edirs.map(edir => (
+                      <TableRow key={edir.id}>
+                        <TableCell className="font-medium">{edir.name}</TableCell>
+                        <TableCell className="max-w-md truncate text-muted-foreground">{edir.description || '—'}</TableCell>
+                        <TableCell className="text-right tabular-nums">{edir.members}</TableCell>
+                        <TableCell className="text-right tabular-nums">{edir.users}</TableCell>
+                      </TableRow>
                     ))}
-                  </select>
-                </div>
-                {actor.orgScope === 'BRANCH' && (
-                  <p className="text-sm text-gray-600">Your branch has been pre-selected.</p>
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* ── Register New ──────────────────────────────────────────── */}
+        <TabsContent value="register" className="mt-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Register New Edir</CardTitle>
+              <CardDescription>
+                Step {currentStep + 1} of {FORM_STEPS.length} — {FORM_STEPS[currentStep].label}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              {/* Stepper */}
+              <div className="flex flex-wrap gap-1.5">
+                {FORM_STEPS.map((step, idx) => {
+                  const state = currentStep === idx ? 'current' : currentStep > idx ? 'done' : 'todo';
+                  return (
+                    <button
+                      key={step.id}
+                      onClick={() => setCurrentStep(idx)}
+                      className={[
+                        'flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-colors',
+                        state === 'current' && 'bg-primary text-primary-foreground',
+                        state === 'done' && 'bg-success/15 text-success hover:bg-success/25',
+                        state === 'todo' && 'bg-muted text-muted-foreground hover:bg-muted/70',
+                      ].filter(Boolean).join(' ')}
+                    >
+                      <span className={[
+                        'flex h-4 w-4 items-center justify-center rounded-full text-[10px]',
+                        state === 'current' && 'bg-primary-foreground/20',
+                        state === 'done' && 'bg-success/20',
+                        state === 'todo' && 'bg-foreground/10',
+                      ].filter(Boolean).join(' ')}>
+                        {state === 'done' ? <Check className="h-2.5 w-2.5" /> : idx + 1}
+                      </span>
+                      <span className="hidden sm:inline">{step.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="rounded-lg border bg-muted/30 p-5">
+                {/* Step 0: Edir Details */}
+                {currentStep === 0 && (
+                  <div className="space-y-4">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="name">Edir Name <span className="text-destructive">*</span></Label>
+                      <Input id="name" name="name" value={formData.name} onChange={handleInputChange} placeholder="e.g. Addis Ababa Community Edir" />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="description">Description</Label>
+                      <Textarea id="description" name="description" value={formData.description} onChange={handleInputChange} placeholder="Brief overview of the Edir" rows={3} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="accountNumber">Account Number</Label>
+                      <Input id="accountNumber" name="accountNumber" value={formData.accountNumber} onChange={handleInputChange} placeholder="Bank account number" />
+                    </div>
+                  </div>
                 )}
-              </div>
-            )}
 
-            {/* Step 2: Chairperson Information */}
-            {currentStep === 2 && (
-              <div className="space-y-4">
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
-                  <h3 className="font-semibold text-blue-900 mb-2">Edir Chairperson/Chief Information</h3>
-                  <p className="text-sm text-blue-800">Please provide details of the Edir's primary leadership contact</p>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium mb-1">Chairperson/Contact Person Name *</label>
-                  <Input
-                    name="chairpersonName"
-                    value={formData.chairpersonName}
-                    onChange={handleInputChange}
-                    placeholder="Full name of the Edir Chairperson"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium mb-1">Mobile Number *</label>
-                  <Input
-                    name="chairpersonMobile"
-                    value={formData.chairpersonMobile}
-                    onChange={handleInputChange}
-                    placeholder="+251 9xx xxx xxxx"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium mb-1">Email Address *</label>
-                  <Input
-                    name="chairpersonEmail"
-                    value={formData.chairpersonEmail}
-                    onChange={handleInputChange}
-                    placeholder="chairperson@edir.com"
-                  />
-                </div>
-              </div>
-            )}
+                {/* Step 1: Branch & District */}
+                {currentStep === 1 && (
+                  <div className="space-y-4">
+                    <div className="space-y-1.5">
+                      <Label>Branch <span className="text-destructive">*</span></Label>
+                      <Select
+                        value={formData.branchId}
+                        onValueChange={value => setFormData(prev => ({ ...prev, branchId: value }))}
+                        disabled={actor.orgScope === 'BRANCH'}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select a branch…" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {branches.map(branch => (
+                            <SelectItem key={branch.id} value={branch.id}>
+                              {branch.name}{branch.code ? ` (${branch.code})` : ''} — {branch.districtName}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    {selectedBranch && (
+                      <div className="rounded-md border border-border bg-background px-3 py-2 text-sm">
+                        <span className="text-muted-foreground">District: </span>
+                        <span className="font-medium">{selectedBranch.districtName}</span>
+                        <span className="text-muted-foreground"> (auto-derived from branch)</span>
+                      </div>
+                    )}
+                    {actor.orgScope === 'BRANCH' && (
+                      <p className="text-sm text-muted-foreground">Your branch has been pre-selected.</p>
+                    )}
+                  </div>
+                )}
 
-            {/* Step 3: Address Details */}
-            {currentStep === 3 && (
-              <div className="space-y-4">
-                <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-6">
-                  <h3 className="font-semibold text-green-900 mb-2">Edir & Contact Address</h3>
-                  <p className="text-sm text-green-800">Provide both the Edir location and chairperson's contact address</p>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium mb-1">Edir Address/Location *</label>
-                  <Textarea
-                    name="address"
-                    value={formData.address}
-                    onChange={handleInputChange}
-                    placeholder="Street name, building number, neighborhood"
-                    rows={2}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium mb-1">Account/Bank Number *</label>
-                  <Input
-                    name="accountNumber"
-                    value={formData.accountNumber}
-                    onChange={handleInputChange}
-                    placeholder="e.g., 1234567890"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium mb-1">Chairperson Contact Address</label>
-                  <Textarea
-                    name="contactAddress"
-                    value={formData.contactAddress}
-                    onChange={handleInputChange}
-                    placeholder="Street name, building number, neighborhood"
-                    rows={2}
-                  />
-                </div>
-              </div>
-            )}
+                {/* Step 2: Chairperson */}
+                {currentStep === 2 && (
+                  <div className="space-y-4">
+                    <p className="text-sm text-muted-foreground">Primary leadership contact for this Edir.</p>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="contactPersonName">Chairperson / Contact Person Name <span className="text-destructive">*</span></Label>
+                      <Input id="contactPersonName" name="contactPersonName" value={formData.contactPersonName} onChange={handleInputChange} placeholder="Full name" />
+                    </div>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div className="space-y-1.5">
+                        <Label htmlFor="contactMobile">Mobile Number <span className="text-destructive">*</span></Label>
+                        <Input id="contactMobile" name="contactMobile" value={formData.contactMobile} onChange={handleInputChange} placeholder="+251 9xx xxx xxx" />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="contactEmail">Email Address <span className="text-destructive">*</span></Label>
+                        <Input id="contactEmail" name="contactEmail" type="email" value={formData.contactEmail} onChange={handleInputChange} placeholder="chairperson@example.com" />
+                      </div>
+                    </div>
+                  </div>
+                )}
 
-            {/* Step 4: Agreement Document */}
-            {currentStep === 4 && (
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium mb-1">Agreement Document (PDF)</label>
-                  <div className="border-2 border-dashed rounded-lg p-6 text-center hover:border-blue-500 transition-colors">
-                    <input
-                      type="file"
-                      accept=".pdf"
-                      onChange={handleFileUpload}
-                      className="hidden"
-                      id="agreement-upload"
-                    />
+                {/* Step 3: Address */}
+                {currentStep === 3 && (
+                  <div className="space-y-4">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="address">Edir Address / Location <span className="text-destructive">*</span></Label>
+                      <Textarea id="address" name="address" value={formData.address} onChange={handleInputChange} placeholder="Street, building, neighborhood" rows={2} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="contactAddress">Chairperson Contact Address</Label>
+                      <Textarea id="contactAddress" name="contactAddress" value={formData.contactAddress} onChange={handleInputChange} placeholder="Street, building, neighborhood" rows={2} />
+                    </div>
+                  </div>
+                )}
+
+                {/* Step 4: Agreement */}
+                {currentStep === 4 && (
+                  <div className="space-y-1.5">
+                    <Label>Agreement Document (PDF)</Label>
                     <label
                       htmlFor="agreement-upload"
-                      className="cursor-pointer block"
+                      className="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-border p-8 text-center transition-colors hover:border-primary/50 hover:bg-primary/5"
                     >
-                      <div className="text-gray-600">
-                        {formData.agreementDocUrl ? (
-                          <>
-                            <Check className="w-8 h-8 mx-auto mb-2 text-green-600" />
-                            <p className="font-medium text-green-700">{formData.agreementDocUrl}</p>
-                            <p className="text-sm text-gray-500 mt-1">Click to change file</p>
-                          </>
-                        ) : (
-                          <>
-                            <p className="font-medium">Click to upload or drag and drop</p>
-                            <p className="text-sm text-gray-500 mt-1">PDF files only, up to 10MB</p>
-                          </>
-                        )}
-                      </div>
+                      <input type="file" accept=".pdf" onChange={handleFileUpload} className="hidden" id="agreement-upload" />
+                      {formData.agreementDocUrl ? (
+                        <>
+                          <FileText className="mb-2 h-8 w-8 text-success" />
+                          <p className="font-medium text-success">{formData.agreementDocUrl}</p>
+                          <p className="mt-1 text-xs text-muted-foreground">Click to change file</p>
+                        </>
+                      ) : (
+                        <>
+                          <Upload className="mb-2 h-8 w-8 text-muted-foreground" />
+                          <p className="font-medium">Click to upload</p>
+                          <p className="mt-1 text-xs text-muted-foreground">PDF files only, up to 10&nbsp;MB</p>
+                        </>
+                      )}
                     </label>
                   </div>
-                </div>
-              </div>
-            )}
+                )}
 
-            {/* Step 5: Review & Submit */}
-            {currentStep === 5 && (
-              <div className="space-y-6">
-                <div className="bg-gray-50 rounded-lg p-4 space-y-6">
-                  {/* Edir Details */}
-                  <div className="border-b pb-4">
-                    <h4 className="font-semibold text-gray-900 mb-3">Edir Information</h4>
-                    <div className="grid grid-cols-2 gap-4 text-sm">
-                      <div>
-                        <p className="text-gray-600">Edir Name</p>
-                        <p className="font-medium">{formData.name}</p>
-                      </div>
-                      <div>
-                        <p className="text-gray-600">Branch</p>
-                        <p className="font-medium">{branches.find(b => b.id === formData.branchId)?.name}</p>
-                      </div>
-                      <div>
-                        <p className="text-gray-600">Account Number</p>
-                        <p className="font-medium">{formData.accountNumber || 'N/A'}</p>
-                      </div>
-                      <div>
-                        <p className="text-gray-600">Edir Address</p>
-                        <p className="font-medium">{formData.address || 'N/A'}</p>
-                      </div>
-                      {formData.description && (
-                        <div className="col-span-2">
-                          <p className="text-gray-600">Description</p>
-                          <p className="font-medium">{formData.description}</p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
+                {/* Step 5: Review */}
+                {currentStep === 5 && (
+                  <div className="space-y-5">
+                    <ReviewSection title="Edir Information" rows={[
+                      ['Edir Name', formData.name],
+                      ['Branch', selectedBranch ? `${selectedBranch.name} (${selectedBranch.code})` : '—'],
+                      ['District', selectedBranch?.districtName || '—'],
+                      ['Account Number', formData.accountNumber || '—'],
+                      ['Description', formData.description || '—'],
+                    ]} />
+                    <ReviewSection title="Chairperson / Contact" rows={[
+                      ['Name', formData.contactPersonName || '—'],
+                      ['Mobile', formData.contactMobile || '—'],
+                      ['Email', formData.contactEmail || '—'],
+                      ['Contact Address', formData.contactAddress || '—'],
+                    ]} />
+                    <ReviewSection title="Address & Document" rows={[
+                      ['Edir Address', formData.address || '—'],
+                      ['Agreement', formData.agreementDocUrl || 'No document uploaded'],
+                    ]} />
 
-                  {/* Chairperson Details */}
-                  <div className="border-b pb-4">
-                    <h4 className="font-semibold text-gray-900 mb-3">Chairperson/Contact Information</h4>
-                    <div className="grid grid-cols-2 gap-4 text-sm">
-                      <div>
-                        <p className="text-gray-600">Chairperson Name</p>
-                        <p className="font-medium">{formData.chairpersonName || 'N/A'}</p>
-                      </div>
-                      <div>
-                        <p className="text-gray-600">Mobile Number</p>
-                        <p className="font-medium">{formData.chairpersonMobile || 'N/A'}</p>
-                      </div>
-                      <div className="col-span-2">
-                        <p className="text-gray-600">Email Address</p>
-                        <p className="font-medium">{formData.chairpersonEmail || 'N/A'}</p>
-                      </div>
-                      {formData.contactAddress && (
-                        <div className="col-span-2">
-                          <p className="text-gray-600">Contact Address</p>
-                          <p className="font-medium">{formData.contactAddress}</p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Agreement Document */}
-                  <div>
-                    <h4 className="font-semibold text-gray-900 mb-3">Agreement Document</h4>
-                    <div className="text-sm">
-                      <p className="text-gray-600">Uploaded Document</p>
-                      <p className="font-medium text-blue-600">
-                        {formData.agreementDocUrl ? (
-                          <>
-                            <Check className="w-4 h-4 inline mr-1 text-green-600" />
-                            {formData.agreementDocUrl}
-                          </>
-                        ) : (
-                          'No document uploaded'
-                        )}
+                    <div className="flex items-start gap-2 rounded-lg border border-info/20 bg-info/5 p-3 text-sm text-info">
+                      <Clock className="mt-0.5 h-4 w-4 shrink-0" />
+                      <p>
+                        <span className="font-semibold">Maker–Checker workflow:</span> this registration is submitted for review.
+                        An authorized checker will approve, return, or reject it. The Edir becomes <strong>Active</strong> only after approval.
                       </p>
                     </div>
                   </div>
-                </div>
-
-                <Alert className="bg-blue-50 border-blue-200">
-                  <AlertCircle className="h-4 w-4 text-blue-600" />
-                  <AlertDescription className="text-blue-900">
-                    <strong>Maker-Checker Workflow:</strong> Your registration will be submitted for approval by an authorized reviewer.
-                    The approver will review all details, verify the agreement document, and either approve (Edir becomes ACTIVE) or
-                    return it for revision. You will receive notifications on approval status.
-                  </AlertDescription>
-                </Alert>
+                )}
               </div>
-            )}
 
-            {/* Navigation Buttons */}
-            <div className="flex gap-3 mt-8">
-              <Button
-                variant="outline"
-                onClick={() => setCurrentStep(Math.max(0, currentStep - 1))}
-                disabled={currentStep === 0}
-              >
-                Previous
-              </Button>
-              {currentStep === FORM_STEPS.length - 1 ? (
+              {/* Navigation */}
+              <div className="flex items-center justify-between gap-3">
                 <Button
-                  onClick={handleSubmit}
-                  disabled={!canSubmit || loading}
-                  className="flex-1"
+                  variant="outline"
+                  onClick={() => setCurrentStep(s => Math.max(0, s - 1))}
+                  disabled={currentStep === 0}
+                  className="gap-1"
                 >
-                  {loading ? 'Submitting...' : 'Submit Registration'}
+                  <ChevronLeft className="h-4 w-4" /> Back
                 </Button>
-              ) : (
-                <Button
-                  onClick={() => setCurrentStep(Math.min(FORM_STEPS.length - 1, currentStep + 1))}
-                  className="flex-1"
-                >
-                  Next
-                </Button>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+                {isLastStep ? (
+                  <Button onClick={handleSubmit} disabled={!canSubmit || submitting} className="gap-2">
+                    {submitting ? 'Submitting…' : <>Submit Registration <Check className="h-4 w-4" /></>}
+                  </Button>
+                ) : (
+                  <Button onClick={() => setCurrentStep(s => Math.min(FORM_STEPS.length - 1, s + 1))} className="gap-1">
+                    Next <ChevronRight className="h-4 w-4" />
+                  </Button>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
 
-      {/* Registrations List Sidebar */}
-      <div>
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-lg">Your Registrations</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-3">
-              <div className="flex gap-2 mb-4">
-                {['PENDING', 'ACTIVE', 'ALL'].map(status => (
+        {/* ── My Registrations ──────────────────────────────────────── */}
+        <TabsContent value="registrations" className="mt-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Your Registrations</CardTitle>
+              <CardDescription>Track the approval status of Edirs you have submitted.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex flex-wrap gap-1.5">
+                {(['PENDING', 'ACTIVE', 'REJECTED', 'RETURNED', 'ALL'] as const).map(status => (
                   <button
                     key={status}
-                    onClick={() => setStatusFilter(status as any)}
-                    className={`text-xs px-3 py-1 rounded-full font-medium transition-colors ${
-                      statusFilter === status
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                    }`}
+                    onClick={() => setStatusFilter(status)}
+                    className={[
+                      'rounded-full px-3 py-1 text-xs font-medium transition-colors',
+                      statusFilter === status ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/70',
+                    ].join(' ')}
                   >
-                    {status}
+                    {status.charAt(0) + status.slice(1).toLowerCase()}
                   </button>
                 ))}
               </div>
 
-              <div className="space-y-3 max-h-96 overflow-y-auto">
-                {registrations.length === 0 ? (
-                  <p className="text-sm text-gray-500 text-center py-4">No registrations yet</p>
-                ) : (
-                  registrations.map(reg => (
-                    <div key={reg.id} className="border rounded-lg p-3 text-sm">
-                      <div className="flex items-start justify-between gap-2 mb-2">
-                        <div className="flex-1">
-                          <p className="font-medium line-clamp-1">{reg.name}</p>
-                          <p className="text-xs text-gray-500">{reg.branchName}</p>
-                        </div>
-                        {getStatusBadge(reg.status)}
-                      </div>
-                      <p className="text-xs text-gray-600">
-                        {new Date(reg.createdAt).toLocaleDateString()}
-                      </p>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+              {regsLoading ? (
+                <LoadingState label="Loading registrations…" rows={4} />
+              ) : registrations.length === 0 ? (
+                <EmptyState
+                  icon={ListChecks}
+                  title="No registrations found"
+                  description="Submit a new Edir registration from the “Register New” tab to see it here."
+                  action={<Button variant="outline" className="gap-2" onClick={() => setActiveTab('register')}><Upload className="h-4 w-4" /> Register Edir</Button>}
+                />
+              ) : (
+                <div className="overflow-hidden rounded-lg border">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Edir Name</TableHead>
+                        <TableHead>Branch</TableHead>
+                        <TableHead>Contact</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead className="text-right">Submitted</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {registrations.map(reg => (
+                        <TableRow key={reg.id}>
+                          <TableCell className="font-medium">{reg.name}</TableCell>
+                          <TableCell className="text-muted-foreground">{reg.branchName}</TableCell>
+                          <TableCell className="text-muted-foreground">{reg.contactPersonName || '—'}</TableCell>
+                          <TableCell><StatusBadge status={reg.approvalStatus || reg.status} /></TableCell>
+                          <TableCell className="text-right text-sm text-muted-foreground">
+                            {new Date(reg.createdAt).toLocaleDateString()}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}
+
+function ReviewSection({ title, rows }: { title: string; rows: [string, string][] }) {
+  return (
+    <div className="rounded-lg border bg-background p-4">
+      <h4 className="mb-3 text-sm font-semibold">{title}</h4>
+      <dl className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
+        {rows.map(([label, value]) => (
+          <div key={label}>
+            <dt className="text-xs text-muted-foreground">{label}</dt>
+            <dd className="mt-0.5 break-words text-sm font-medium">{value}</dd>
+          </div>
+        ))}
+      </dl>
     </div>
   );
 }

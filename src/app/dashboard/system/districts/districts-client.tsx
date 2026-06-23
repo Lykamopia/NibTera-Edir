@@ -1,11 +1,12 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Card, CardContent } from '@/components/ui/card';
 import {
   Dialog,
   DialogContent,
@@ -22,55 +23,51 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { PageHeader, LoadingState, EmptyState, StatCard } from '@/components/ui/states';
+import { useConfirm } from '@/components/ui/confirm-provider';
 import { getDistricts, saveDistrict, deleteDistrict } from '@/app/actions/districts';
-import { AlertCircle, Plus, Edit2, Trash2 } from 'lucide-react';
+import { MapPin, Plus, Pencil, Trash2, Building, Network } from 'lucide-react';
 
 interface District {
   id: string;
   name: string;
-  code: string;
+  code: string | null;
   description: string | null;
   branches: number;
   createdAt: Date;
 }
 
 export default function DistrictsClient() {
+  const confirm = useConfirm();
   const [districts, setDistricts] = useState<District[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formData, setFormData] = useState({ name: '', code: '', description: '' });
 
-  // Load districts
-  useEffect(() => {
-    const load = async () => {
-      try {
-        setLoading(true);
-        const result = await getDistricts();
-        if (result.success) {
-          setDistricts(result.data);
-        } else {
-          setError(result.error);
-        }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load districts');
-      } finally {
-        setLoading(false);
+  const load = async () => {
+    try {
+      setLoading(true);
+      const result = await getDistricts();
+      if (result.success) {
+        setDistricts(result.data);
+      } else {
+        toast.error(result.error);
       }
-    };
-    load();
-  }, []);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to load districts');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { load(); }, []);
 
   const handleOpen = (district?: District) => {
     if (district) {
       setEditingId(district.id);
-      setFormData({
-        name: district.name,
-        code: district.code,
-        description: district.description || '',
-      });
+      setFormData({ name: district.name, code: district.code || '', description: district.description || '' });
     } else {
       setEditingId(null);
       setFormData({ name: '', code: '', description: '' });
@@ -79,186 +76,180 @@ export default function DistrictsClient() {
   };
 
   const handleSave = async () => {
+    if (!formData.name.trim() || !formData.code.trim()) {
+      toast.error('Name and code are required');
+      return;
+    }
     try {
-      setError(null);
-      if (!formData.name.trim() || !formData.code.trim()) {
-        setError('Name and code are required');
-        return;
-      }
-
-      const result = await saveDistrict({
-        id: editingId || undefined,
-        ...formData,
-      });
-
+      setSaving(true);
+      const result = await saveDistrict({ id: editingId || undefined, ...formData });
       if (result.success) {
-        setSuccess(editingId ? 'District updated' : 'District created');
+        toast.success(editingId ? 'District updated' : 'District created');
         setOpen(false);
-        // Reload districts
-        const reloadResult = await getDistricts();
-        if (reloadResult.success) {
-          setDistricts(reloadResult.data);
-        }
+        await load();
       } else {
-        setError(result.error);
+        toast.error(result.error);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save');
+      toast.error(err instanceof Error ? err.message : 'Failed to save');
+    } finally {
+      setSaving(false);
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this district?')) return;
-
+  const handleDelete = async (district: District) => {
+    const ok = await confirm({
+      title: `Delete ${district.name}?`,
+      description: 'This permanently removes the district. Districts with branches cannot be deleted.',
+      confirmText: 'Delete',
+      destructive: true,
+    });
+    if (!ok) return;
     try {
-      setError(null);
-      const result = await deleteDistrict(id);
+      const result = await deleteDistrict(district.id);
       if (result.success) {
-        setSuccess('District deleted');
-        const reloadResult = await getDistricts();
-        if (reloadResult.success) {
-          setDistricts(reloadResult.data);
-        }
+        toast.success('District deleted');
+        await load();
       } else {
-        setError(result.error);
+        toast.error(result.error);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete');
+      toast.error(err instanceof Error ? err.message : 'Failed to delete');
     }
   };
+
+  const totalBranches = districts.reduce((sum, d) => sum + d.branches, 0);
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-3xl font-bold">Districts</h1>
-          <p className="text-gray-600">Manage bank operational districts</p>
-        </div>
-        <Button onClick={() => handleOpen()} className="gap-2">
-          <Plus className="w-4 h-4" />
-          New District
-        </Button>
+    <div className="space-y-6">
+      <PageHeader
+        icon={MapPin}
+        title="Districts"
+        description="Manage the bank's operational districts — the top tier of the service hierarchy."
+        actions={
+          <Button onClick={() => handleOpen()} className="gap-2">
+            <Plus className="h-4 w-4" />
+            New District
+          </Button>
+        }
+      />
+
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <StatCard title="Total Districts" value={districts.length} icon={MapPin} accent="primary" />
+        <StatCard title="Total Branches" value={totalBranches} icon={Building} accent="info" hint="across all districts" />
+        <StatCard
+          title="Avg. Branches / District"
+          value={districts.length ? (totalBranches / districts.length).toFixed(1) : '0'}
+          icon={Network}
+          accent="success"
+        />
       </div>
 
-      {error && (
-        <Alert variant="destructive" className="mb-6">
-          <AlertCircle className="h-4 w-4" />
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      )}
-
-      {success && (
-        <Alert className="mb-6 border-green-200 bg-green-50">
-          <AlertCircle className="h-4 w-4 text-green-600" />
-          <AlertDescription className="text-green-800">{success}</AlertDescription>
-        </Alert>
-      )}
-
       <Card>
-        <CardHeader>
-          <CardTitle>All Districts</CardTitle>
-          <CardDescription>{districts.length} district(s) registered</CardDescription>
-        </CardHeader>
-        <CardContent>
+        <CardContent className="p-0">
           {loading ? (
-            <div className="text-center py-8 text-gray-500">Loading...</div>
+            <LoadingState label="Loading districts…" rows={4} />
           ) : districts.length === 0 ? (
-            <div className="text-center py-8">
-              <p className="text-gray-500 mb-4">No districts yet</p>
-              <Button onClick={() => handleOpen()} variant="outline">
-                Create First District
-              </Button>
-            </div>
+            <EmptyState
+              icon={MapPin}
+              title="No districts yet"
+              description="Create your first district to start building the branch and Edir hierarchy."
+              action={
+                <Button onClick={() => handleOpen()} variant="outline" className="gap-2">
+                  <Plus className="h-4 w-4" /> Create District
+                </Button>
+              }
+            />
           ) : (
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Code</TableHead>
-                    <TableHead>Description</TableHead>
-                    <TableHead className="text-right">Branches</TableHead>
-                    <TableHead className="w-20">Actions</TableHead>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Code</TableHead>
+                  <TableHead>Description</TableHead>
+                  <TableHead className="text-right">Branches</TableHead>
+                  <TableHead className="w-24 text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {districts.map(district => (
+                  <TableRow key={district.id}>
+                    <TableCell className="font-medium">{district.name}</TableCell>
+                    <TableCell>
+                      <span className="inline-flex items-center rounded-md bg-muted px-2 py-0.5 font-mono text-xs text-muted-foreground">
+                        {district.code || '—'}
+                      </span>
+                    </TableCell>
+                    <TableCell className="max-w-xs truncate text-muted-foreground">{district.description || '—'}</TableCell>
+                    <TableCell className="text-right tabular-nums">{district.branches}</TableCell>
+                    <TableCell>
+                      <div className="flex justify-end gap-1">
+                        <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => handleOpen(district)} title="Edit">
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                          onClick={() => handleDelete(district)}
+                          title="Delete"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </TableCell>
                   </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {districts.map(district => (
-                    <TableRow key={district.id}>
-                      <TableCell className="font-medium">{district.name}</TableCell>
-                      <TableCell>{district.code}</TableCell>
-                      <TableCell className="text-gray-600 max-w-xs truncate">{district.description}</TableCell>
-                      <TableCell className="text-right">{district.branches}</TableCell>
-                      <TableCell>
-                        <div className="flex gap-2">
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => handleOpen(district)}
-                          >
-                            <Edit2 className="w-4 h-4" />
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => handleDelete(district.id)}
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
+                ))}
+              </TableBody>
+            </Table>
           )}
         </CardContent>
       </Card>
 
-      {/* Dialog */}
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{editingId ? 'Edit District' : 'Create District'}</DialogTitle>
             <DialogDescription>
-              {editingId ? 'Update district information' : 'Create a new bank district'}
+              {editingId ? 'Update this district’s information.' : 'Add a new operational district to the hierarchy.'}
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium mb-1">District Name *</label>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="district-name">District Name <span className="text-destructive">*</span></Label>
               <Input
+                id="district-name"
                 value={formData.name}
                 onChange={e => setFormData({ ...formData, name: e.target.value })}
-                placeholder="e.g., Addis Ababa District"
+                placeholder="e.g. Addis Ababa District"
               />
             </div>
-            <div>
-              <label className="block text-sm font-medium mb-1">Code *</label>
+            <div className="space-y-1.5">
+              <Label htmlFor="district-code">Code <span className="text-destructive">*</span></Label>
               <Input
+                id="district-code"
                 value={formData.code}
                 onChange={e => setFormData({ ...formData, code: e.target.value })}
-                placeholder="e.g., AADDIS"
+                placeholder="e.g. AA-DIST"
               />
             </div>
-            <div>
-              <label className="block text-sm font-medium mb-1">Description</label>
+            <div className="space-y-1.5">
+              <Label htmlFor="district-desc">Description</Label>
               <Textarea
+                id="district-desc"
                 value={formData.description}
                 onChange={e => setFormData({ ...formData, description: e.target.value })}
-                placeholder="District details and information"
+                placeholder="Optional notes about this district"
                 rows={3}
               />
             </div>
           </div>
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => setOpen(false)}>
-              Cancel
-            </Button>
-            <Button onClick={handleSave}>
-              {editingId ? 'Update' : 'Create'}
+            <Button variant="outline" onClick={() => setOpen(false)} disabled={saving}>Cancel</Button>
+            <Button onClick={handleSave} disabled={saving}>
+              {saving ? 'Saving…' : editingId ? 'Save changes' : 'Create district'}
             </Button>
           </DialogFooter>
         </DialogContent>

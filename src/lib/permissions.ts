@@ -74,11 +74,12 @@ export const pagePermissions: PagePermissionDef[] = [
     actions: [{ id: 'view_approvals', label: 'View Approvals', description: 'Access the Approvals Center', isAccess: true }],
   },
   {
-    id: 'edir-registration', label: 'Edir Registration', path: '/dashboard/edir-registration', icon: 'Building2', section: 'operations',
-    accessPermissions: ['register_edir', 'approve_edir_registration', 'super_admin'],
+    id: 'edir-registration', label: 'Edirs', path: '/dashboard/edir-registration', icon: 'Building2', section: 'operations',
+    accessPermissions: ['register_edir', 'approve_edir_registration', 'manage_edirs', 'super_admin'],
     actions: [
       { id: 'register_edir', label: 'Register Edir', description: 'Submit new Edir for registration (maker)', isAccess: true },
       { id: 'approve_edir_registration', label: 'Approve Registration', description: 'Review and approve Edir registrations (checker)' },
+      { id: 'manage_edirs', label: 'Manage Edirs', description: 'Create & manage Edirs and view directory' },
     ],
   },
   {
@@ -191,11 +192,6 @@ export const pagePermissions: PagePermissionDef[] = [
       { id: 'manage_branches', label: 'Create & Manage Branches', description: 'Create and manage branches within districts', isAccess: true },
       { id: 'view_branches', label: 'View Branches', description: 'View branch information' },
     ],
-  },
-  {
-    id: 'system-edirs', label: 'Edirs', path: '/dashboard/system/edirs', icon: 'Building2', section: 'system',
-    accessPermissions: ['manage_edirs', 'super_admin'],
-    actions: [{ id: 'manage_edirs', label: 'Create & Manage Edirs', description: 'Create tenant Edirs and edit their profiles', isAccess: true }],
   },
   {
     id: 'system-associations', label: 'User Associations', path: '/dashboard/system/associations', icon: 'Network', section: 'system',

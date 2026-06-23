@@ -120,7 +120,7 @@ export async function respondMemberRequest(id: string, input: z.infer<typeof res
     const data = respondSchema.parse(input);
     const request = await prisma.memberRequest.findUnique({ where: { id }, include: { member: true } });
     if (!request) return { success: false as const, error: 'Request not found.' };
-    assertSameTenant(actor, request.edirId);
+    await assertSameTenant(actor, request.edirId);
 
     await prisma.$transaction(async (tx) => {
       // Perform the downstream action when a request is approved.
