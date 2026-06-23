@@ -98,18 +98,68 @@ export async function getPlatformRoles() {
   return prisma.role.findMany({ where: { scope: 'SUPER_ADMIN' }, orderBy: { name: 'asc' }, select: { id: true, name: true, permissions: true } });
 }
 
+/** Districts (each with their branches) for placing a platform user organizationally. */
+export async function getOrgUnitsForAssociation() {
+  const actor = await getActor();
+  if (!actor.isSuperAdmin) throw new AccessDeniedError('Only Super Administrators can manage platform users.');
+  return prisma.district.findMany({
+    orderBy: { name: 'asc' },
+    select: {
+      id: true, name: true, code: true,
+      branches: { orderBy: { name: 'asc' }, select: { id: true, name: true, code: true } },
+    },
+  });
+}
+
+export type OrgScope = 'HEAD_OFFICE' | 'DISTRICT' | 'BRANCH';
+
+/**
+ * Roles assignable to a platform user, by organizational scope:
+ *  • HEAD_OFFICE → platform (SUPER_ADMIN) and HEAD_OFFICE roles
+ *  • DISTRICT    → DISTRICT roles for the chosen district (+ global district templates)
+ *  • BRANCH      → BRANCH roles for the chosen branch (+ global branch templates)
+ */
+export async function getScopedRolesForAssociation(scope: OrgScope, scopeId?: string | null) {
+  const actor = await getActor();
+  if (!actor.isSuperAdmin) throw new AccessDeniedError('Only Super Administrators can manage platform users.');
+  if (scope === 'DISTRICT') {
+    return prisma.role.findMany({
+      where: { scope: 'DISTRICT', OR: [...(scopeId ? [{ districtId: scopeId }] : []), { districtId: null }] },
+      orderBy: { name: 'asc' }, select: { id: true, name: true },
+    });
+  }
+  if (scope === 'BRANCH') {
+    return prisma.role.findMany({
+      where: { scope: 'BRANCH', OR: [...(scopeId ? [{ branchId: scopeId }] : []), { branchId: null }] },
+      orderBy: { name: 'asc' }, select: { id: true, name: true },
+    });
+  }
+  return prisma.role.findMany({
+    where: { scope: { in: ['SUPER_ADMIN', 'HEAD_OFFICE'] } },
+    orderBy: { name: 'asc' }, select: { id: true, name: true },
+  });
+}
+
 const createPlatformAdminSchema = z.object({
   name: z.string().min(2, 'Name is required.'),
   email: z.string().email('A valid email is required.'),
   phone: z.string().min(9, 'A phone number is required.'),
-  roleId: z.string().min(1, 'Select a platform role.'),
+  roleId: z.string().min(1, 'Select a role.'),
+  // Organizational placement (all optional):
+  //  • neither           → Head Office user
+  //  • districtId only    → District user
+  //  • districtId+branchId → Branch user
+  districtId: z.string().optional().nullable(),
+  branchId: z.string().optional().nullable(),
 });
 
 /**
- * Create a PLATFORM user — no Edir, holding a platform (Super-Admin-scope) role
- * such as "Edir Creator" (manage_edirs + manage_associations). Restricted to a
- * full Super-Admin, since platform roles carry cross-tenant power. The user is
- * invited to set a password and is NOT enrolled as a member of any Edir.
+ * Create a PLATFORM user — no Edir — placed at one of three organizational levels:
+ *  • Head Office (no district/branch) holding a platform (SUPER_ADMIN/HEAD_OFFICE) role,
+ *  • District (districtId set) holding a DISTRICT role,
+ *  • Branch (branchId set, district derived) holding a BRANCH role.
+ * Restricted to a full Super-Admin. The user is invited to set a password and is
+ * NOT enrolled as a member of any Edir.
  */
 export async function createPlatformAdmin(input: z.infer<typeof createPlatformAdminSchema>) {
   try {
@@ -117,8 +167,31 @@ export async function createPlatformAdmin(input: z.infer<typeof createPlatformAd
     if (!actor.isSuperAdmin) return { success: false as const, error: 'Only Super Administrators can create platform users.' };
     const data = createPlatformAdminSchema.parse(input);
 
-    const role = await prisma.role.findUnique({ where: { id: data.roleId }, select: { scope: true, name: true } });
-    if (!role || role.scope !== 'SUPER_ADMIN') return { success: false as const, error: 'Select a valid platform role.' };
+    // Resolve organizational placement. A branch user belongs to its branch's district.
+    let districtId = data.districtId?.trim() || null;
+    let branchId = data.branchId?.trim() || null;
+    let placementLabel = 'Head Office';
+    if (branchId) {
+      const branch = await prisma.branch.findUnique({ where: { id: branchId }, select: { id: true, name: true, districtId: true, district: { select: { name: true } } } });
+      if (!branch) return { success: false as const, error: 'Selected branch not found.' };
+      districtId = branch.districtId;
+      placementLabel = `Branch · ${branch.district?.name ?? ''} / ${branch.name}`.trim();
+    } else if (districtId) {
+      const district = await prisma.district.findUnique({ where: { id: districtId }, select: { id: true, name: true } });
+      if (!district) return { success: false as const, error: 'Selected district not found.' };
+      placementLabel = `District · ${district.name}`;
+    }
+    const scope: OrgScope = branchId ? 'BRANCH' : districtId ? 'DISTRICT' : 'HEAD_OFFICE';
+
+    // The role must match the chosen scope (and, when scoped, the chosen unit).
+    const role = await prisma.role.findUnique({ where: { id: data.roleId }, select: { scope: true, name: true, districtId: true, branchId: true } });
+    if (!role) return { success: false as const, error: 'Role not found.' };
+    const roleMatches =
+      (scope === 'HEAD_OFFICE' && (role.scope === 'SUPER_ADMIN' || role.scope === 'HEAD_OFFICE')) ||
+      (scope === 'DISTRICT' && role.scope === 'DISTRICT' && (!role.districtId || role.districtId === districtId)) ||
+      (scope === 'BRANCH' && role.scope === 'BRANCH' && (!role.branchId || role.branchId === branchId));
+    if (!roleMatches) return { success: false as const, error: 'The selected role does not match the chosen organizational scope.' };
+
     if (!isValidEthiopianPhone(data.phone)) return { success: false as const, error: 'Enter a valid Ethiopian phone number.' };
     const phone = normalizeEthiopianPhone(data.phone);
     const email = data.email.toLowerCase().trim();
@@ -135,7 +208,7 @@ export async function createPlatformAdmin(input: z.infer<typeof createPlatformAd
     const tempPassword = generateTempPassword();
     const hashed = await bcrypt.hash(tempPassword, 12);
     const user = await prisma.user.create({
-      data: { name: data.name, email, phone, edirId: null, roleId: data.roleId, status: 'ACTIVE', hashedPassword: hashed, mustChangePassword: true, onboardingCompleted: false },
+      data: { name: data.name, email, phone, edirId: null, districtId, branchId, roleId: data.roleId, status: 'ACTIVE', hashedPassword: hashed, mustChangePassword: true, onboardingCompleted: false },
     });
 
     const token = crypto.randomBytes(32).toString('hex');
@@ -146,7 +219,7 @@ export async function createPlatformAdmin(input: z.infer<typeof createPlatformAd
     });
     sendVerificationEmail({ to: email, name: data.name, token }).catch(err => console.error('Failed to send invite email:', err));
 
-    await writeAudit({ userId: actor.id, action: 'PLATFORM_USER_CREATED', targetType: 'User', targetId: user.id, details: `Created platform user ${email} with role "${role.name}".` });
+    await writeAudit({ userId: actor.id, action: 'PLATFORM_USER_CREATED', targetType: 'User', targetId: user.id, details: `Created ${placementLabel} user ${email} with role "${role.name}".` });
     revalidatePath('/dashboard/system/associations');
     return { success: true as const, userId: user.id, credentials: { username: phone ?? email, tempPassword, channel: phone ? 'SMS' : 'email' } };
   } catch (error) {
@@ -154,19 +227,27 @@ export async function createPlatformAdmin(input: z.infer<typeof createPlatformAd
   }
 }
 
-/** Platform users (no Edir, Super-Admin-scope role) for the Platform Users list. */
+const SCOPE_LABEL: Record<string, string> = {
+  SUPER_ADMIN: 'Head Office', HEAD_OFFICE: 'Head Office', DISTRICT: 'District', BRANCH: 'Branch',
+};
+
+/** Platform users (no Edir) — Head Office, District and Branch operators. */
 export async function getPlatformUsers() {
   const actor = await getActor();
   if (!actor.isSuperAdmin) throw new AccessDeniedError('Only Super Administrators can view platform users.');
   const users = await prisma.user.findMany({
-    where: { role: { is: { scope: 'SUPER_ADMIN' } } },
-    include: { role: { select: { name: true, scope: true } } },
+    where: { edirId: null, role: { is: { scope: { in: ['SUPER_ADMIN', 'HEAD_OFFICE', 'DISTRICT', 'BRANCH'] } } } },
+    include: { role: { select: { name: true, scope: true } }, district: { select: { name: true } }, branch: { select: { name: true } } },
     orderBy: { createdAt: 'desc' },
   });
   return users.map(u => ({
     id: u.id, name: u.name, email: u.email, phone: u.phone,
     status: u.status, mustChangePassword: u.mustChangePassword,
     roleId: u.roleId, roleName: u.role?.name ?? null, lastLoginAt: u.lastLoginAt,
+    scope: u.role?.scope ?? null,
+    scopeLabel: u.role?.scope ? (SCOPE_LABEL[u.role.scope] ?? u.role.scope) : null,
+    districtName: u.district?.name ?? null,
+    branchName: u.branch?.name ?? null,
   }));
 }
 

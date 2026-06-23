@@ -18,7 +18,8 @@ import { CredentialsDialog, type Credentials } from '@/components/credentials-di
 import {
   getAssociationEdirs, getAssociationUsers, getEdirUsers, getEdirRolesForAssociation,
   associateUsers, removeUserFromEdir, setAssociationUserStatus, getAssociationAudit,
-  createPlatformUser, createPlatformAdmin, getPlatformRoles, getPlatformUsers, resetAssociationUserPassword,
+  createPlatformUser, createPlatformAdmin, getPlatformUsers, resetAssociationUserPassword,
+  getOrgUnitsForAssociation, getScopedRolesForAssociation,
 } from '@/app/actions/associations';
 import { getEdirContext } from '@/app/actions/edir-context';
 
@@ -134,16 +135,21 @@ function PlatformUsersTab({ refreshKey, onCredentials }: { refreshKey: number; o
     <Card><CardContent className="p-0">
       {users.length === 0 ? <EmptyState icon={Crown} title="No platform users yet" description="Use “Create User → Platform user” to add one." /> : (
         <div className="divide-y">
-          {users.map(u => (
+          {users.map(u => {
+            const placement = u.branchName
+              ? `${u.districtName ? `${u.districtName} / ` : ''}${u.branchName}`
+              : u.districtName || (u.scopeLabel === 'Head Office' ? 'Head Office' : null);
+            return (
             <div key={u.id} className="flex flex-col gap-2 p-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-medium">{u.name || u.email || u.phone}</span>
                   <Badge variant="outline" className={STATUS[u.status] ?? ''}>{u.status}</Badge>
+                  {u.scopeLabel && <Badge variant="outline" className="border-primary/20 bg-primary/10 text-primary">{u.scopeLabel}</Badge>}
                   {u.roleName && <Badge variant="secondary">{u.roleName}</Badge>}
                   {u.mustChangePassword && <Badge variant="outline" className="border-info/20 bg-info/10 text-info">Pending first login</Badge>}
                 </div>
-                <div className="text-xs text-muted-foreground">{u.phone || u.email} · last login {fmt(u.lastLoginAt)}</div>
+                <div className="text-xs text-muted-foreground">{u.phone || u.email}{placement ? ` · ${placement}` : ''} · last login {fmt(u.lastLoginAt)}</div>
               </div>
               <div className="flex shrink-0 flex-wrap gap-1.5">
                 <Select value={u.status} onValueChange={(v) => onStatus(u, v)}>
@@ -153,7 +159,8 @@ function PlatformUsersTab({ refreshKey, onCredentials }: { refreshKey: number; o
                 <Button size="sm" variant="outline" onClick={() => onReset(u)}><KeyRound className="mr-1 h-4 w-4" /> Reset password</Button>
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </CardContent></Card>
@@ -396,10 +403,16 @@ function ReassignDialog({ user, edirs, onClose, onDone }: { user: any; edirs: an
 
 function CreateUserDialog({ edirs, canPlatform, onClose, onDone }: { edirs: any[]; canPlatform: boolean; onClose: () => void; onDone: (cred?: { name: string; credentials: Credentials }) => void }) {
   const [kind, setKind] = useState<'edir' | 'platform'>('edir');
-  const [form, setForm] = useState({ name: '', email: '', phone: '', edirId: '', roleId: '' });
+  const [form, setForm] = useState({ name: '', email: '', phone: '', edirId: '', roleId: '', districtId: '', branchId: '' });
   const [edirRoles, setEdirRoles] = useState<any[]>([]);
   const [platformRoles, setPlatformRoles] = useState<any[]>([]);
+  const [orgUnits, setOrgUnits] = useState<any[]>([]);
   const [saving, setSaving] = useState(false);
+
+  // Org scope is derived from the chosen placement.
+  const platScope: 'HEAD_OFFICE' | 'DISTRICT' | 'BRANCH' = form.branchId ? 'BRANCH' : form.districtId ? 'DISTRICT' : 'HEAD_OFFICE';
+  const scopeId = form.branchId || form.districtId || null;
+  const branchesForDistrict: any[] = orgUnits.find(d => d.id === form.districtId)?.branches ?? [];
 
   useEffect(() => {
     if (kind !== 'edir' || !form.edirId) { setEdirRoles([]); return; }
@@ -408,19 +421,28 @@ function CreateUserDialog({ edirs, canPlatform, onClose, onDone }: { edirs: any[
       .catch(() => setEdirRoles([]));
   }, [kind, form.edirId]);
 
+  // Districts (+branches) loaded once when entering the platform path.
+  useEffect(() => {
+    if (kind !== 'platform' || orgUnits.length) return;
+    getOrgUnitsForAssociation().then(setOrgUnits).catch(() => setOrgUnits([]));
+  }, [kind, orgUnits.length]);
+
+  // Scope-aware role list whenever the Head-Office/District/Branch placement changes.
   useEffect(() => {
     if (kind !== 'platform') return;
-    getPlatformRoles().then(r => { setPlatformRoles(r); setForm(f => ({ ...f, roleId: r[0]?.id ?? '' })); }).catch(() => setPlatformRoles([]));
-  }, [kind]);
+    getScopedRolesForAssociation(platScope, scopeId)
+      .then(r => { setPlatformRoles(r); setForm(f => ({ ...f, roleId: r[0]?.id ?? '' })); })
+      .catch(() => setPlatformRoles([]));
+  }, [kind, platScope, scopeId]);
 
-  const switchKind = (k: 'edir' | 'platform') => { setKind(k); setForm(f => ({ ...f, edirId: '', roleId: '' })); };
+  const switchKind = (k: 'edir' | 'platform') => { setKind(k); setForm(f => ({ ...f, edirId: '', roleId: '', districtId: '', branchId: '' })); };
 
   const submit = async () => {
     setSaving(true);
     let res: any;
     if (kind === 'platform') {
-      if (!form.roleId) { toast.error('Select a platform role.'); setSaving(false); return; }
-      res = await createPlatformAdmin({ name: form.name, email: form.email, phone: form.phone, roleId: form.roleId });
+      if (!form.roleId) { toast.error('Select a role.'); setSaving(false); return; }
+      res = await createPlatformAdmin({ name: form.name, email: form.email, phone: form.phone, roleId: form.roleId, districtId: form.districtId || null, branchId: form.branchId || null });
     } else {
       if (!form.edirId) { toast.error('Select an Edir.'); setSaving(false); return; }
       res = await createPlatformUser({ name: form.name, email: form.email, phone: form.phone, edirId: form.edirId, roleId: form.roleId || null });
@@ -432,6 +454,8 @@ function CreateUserDialog({ edirs, canPlatform, onClose, onDone }: { edirs: any[
     } else toast.error(res?.error || 'Failed to create user.');
   };
 
+  const scopeHint = platScope === 'BRANCH' ? 'Branch user' : platScope === 'DISTRICT' ? 'District user' : 'Head Office user';
+
   return (
     <Dialog open onOpenChange={o => { if (!o) onClose(); }}>
       <DialogContent>
@@ -439,7 +463,7 @@ function CreateUserDialog({ edirs, canPlatform, onClose, onDone }: { edirs: any[
           <DialogTitle>Create User</DialogTitle>
           <DialogDescription>
             {kind === 'platform'
-              ? 'Create a platform user (no Edir) holding a platform role such as “Edir Creator”. They get a temporary password to sign in (changed on first login) and can register Edirs and assign users.'
+              ? 'Create a platform user (no Edir). Place them at Head Office, or within a District and optionally a Branch — the role list adapts to the chosen scope. They get a temporary password (changed on first login).'
               : 'Create a login account directly in an Edir. They get a temporary password to sign in (changed on first login) and are enrolled as a member of the Edir.'}
           </DialogDescription>
         </DialogHeader>
@@ -475,12 +499,41 @@ function CreateUserDialog({ edirs, canPlatform, onClose, onDone }: { edirs: any[
               </div>
             </>
           ) : (
-            <div className="space-y-1.5"><Label className="text-xs">Platform Role</Label>
-              <Select value={form.roleId} onValueChange={v => setForm(f => ({ ...f, roleId: v }))}>
-                <SelectTrigger><SelectValue placeholder="Select a platform role" /></SelectTrigger>
-                <SelectContent>{platformRoles.map(r => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}</SelectContent>
-              </Select>
-              {platformRoles.length === 0 && <p className="text-[11px] text-muted-foreground">No platform roles yet — create one on the Roles page (scope “Platform”).</p>}
+            <div className="space-y-3 rounded-lg border bg-muted/30 p-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5"><Label className="text-xs">District</Label>
+                  <Select value={form.districtId || 'none'} onValueChange={v => setForm(f => ({ ...f, districtId: v === 'none' ? '' : v, branchId: '' }))}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Head Office (no district)</SelectItem>
+                      {orgUnits.map(d => <SelectItem key={d.id} value={d.id}>{d.name}{d.code ? ` (${d.code})` : ''}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5"><Label className="text-xs">Branch <span className="font-normal text-muted-foreground">(optional)</span></Label>
+                  <Select value={form.branchId || 'none'} onValueChange={v => setForm(f => ({ ...f, branchId: v === 'none' ? '' : v }))} disabled={!form.districtId}>
+                    <SelectTrigger><SelectValue placeholder={form.districtId ? 'Whole district' : 'Pick a district first'} /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Whole district (no branch)</SelectItem>
+                      {branchesForDistrict.map((b: any) => <SelectItem key={b.id} value={b.id}>{b.name}{b.code ? ` (${b.code})` : ''}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground"><Crown className="h-3.5 w-3.5" /> This will be a <span className="font-medium text-foreground">{scopeHint}</span>.</p>
+              <div className="space-y-1.5"><Label className="text-xs">Role</Label>
+                <Select value={form.roleId} onValueChange={v => setForm(f => ({ ...f, roleId: v }))}>
+                  <SelectTrigger><SelectValue placeholder="Select a role" /></SelectTrigger>
+                  <SelectContent>{platformRoles.map(r => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}</SelectContent>
+                </Select>
+                {platformRoles.length === 0 && (
+                  <p className="text-[11px] text-muted-foreground">
+                    {platScope === 'HEAD_OFFICE'
+                      ? 'No platform roles yet — create one on the Roles page (scope “Platform”).'
+                      : 'No roles for this unit yet — District/Branch roles are auto-created with the district or branch.'}
+                  </p>
+                )}
+              </div>
             </div>
           )}
         </div>
