@@ -32,11 +32,12 @@ import {
 } from '@/components/ui/table';
 import { PageHeader, LoadingState, EmptyState, StatCard } from '@/components/ui/states';
 import { Pagination, usePagination } from '@/components/ui/pagination';
+import { ImportDialog } from '@/components/ui/import-dialog';
 import { useConfirm } from '@/components/ui/confirm-provider';
-import { getBranches, saveBranch, deleteBranch } from '@/app/actions/branches';
+import { getBranches, saveBranch, deleteBranch, importBranches } from '@/app/actions/branches';
 import { getDistricts } from '@/app/actions/districts';
 import { type Actor } from '@/lib/tenant-scope';
-import { Building, Plus, Pencil, Trash2, MapPin, Building2 } from 'lucide-react';
+import { Building, Plus, Pencil, Trash2, MapPin, Building2, Upload } from 'lucide-react';
 
 interface Branch {
   id: string;
@@ -64,6 +65,7 @@ export default function BranchesClient({ actor }: { actor: Actor }) {
   const [districts, setDistricts] = useState<District[]>([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formData, setFormData] = useState({ name: '', code: '', description: '', districtId: '' });
@@ -153,12 +155,43 @@ export default function BranchesClient({ actor }: { actor: Actor }) {
         title="Branches"
         description={isDistrictScope ? 'Manage the branches within your district.' : 'Manage bank branches across all districts.'}
         actions={
-          <Button onClick={() => handleOpen()} className="gap-2">
-            <Plus className="h-4 w-4" />
-            New Branch
-          </Button>
+          <>
+            <Button variant="outline" onClick={() => setImporting(true)} className="gap-2">
+              <Upload className="h-4 w-4" />
+              Import
+            </Button>
+            <Button onClick={() => handleOpen()} className="gap-2">
+              <Plus className="h-4 w-4" />
+              New Branch
+            </Button>
+          </>
         }
       />
+
+      {importing && (
+        <ImportDialog
+          title="Import Branches"
+          description="Bulk-create or update branches from a CSV. The District column matches by code or name; existing branches (by code) are updated."
+          templateName="branches-template.csv"
+          columns={[
+            { key: 'name', label: 'Name', required: true, example: 'Bole Branch' },
+            { key: 'code', label: 'Code', required: true, example: 'BOLE' },
+            { key: 'district', label: 'District', required: true, example: 'AA-DIST' },
+            { key: 'description', label: 'Description', example: 'Bole sub-city branch' },
+          ]}
+          sampleRows={[
+            { name: 'Bole Branch', code: 'BOLE', district: 'AA-DIST', description: 'Bole sub-city branch' },
+            { name: 'Kirkos Branch', code: 'KIRKOS', district: 'AA-DIST', description: '' },
+          ]}
+          onImport={async (rows) => {
+            const res = await importBranches(rows);
+            if (!res.success) return { error: res.error };
+            return { created: res.created, updated: res.updated, errors: res.errors };
+          }}
+          onClose={() => setImporting(false)}
+          onDone={load}
+        />
+      )}
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <StatCard title="Total Branches" value={branches.length} icon={Building} accent="primary" />

@@ -75,7 +75,7 @@ const en: Record<string, string> = {
   additional: 'Additional',
   date: 'Date',
   noCharges: 'No penalties or extra charges.',
-  contributionsArrears: 'Contributions & Arrears',
+  contributionsArrears: 'Contributions & Overdue',
   // contribution coverage (which months are paid)
   coverageTitle: 'Contribution Coverage',
   paidThrough: 'Paid through',

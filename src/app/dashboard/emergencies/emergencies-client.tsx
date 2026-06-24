@@ -20,6 +20,9 @@ import {
 } from '@/app/actions/emergencies';
 import { useConfirm, usePrompt } from '@/components/ui/confirm-provider';
 import { PageHeader, StatCard, LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
+import { ReceiptUpload, type ReceiptFile } from '@/components/ui/receipt-upload';
+import { FileText, X } from 'lucide-react';
+import { DateRangeFilter, ALL_TIME, inDateRange, type DateRangeValue } from '@/components/ui/date-range-filter';
 
 const STATUS_VARIANT: Record<string, { label: string; cls: string }> = {
   REPORTED: { label: 'Reported', cls: 'border-info/20 bg-info/10 text-info' },
@@ -65,6 +68,7 @@ function ClaimsTab() {
   const [error, setError] = useState(false);
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState('all');
+  const [dateRange, setDateRange] = useState<DateRangeValue>(ALL_TIME);
   const [sort, setSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'createdAt', dir: 'desc' });
   const [reporting, setReporting] = useState(false);
   const [submitTarget, setSubmitTarget] = useState<any | null>(null);
@@ -87,7 +91,8 @@ function ClaimsTab() {
 
   const toggleSort = (key: string) => setSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' });
   const SortIcon = ({ k }: { k: string }) => sort.key !== k ? <ArrowUpDown className="h-3.5 w-3.5 opacity-40" /> : sort.dir === 'asc' ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />;
-  const sorted = [...items].sort((a, b) => {
+  const dateFiltered = items.filter(c => inDateRange(c.createdAt, dateRange));
+  const sorted = [...dateFiltered].sort((a, b) => {
     let cmp = 0;
     if (sort.key === 'member') cmp = (a.memberName || '').localeCompare(b.memberName || '');
     else if (sort.key === 'type') cmp = (a.typeName || '').localeCompare(b.typeName || '');
@@ -122,6 +127,7 @@ function ClaimsTab() {
             <SelectItem value="REJECTED">Rejected</SelectItem>
           </SelectContent>
         </Select>
+        <DateRangeFilter value={dateRange} onChange={setDateRange} className="w-44" />
         <Button variant="outline" onClick={exportCsv}><Download className="mr-1.5 h-4 w-4" /> Export</Button>
         <div className="ml-auto">
           <Button onClick={() => setReporting(true)}><Plus className="h-4 w-4 mr-1" /> Report Claim</Button>
@@ -130,8 +136,10 @@ function ClaimsTab() {
 
       <Card>
         <CardContent className="p-0">
-          {loading ? <LoadingState rows={5} /> : error ? <ErrorState onRetry={load} /> : items.length === 0 ? (
-            <EmptyState icon={Siren} title="No emergency claims yet" description="Report a claim to begin the approval and disbursement workflow." />
+          {loading ? <LoadingState rows={5} /> : error ? <ErrorState onRetry={load} /> : sorted.length === 0 ? (
+            items.length === 0
+              ? <EmptyState icon={Siren} title="No emergency claims yet" description="Report a claim to begin the approval and disbursement workflow." />
+              : <EmptyState icon={Search} title="No claims in range" description="Adjust the date range or filters to see more." />
           ) : (
             <Table>
               <TableHeader>
@@ -328,13 +336,14 @@ function SubmitClaimDialog({ claim, onClose, onDone }: { claim: any; onClose: ()
 
 function DisburseDialog({ claim, onClose, onDone }: { claim: any; onClose: () => void; onDone: () => void }) {
   const [amount, setAmount] = useState<string>(claim.approvedAmount != null ? String(claim.approvedAmount) : '');
+  const [receipts, setReceipts] = useState<ReceiptFile[]>([]);
   const [saving, setSaving] = useState(false);
 
   const submit = async () => {
     const value = Number(amount);
     if (!value || value <= 0) { toast.error('Enter an amount greater than zero.'); return; }
     setSaving(true);
-    const res = await requestDisbursement({ claimId: claim.id, amount: value });
+    const res = await requestDisbursement({ claimId: claim.id, amount: value, receipts });
     setSaving(false);
     if (res?.success) { toast.success('Disbursement submitted for approval.'); onDone(); }
     else toast.error(res?.error || 'Failed to submit disbursement.');
@@ -347,9 +356,21 @@ function DisburseDialog({ claim, onClose, onDone }: { claim: any; onClose: () =>
           <DialogTitle>Request Disbursement</DialogTitle>
           <DialogDescription>{claim.memberName}. Approved amount: {claim.approvedAmount != null ? claim.approvedAmount.toLocaleString() : '—'}. A checker must approve before funds are released.</DialogDescription>
         </DialogHeader>
-        <div className="space-y-1">
-          <Label>Disbursement Amount</Label>
-          <Input type="number" min={0} value={amount} onChange={e => setAmount(e.target.value)} placeholder="0" />
+        <div className="space-y-3">
+          <div className="space-y-1">
+            <Label>Disbursement Amount</Label>
+            <Input type="number" min={0} value={amount} onChange={e => setAmount(e.target.value)} placeholder="0" />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs">Receipts / supporting documents <span className="font-normal text-muted-foreground">(optional — kept for audit &amp; grievances)</span></Label>
+            {receipts.map((r, i) => (
+              <div key={i} className="flex items-center justify-between gap-2 rounded-md border bg-muted/30 px-2.5 py-1.5 text-sm">
+                <a href={r.path} target="_blank" rel="noopener noreferrer" className="inline-flex min-w-0 items-center gap-1.5 text-primary hover:underline"><FileText className="h-4 w-4 shrink-0" /><span className="truncate">{r.name}</span></a>
+                <button type="button" onClick={() => setReceipts(rs => rs.filter((_, j) => j !== i))} className="shrink-0 text-muted-foreground hover:text-destructive"><X className="h-4 w-4" /></button>
+              </div>
+            ))}
+            <ReceiptUpload value={null} optional={false} label="" onChange={(v) => { if (v) setReceipts(rs => [...rs, v]); }} />
+          </div>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>

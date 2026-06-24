@@ -1,5 +1,6 @@
 'use server';
 
+import { z } from 'zod';
 import { getActor, assertPermission } from '@/lib/tenant-scope';
 import prisma from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
@@ -11,10 +12,30 @@ function failure(error: unknown): { success: false; error: string } {
   return { success: false, error: message };
 }
 
+const DISTRICT_MANAGER_PERMISSIONS = [
+  'view_dashboard', 'view_districts', 'manage_branches', 'view_branches',
+  'register_edir', 'approve_edir_registration', 'approve_edir_update',
+  'view_members', 'manage_members', 'view_payments', 'record_payment',
+  'view_approvals', 'view_audit_log', 'view_district_dashboard',
+];
+const DISTRICT_OPERATOR_PERMISSIONS = [
+  'view_dashboard', 'view_districts', 'view_branches', 'register_edir', 'view_members', 'view_district_dashboard',
+];
+
+/** Provision the default District Manager / Operator roles for a new district. */
+async function provisionDistrictRoles(districtId: string) {
+  await prisma.role.createMany({
+    data: [
+      { name: 'District Manager', scope: 'DISTRICT', districtId, permissions: DISTRICT_MANAGER_PERMISSIONS.join(',') },
+      { name: 'District Operator', scope: 'DISTRICT', districtId, permissions: DISTRICT_OPERATOR_PERMISSIONS.join(',') },
+    ],
+  });
+}
+
 export async function getDistricts() {
   try {
     const actor = await getActor();
-    await assertPermission(actor, ['manage_districts', 'super_admin']);
+    await assertPermission(actor, ['view_districts', 'manage_districts', 'create_district', 'edit_district', 'super_admin']);
 
     const districts = await prisma.district.findMany({
       include: {
@@ -42,7 +63,7 @@ export async function getDistricts() {
 export async function saveDistrict(input: { id?: string; name: string; code: string; description?: string }) {
   try {
     const actor = await getActor();
-    await assertPermission(actor, ['manage_districts', 'super_admin']);
+    await assertPermission(actor, input.id ? ['edit_district', 'manage_districts', 'super_admin'] : ['create_district', 'manage_districts', 'super_admin']);
 
     const name = input.name?.trim();
     const code = input.code?.trim();
@@ -68,38 +89,7 @@ export async function saveDistrict(input: { id?: string; name: string; code: str
       });
 
       // Auto-provision default roles for the district
-      const DISTRICT_MANAGER_PERMISSIONS = [
-        'view_dashboard',
-        'view_districts', 'manage_branches', 'view_branches',
-        'register_edir', 'approve_edir_registration', 'approve_edir_update',
-        'view_members', 'manage_members', 'view_payments', 'record_payment',
-        'view_approvals', 'view_audit_log',
-        'view_district_dashboard',
-      ];
-      const DISTRICT_OPERATOR_PERMISSIONS = [
-        'view_dashboard',
-        'view_districts', 'view_branches',
-        'register_edir',
-        'view_members',
-        'view_district_dashboard',
-      ];
-
-      await prisma.role.createMany({
-        data: [
-          {
-            name: 'District Manager',
-            scope: 'DISTRICT',
-            districtId: district.id,
-            permissions: DISTRICT_MANAGER_PERMISSIONS.join(','),
-          },
-          {
-            name: 'District Operator',
-            scope: 'DISTRICT',
-            districtId: district.id,
-            permissions: DISTRICT_OPERATOR_PERMISSIONS.join(','),
-          },
-        ],
-      });
+      await provisionDistrictRoles(district.id);
 
       await writeAudit({
         userId: actor.id,
@@ -117,10 +107,66 @@ export async function saveDistrict(input: { id?: string; name: string; code: str
   }
 }
 
+const importDistrictRow = z.object({
+  name: z.string().trim().min(1, 'Name is required'),
+  code: z.string().trim().min(1, 'Code is required'),
+  description: z.string().trim().optional().nullable(),
+});
+
+export interface ImportResult {
+  success: true;
+  created: number;
+  updated: number;
+  errors: { row: number; message: string }[];
+}
+
+/**
+ * Bulk create/update districts from imported rows. Matches existing districts by
+ * `code` (then `name`) to support updates; new districts get their default roles.
+ * Returns per-row error reporting.
+ */
+export async function importDistricts(rows: unknown[]): Promise<ImportResult | { success: false; error: string }> {
+  try {
+    const actor = await getActor();
+    await assertPermission(actor, ['import_districts', 'manage_districts', 'super_admin']);
+    if (!Array.isArray(rows) || rows.length === 0) return { success: false as const, error: 'No rows to import.' };
+    if (rows.length > 1000) return { success: false as const, error: 'Too many rows (max 1000 per import).' };
+
+    let created = 0, updated = 0;
+    const errors: { row: number; message: string }[] = [];
+
+    for (let i = 0; i < rows.length; i++) {
+      const parsed = importDistrictRow.safeParse(rows[i]);
+      if (!parsed.success) { errors.push({ row: i + 2, message: parsed.error.issues[0]?.message ?? 'Invalid row' }); continue; }
+      const { name, code, description } = parsed.data;
+      try {
+        const existing = await prisma.district.findFirst({ where: { OR: [{ code }, { name }] } });
+        if (existing) {
+          await prisma.district.update({ where: { id: existing.id }, data: { name, code, description: description ?? null } });
+          updated++;
+        } else {
+          const d = await prisma.district.create({ data: { name, code, description: description ?? null } });
+          await provisionDistrictRoles(d.id);
+          created++;
+        }
+      } catch (e: any) {
+        const msg = e?.code === 'P2002' ? 'Duplicate name or code conflicts with another district.' : (e instanceof Error ? e.message : 'Failed to import row.');
+        errors.push({ row: i + 2, message: msg });
+      }
+    }
+
+    await writeAudit({ userId: actor.id, action: 'DISTRICTS_IMPORTED', targetType: 'District', targetId: null, details: `Imported districts: ${created} created, ${updated} updated, ${errors.length} error(s).` });
+    revalidatePath('/dashboard/system/districts');
+    return { success: true as const, created, updated, errors };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
 export async function deleteDistrict(id: string) {
   try {
     const actor = await getActor();
-    await assertPermission(actor, ['manage_districts', 'super_admin']);
+    await assertPermission(actor, ['delete_district', 'manage_districts', 'super_admin']);
 
     const district = await prisma.district.findUnique({ where: { id } });
     if (!district) return { success: false as const, error: 'District not found.' };

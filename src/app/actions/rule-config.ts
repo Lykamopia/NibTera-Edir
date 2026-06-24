@@ -30,6 +30,11 @@ const configSchema = z.object({
   gracePeriodDays: z.coerce.number().int().min(0).max(90),
   // Penalties
   penaltyTiers: z.array(tierSchema).default([]),
+  // Daily penalty accrual (optional)
+  dailyPenaltyEnabled: z.boolean().default(false),
+  dailyPenaltyType: z.enum(['FIXED', 'PERCENT']).default('FIXED'),
+  dailyPenaltyValue: z.coerce.number().min(0).default(0),
+  dailyPenaltyMaxDays: z.coerce.number().int().min(0).max(3650).default(0),
   // Membership
   autoSuspendMonths: z.coerce.number().int().min(1).max(60),
   autoTerminateMonths: z.coerce.number().int().min(1).max(120),
@@ -74,6 +79,10 @@ export async function getRuleConfig() {
       dueDay: settings.dueDay,
       gracePeriodDays: settings.gracePeriodDays,
       penaltyTiers: Array.isArray(settings.penaltyTiers) ? settings.penaltyTiers : [],
+      dailyPenaltyEnabled: settings.dailyPenaltyEnabled,
+      dailyPenaltyType: settings.dailyPenaltyType === 'PERCENT' ? 'PERCENT' : 'FIXED',
+      dailyPenaltyValue: toNum(settings.dailyPenaltyValue),
+      dailyPenaltyMaxDays: settings.dailyPenaltyMaxDays,
       autoSuspendMonths: settings.autoSuspendMonths,
       autoTerminateMonths: settings.autoTerminateMonths,
       minMembershipMonths: settings.minMembershipMonths,
@@ -110,6 +119,10 @@ const FIELD_LABELS: Record<string, string> = {
   autoSuspendEnabled: 'Automatic Suspension',
   autoReminderEnabled: 'Automatic Reminders',
   penaltyTiers: 'Late-Payment Penalty Tiers',
+  dailyPenaltyEnabled: 'Daily Penalty Accrual',
+  dailyPenaltyType: 'Daily Penalty Type',
+  dailyPenaltyValue: 'Daily Penalty Value',
+  dailyPenaltyMaxDays: 'Daily Penalty Cap (days)',
   memberRoles: 'Member Roles',
 };
 
@@ -147,6 +160,10 @@ export async function saveRuleConfig(input: RuleConfigInput) {
       dueDay: data.dueDay,
       gracePeriodDays: data.gracePeriodDays,
       penaltyTiers: data.penaltyTiers as unknown as Prisma.InputJsonValue,
+      dailyPenaltyEnabled: data.dailyPenaltyEnabled,
+      dailyPenaltyType: data.dailyPenaltyType,
+      dailyPenaltyValue: new Prisma.Decimal(data.dailyPenaltyValue),
+      dailyPenaltyMaxDays: data.dailyPenaltyMaxDays,
       autoSuspendMonths: data.autoSuspendMonths,
       autoTerminateMonths: data.autoTerminateMonths,
       minMembershipMonths: data.minMembershipMonths,
@@ -171,6 +188,10 @@ export async function saveRuleConfig(input: RuleConfigInput) {
         ['reinstatementFee', toNum(existing.reinstatementFee), data.reinstatementFee],
         ['autoSuspendEnabled', existing.autoSuspendEnabled, data.autoSuspendEnabled],
         ['autoReminderEnabled', existing.autoReminderEnabled, data.autoReminderEnabled],
+        ['dailyPenaltyEnabled', existing.dailyPenaltyEnabled, data.dailyPenaltyEnabled],
+        ['dailyPenaltyType', existing.dailyPenaltyType, data.dailyPenaltyType],
+        ['dailyPenaltyValue', toNum(existing.dailyPenaltyValue), data.dailyPenaltyValue],
+        ['dailyPenaltyMaxDays', existing.dailyPenaltyMaxDays, data.dailyPenaltyMaxDays],
       ];
       for (const [field, prev, curr] of compare) {
         if (String(prev) !== String(curr)) changes.push({ field, previous: String(prev), current: String(curr) });

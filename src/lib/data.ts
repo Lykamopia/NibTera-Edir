@@ -13,6 +13,8 @@ export interface PenaltyBreakdown {
   gracePeriodDays: number;
   monthsBehind: number;
   calculation: string;     // human-readable explanation
+  // Optional daily accrual portion folded into `amount`.
+  dailyAccrual?: { days: number; perDay: number; type: 'FIXED' | 'PERCENT'; amount: number } | null;
 }
 
 export interface DetailedMember {
@@ -123,7 +125,15 @@ export async function fetchDetailedMemberByPhone(phone: string): Promise<Detaile
   };
 
   // ── Compute the applicable late-payment penalty from the Edir's penalty tiers ─
-  const penalty = computePenalty({ monthsBehind, balance, dueDay, gracePeriodDays, currency, tiers: settings?.penaltyTiers, now });
+  const penalty = computePenalty({
+    monthsBehind, balance, dueDay, gracePeriodDays, currency, tiers: settings?.penaltyTiers, now,
+    daily: {
+      enabled: !!settings?.dailyPenaltyEnabled,
+      type: settings?.dailyPenaltyType === 'PERCENT' ? 'PERCENT' : 'FIXED',
+      value: Number(settings?.dailyPenaltyValue ?? 0),
+      maxDays: Number(settings?.dailyPenaltyMaxDays ?? 0),
+    },
+  });
 
   return {
     id: member.id,
@@ -164,10 +174,11 @@ export async function fetchDetailedMemberByPhone(phone: string): Promise<Detaile
 }
 
 /** Resolve the applicable late-payment penalty tier and explain the calculation. */
-function computePenalty(opts: { monthsBehind: number; balance: number; dueDay: number; gracePeriodDays: number; currency: string; tiers: unknown; now: Date }): PenaltyBreakdown | null {
-  const { monthsBehind, balance, dueDay, gracePeriodDays, currency, tiers, now } = opts;
+interface DailyPenaltyConfig { enabled: boolean; type: 'FIXED' | 'PERCENT'; value: number; maxDays: number }
+
+function computePenalty(opts: { monthsBehind: number; balance: number; dueDay: number; gracePeriodDays: number; currency: string; tiers: unknown; now: Date; daily?: DailyPenaltyConfig }): PenaltyBreakdown | null {
+  const { monthsBehind, balance, dueDay, gracePeriodDays, currency, tiers, now, daily } = opts;
   if (monthsBehind <= 0 || balance <= 0) return null;
-  if (!Array.isArray(tiers) || tiers.length === 0) return null;
 
   // Days overdue since the most recent unpaid due date, beyond the grace window.
   const cycleDue = new Date(now.getFullYear(), now.getMonth(), dueDay);
@@ -176,24 +187,50 @@ function computePenalty(opts: { monthsBehind: number; balance: number; dueDay: n
   const overdueDays = Math.max(0, baseDays - gracePeriodDays) + Math.max(0, monthsBehind - 1) * 30;
   if (overdueDays <= 0) return null;
 
-  const tier = (tiers as any[]).find(t => {
+  // ── Tier penalty (optional) ──────────────────────────────────────────────
+  const tier = Array.isArray(tiers) ? (tiers as any[]).find(t => {
     const from = Number(t.fromDays ?? 0);
     const to = t.toDays == null ? Infinity : Number(t.toDays);
     return overdueDays >= from && overdueDays <= to;
-  });
-  if (!tier) return null;
+  }) : null;
 
-  const type: 'FIXED' | 'PERCENT' = tier.type === 'PERCENT' ? 'PERCENT' : 'FIXED';
-  const value = Number(tier.value ?? 0);
-  const amount = type === 'FIXED' ? value : Math.round((balance * value) / 100);
-  const rule = tier.label || `${tier.fromDays}${tier.toDays == null ? '+' : `–${tier.toDays}`} days late`;
-  const calculation = type === 'FIXED'
-    ? `Fixed charge of ${value.toLocaleString()} ${currency} for the "${rule}" tier.`
-    : `${value}% of ${balance.toLocaleString()} ${currency} outstanding = ${amount.toLocaleString()} ${currency}.`;
+  let tierAmount = 0;
+  let type: 'FIXED' | 'PERCENT' = 'FIXED';
+  let value = 0;
+  let rule = '';
+  let calculation = '';
+  if (tier) {
+    type = tier.type === 'PERCENT' ? 'PERCENT' : 'FIXED';
+    value = Number(tier.value ?? 0);
+    tierAmount = type === 'FIXED' ? value : Math.round((balance * value) / 100);
+    rule = tier.label || `${tier.fromDays}${tier.toDays == null ? '+' : `–${tier.toDays}`} days late`;
+    calculation = type === 'FIXED'
+      ? `Fixed charge of ${value.toLocaleString()} ${currency} for the "${rule}" tier.`
+      : `${value}% of ${balance.toLocaleString()} ${currency} outstanding = ${tierAmount.toLocaleString()} ${currency}.`;
+  }
+
+  // ── Daily accrual (optional) ─────────────────────────────────────────────
+  let dailyAccrual: PenaltyBreakdown['dailyAccrual'] = null;
+  if (daily?.enabled && daily.value > 0) {
+    const days = daily.maxDays > 0 ? Math.min(overdueDays, daily.maxDays) : overdueDays;
+    const perDay = daily.type === 'FIXED' ? daily.value : Math.round((balance * daily.value) / 100);
+    const dailyAmount = perDay * days;
+    if (dailyAmount > 0) {
+      dailyAccrual = { days, perDay, type: daily.type, amount: dailyAmount };
+      const dailyExpl = daily.type === 'FIXED'
+        ? `${daily.value.toLocaleString()} ${currency}/day × ${days} day(s) = ${dailyAmount.toLocaleString()} ${currency}`
+        : `${daily.value}%/day of ${balance.toLocaleString()} ${currency} × ${days} day(s) = ${dailyAmount.toLocaleString()} ${currency}`;
+      calculation = calculation ? `${calculation} Plus daily accrual: ${dailyExpl}.` : `Daily accrual: ${dailyExpl}.`;
+      if (!rule) rule = `Daily accrual (${days} day${days === 1 ? '' : 's'} past grace)`;
+    }
+  }
+
+  const amount = tierAmount + (dailyAccrual?.amount ?? 0);
+  if (amount <= 0) return null;
 
   return {
     amount, reason: 'Late contribution payment', rule, type, value,
-    overdueDays, gracePeriodDays, monthsBehind, calculation,
+    overdueDays, gracePeriodDays, monthsBehind, calculation, dailyAccrual,
   };
 }
 

@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
   Building2, Users, UserCheck, Wallet, CreditCard, Siren, Package, MessageSquareWarning, CheckSquare,
-  TrendingUp, TrendingDown, Gauge, Activity, ArrowUpRight, AlertTriangle, ShieldAlert, Trophy, Network,
+  TrendingUp, TrendingDown, Gauge, AlertTriangle, ShieldAlert, Trophy, Network,
 } from 'lucide-react';
 import { LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
 import { getPlatformDashboard } from '@/app/actions/dashboard';
@@ -177,23 +177,6 @@ export default function PlatformDashboard() {
           </CardContent>
         </Card>
       </div>
-
-      {/* Recent activity */}
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2"><CardTitle className="flex items-center gap-2 text-base"><Activity className="h-4 w-4" /> Recent Platform Activity</CardTitle><Link href="/dashboard/audit"><Button variant="ghost" size="sm" className="gap-1 text-muted-foreground">Audit <ArrowUpRight className="h-3.5 w-3.5" /></Button></Link></CardHeader>
-        <CardContent className="p-0">
-          {data.recentActivity.length === 0 ? <EmptyState icon={Activity} title="No recent activity" className="min-h-28" /> : (
-            <div className="max-h-80 divide-y overflow-y-auto">
-              {data.recentActivity.map((a: any) => (
-                <div key={a.id} className="flex items-center justify-between gap-3 px-4 py-2.5 text-sm">
-                  <div className="min-w-0"><span className="font-mono text-xs">{a.action}</span><div className="truncate text-xs text-muted-foreground">{a.edir} · {a.by}{a.details ? ` · ${a.details}` : ''}</div></div>
-                  <span className="shrink-0 text-xs text-muted-foreground">{new Date(a.createdAt).toLocaleDateString()}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
     </div>
   );
 }

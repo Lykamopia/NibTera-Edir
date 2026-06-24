@@ -24,11 +24,6 @@ export default function BranchDashboard({ actor }: { actor: Actor }) {
           paymentsCollected: 15420,
           outstandingAmount: 2850,
           pendingApprovals: 3,
-          recentActivities: [
-            { id: 1, type: 'registration', description: 'New Edir "Addis Community" submitted', date: new Date(Date.now() - 2 * 60 * 60 * 1000) },
-            { id: 2, type: 'approval', description: 'Edir registration approved', date: new Date(Date.now() - 5 * 60 * 60 * 1000) },
-            { id: 3, type: 'payment', description: '5 payments recorded', date: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000) },
-          ],
         });
       } catch (err) {
         console.error('Failed to load stats:', err);
@@ -152,30 +147,31 @@ export default function BranchDashboard({ actor }: { actor: Actor }) {
         </Card>
       </div>
 
-      {/* Recent Activities */}
+      {/* Action Items — actionable work, not a passive activity log */}
       <Card>
         <CardHeader>
-          <CardTitle>Recent Activities</CardTitle>
-          <CardDescription>Latest operations in your branch</CardDescription>
+          <CardTitle>Action Items</CardTitle>
+          <CardDescription>Things that need your attention right now</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="space-y-4">
-            {stats.recentActivities.map((activity: any) => (
-              <div key={activity.id} className="flex items-start gap-4 pb-4 border-b last:border-b-0">
-                <div className={`w-2 h-2 rounded-full mt-2 ${
-                  activity.type === 'registration' ? 'bg-blue-500' :
-                  activity.type === 'approval' ? 'bg-green-500' :
-                  'bg-gray-500'
-                }`}></div>
-                <div className="flex-1">
-                  <p className="text-sm font-medium">{activity.description}</p>
-                  <p className="text-xs text-gray-500 mt-1">
-                    {activity.date.toLocaleDateString()} {activity.date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                  </p>
-                </div>
+          {(() => {
+            const items = [
+              stats.pendingApprovals > 0 && { label: `${stats.pendingApprovals} item(s) awaiting your approval`, href: '/dashboard/approvals', tone: 'warning' as const },
+              stats.pendingRegistrations > 0 && { label: `${stats.pendingRegistrations} Edir registration(s) pending review`, href: '/dashboard/edir-registration', tone: 'warning' as const },
+              stats.outstandingAmount > 0 && { label: `ETB ${stats.outstandingAmount.toLocaleString()} outstanding — follow up on collections`, href: '/dashboard/payments', tone: 'danger' as const },
+            ].filter(Boolean) as { label: string; href: string; tone: 'warning' | 'danger' }[];
+            if (items.length === 0) return <p className="py-6 text-center text-sm text-muted-foreground">You’re all caught up — no pending items.</p>;
+            return (
+              <div className="space-y-2">
+                {items.map((it, i) => (
+                  <a key={i} href={it.href} className={`flex items-center justify-between gap-3 rounded-lg border p-3 text-sm transition-colors hover:bg-muted/50 ${it.tone === 'danger' ? 'border-red-200 bg-red-50' : 'border-yellow-200 bg-yellow-50'}`}>
+                    <span className="font-medium">{it.label}</span>
+                    <span className="shrink-0 text-primary">Resolve →</span>
+                  </a>
+                ))}
               </div>
-            ))}
-          </div>
+            );
+          })()}
         </CardContent>
       </Card>
     </div>

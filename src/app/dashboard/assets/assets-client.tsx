@@ -450,8 +450,8 @@ function ReturnDialog({ issuance, onClose, onDone }: { issuance: any; onClose: (
     setSaving(true);
     const res = await recordReturn({ issuanceId: issuance.id, returnedQty: n, condition, compensation: Number(compensation) || 0 });
     setSaving(false);
-    if (res?.success) { toast.success('Return recorded.'); onDone(); }
-    else toast.error(res?.error || 'Failed to record return.');
+    if (res?.success) { toast.success('Return submitted for approval — the asset is freed once a checker approves.'); onDone(); }
+    else toast.error(res?.error || 'Failed to submit return.');
   };
 
   return (

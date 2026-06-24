@@ -16,11 +16,12 @@ import {
 } from 'lucide-react';
 import { PageHeader, StatCard, LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
 import { Pagination, usePagination } from '@/components/ui/pagination';
+import { ReceiptUpload, type ReceiptFile } from '@/components/ui/receipt-upload';
 import { getMembers } from '@/app/actions/members';
 import { getMemberOutstanding, recordManualPayment, getPaymentsSummary } from '@/app/actions/payments';
 
 const LINES = [
-  ['installment', 'Installment / Contribution'], ['arrears', 'Arrears'], ['latePenalty', 'Late Penalty'],
+  ['installment', 'Installment / Contribution'], ['arrears', 'Overdue Amount'], ['latePenalty', 'Late Penalty'],
   ['interest', 'Interest'], ['serviceFees', 'Service Fees'], ['other', 'Other'],
 ] as const;
 type LineKey = (typeof LINES)[number][0];
@@ -79,7 +80,7 @@ export default function PaymentsClient() {
 
       {/* Summary cards */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatCard title="Total Outstanding" value={summary ? money(summary.totalOutstanding) : '—'} icon={Wallet} accent={summary?.totalOutstanding > 0 ? 'warning' : 'success'} hint={summary ? `${summary.membersInArrears} in arrears` : undefined} />
+        <StatCard title="Total Outstanding" value={summary ? money(summary.totalOutstanding) : '—'} icon={Wallet} accent={summary?.totalOutstanding > 0 ? 'warning' : 'success'} hint={summary ? `${summary.membersInArrears} with a balance` : undefined} />
         <StatCard title="Collected This Month" value={summary ? money(summary.collectedThisMonth) : '—'} icon={CalendarClock} accent="success" />
         <StatCard title="Active Members" value={summary?.activeMembers ?? '—'} icon={Users} accent="info" />
         <StatCard title="Pending Approval" value={summary?.pendingManual ?? '—'} icon={ReceiptText} accent="primary" hint="Manual payments awaiting checker" />
@@ -95,7 +96,7 @@ export default function PaymentsClient() {
           <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All members</SelectItem>
-            <SelectItem value="arrears">In arrears</SelectItem>
+            <SelectItem value="arrears">With outstanding balance</SelectItem>
             <SelectItem value="settled">Settled</SelectItem>
           </SelectContent>
         </Select>
@@ -147,6 +148,7 @@ export default function PaymentsClient() {
 function RecordDialog({ member, onClose, onDone }: { member: any; onClose: () => void; onDone: () => void }) {
   const [breakdown, setBreakdown] = useState<Record<LineKey, number>>({ installment: 0, arrears: 0, latePenalty: 0, interest: 0, serviceFees: 0, other: 0 });
   const [info, setInfo] = useState<any | null>(null);
+  const [receipt, setReceipt] = useState<ReceiptFile | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -163,7 +165,7 @@ function RecordDialog({ member, onClose, onDone }: { member: any; onClose: () =>
   const submit = async () => {
     if (total <= 0) { toast.error('Total must be greater than zero.'); return; }
     setSaving(true);
-    const res = await recordManualPayment(member.id, breakdown);
+    const res = await recordManualPayment(member.id, breakdown, receipt?.path ?? null);
     setSaving(false);
     if (res?.success) { toast.success('Payment recorded — pending checker approval.'); onDone(); }
     else toast.error(res?.error || 'Failed to record payment.');
@@ -195,6 +197,10 @@ function RecordDialog({ member, onClose, onDone }: { member: any; onClose: () =>
 
             {info.penalty && <p className="flex items-start gap-1.5 rounded-md bg-warning/10 p-2 text-[11px] text-warning"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> Late penalty auto-applied: {info.penalty.rule} ({info.penalty.overdueDays} days overdue).</p>}
 
+            <p className="rounded-md bg-muted/40 p-2 text-[11px] text-muted-foreground">
+              The <span className="font-medium text-foreground">Outstanding Balance</span> is the sum of the lines below — unpaid contributions (Overdue Amount), due installments, late penalties, and any other charges. Adjust any line to record a partial payment.
+            </p>
+
             <div className="space-y-2.5">
               {LINES.map(([key, label]) => (
                 <div key={key} className="flex items-center justify-between gap-3">
@@ -208,6 +214,8 @@ function RecordDialog({ member, onClose, onDone }: { member: any; onClose: () =>
               <Button variant="ghost" size="sm" className="text-primary" onClick={() => applySuggested(info)}><Sparkles className="mr-1 h-4 w-4" /> Reset to suggested</Button>
               <div className="text-right"><div className="text-[11px] uppercase tracking-wide text-muted-foreground">Total</div><div className="text-lg font-bold">{money(total)}</div></div>
             </div>
+
+            <ReceiptUpload value={receipt} onChange={setReceipt} label="Payment receipt / evidence" />
           </div>
         )}
         <DialogFooter>

@@ -46,10 +46,18 @@ export const pagePermissions: PagePermissionDef[] = [
     accessPermissions: ['view_members', 'manage_members'],
     actions: [
       { id: 'view_members', label: 'View Members', description: 'View member profiles and lists', isAccess: true },
-      { id: 'manage_members', label: 'Manage Members', description: 'Create and edit members' },
+      { id: 'manage_members', label: 'Manage Members', description: 'Umbrella: all member operations below' },
+      { id: 'create_member', label: 'Create Member', description: 'Add new members' },
+      { id: 'edit_member', label: 'Edit Member', description: 'Edit member profiles' },
+      { id: 'suspend_member', label: 'Suspend Member', description: 'Suspend a member' },
+      { id: 'reinstate_member', label: 'Reinstate Member', description: 'Reactivate a suspended/inactive member' },
+      { id: 'approve_member', label: 'Approve Member', description: 'Approve pending member applications' },
+      { id: 'manage_relatives', label: 'Manage Relatives', description: 'Add/edit/remove member relatives' },
+      { id: 'manage_documents', label: 'Manage Documents', description: 'Upload/delete member & relative documents' },
       { id: 'remove_members', label: 'Remove Members', description: 'Request member removal (maker)' },
       { id: 'approve_member_removal', label: 'Approve Member Removal', description: 'Authorize member removals (checker)' },
       { id: 'review_member_documents', label: 'Review Documents', description: 'Approve/reject relative documents' },
+      { id: 'export_members', label: 'Export Members', description: 'Download member data (CSV)' },
     ],
   },
   {
@@ -62,6 +70,7 @@ export const pagePermissions: PagePermissionDef[] = [
       { id: 'waive_penalty', label: 'Waive Penalty', description: 'Request a penalty waiver (maker)' },
       { id: 'approve_penalty_waiver', label: 'Approve Penalty Waiver', description: 'Authorize penalty waivers (checker)' },
       { id: 'void_payment', label: 'Void Payment', description: 'Void a transaction' },
+      { id: 'export_payments', label: 'Export Payments', description: 'Download the payment log (CSV)' },
     ],
   },
   {
@@ -75,11 +84,18 @@ export const pagePermissions: PagePermissionDef[] = [
   },
   {
     id: 'edir-registration', label: 'Edirs', path: '/dashboard/edir-registration', icon: 'Building2', section: 'operations',
-    accessPermissions: ['register_edir', 'approve_edir_registration', 'manage_edirs', 'super_admin'],
+    accessPermissions: ['register_edir', 'approve_edir_registration', 'manage_edirs', 'create_edir', 'edit_edir', 'view_edir_reports', 'super_admin'],
     actions: [
       { id: 'register_edir', label: 'Register Edir', description: 'Submit new Edir for registration (maker)', isAccess: true },
       { id: 'approve_edir_registration', label: 'Approve Registration', description: 'Review and approve Edir registrations (checker)' },
-      { id: 'manage_edirs', label: 'Manage Edirs', description: 'Create & manage Edirs and view directory' },
+      { id: 'manage_edirs', label: 'Manage Edirs', description: 'Umbrella: create, edit, revoke, and manage Edirs' },
+      { id: 'create_edir', label: 'Create Edir', description: 'Create a new Edir' },
+      { id: 'edit_edir', label: 'Edit Edir', description: 'Edit an existing Edir’s profile' },
+      { id: 'revoke_edir', label: 'Revoke Edir', description: 'Deactivate (suspend/close) an Edir without deleting it' },
+      { id: 'delete_edir', label: 'Delete Edir', description: 'Permanently delete an Edir (only when it has no operational data)' },
+      { id: 'manage_edir_users', label: 'Manage Edir Users', description: 'Create and manage user accounts within Edirs' },
+      { id: 'manage_edir_associations', label: 'Manage Edir Associations', description: 'Associate, transfer, and remove users across Edirs' },
+      { id: 'view_edir_reports', label: 'View Edir Reports', description: 'View cross-Edir reports and metrics' },
     ],
   },
   {
@@ -87,9 +103,13 @@ export const pagePermissions: PagePermissionDef[] = [
     accessPermissions: ['view_emergencies', 'manage_emergencies'],
     actions: [
       { id: 'view_emergencies', label: 'View Emergencies', description: 'View emergency claims', isAccess: true },
-      { id: 'manage_emergencies', label: 'Manage Emergencies', description: 'Report and process claims' },
+      { id: 'manage_emergencies', label: 'Manage Emergencies', description: 'Umbrella: report, process, and configure emergency claims' },
+      { id: 'report_emergency', label: 'Report Claim', description: 'Report a new emergency claim (maker)' },
+      { id: 'reject_emergency', label: 'Reject Claim', description: 'Reject a reported claim' },
+      { id: 'request_disbursement', label: 'Request Disbursement', description: 'Request disbursement of an approved claim (maker)' },
       { id: 'approve_emergency_claim', label: 'Approve Claim', description: 'Authorize emergency claims (checker)' },
       { id: 'approve_emergency_disbursement', label: 'Approve Disbursement', description: 'Authorize disbursements (checker)' },
+      { id: 'export_emergencies', label: 'Export Emergencies', description: 'Download emergency claims (CSV)' },
     ],
   },
   {
@@ -98,7 +118,10 @@ export const pagePermissions: PagePermissionDef[] = [
     actions: [
       { id: 'view_events', label: 'View Events', description: 'View events and attendance', isAccess: true },
       { id: 'manage_events', label: 'Manage Events', description: 'Create and edit events' },
+      { id: 'reschedule_event', label: 'Reschedule Event', description: 'Change the date/time of a scheduled event' },
+      { id: 'cancel_event', label: 'Cancel Event', description: 'Cancel a scheduled event' },
       { id: 'finalize_attendance', label: 'Finalize Attendance', description: 'Finalize attendance and apply penalties' },
+      { id: 'export_events', label: 'Export Events', description: 'Download events (CSV)' },
     ],
   },
   {
@@ -106,9 +129,15 @@ export const pagePermissions: PagePermissionDef[] = [
     accessPermissions: ['view_assets', 'manage_assets'],
     actions: [
       { id: 'view_assets', label: 'View Assets', description: 'View asset inventory', isAccess: true },
-      { id: 'manage_assets', label: 'Manage Assets', description: 'Add/edit/issue assets' },
+      { id: 'manage_assets', label: 'Manage Assets', description: 'Umbrella: all asset operations below' },
+      { id: 'create_asset', label: 'Create Asset', description: 'Add new assets to inventory' },
+      { id: 'edit_asset', label: 'Edit Asset', description: 'Edit asset details and quantities' },
+      { id: 'delete_asset', label: 'Delete Asset', description: 'Remove an asset from inventory' },
+      { id: 'issue_asset', label: 'Issue Asset', description: 'Issue an asset to a member (maker)' },
+      { id: 'return_asset', label: 'Return Asset', description: 'Submit an asset return for approval (maker)' },
       { id: 'manage_asset_categories', label: 'Manage Categories', description: 'Manage asset categories' },
-      { id: 'approve_asset_issuance', label: 'Approve Issuance', description: 'Authorize asset issuance (checker)' },
+      { id: 'approve_asset_issuance', label: 'Approve Issuance', description: 'Authorize asset issuance/return (checker)' },
+      { id: 'export_assets', label: 'Export Assets', description: 'Download asset inventory/issuances (CSV)' },
     ],
   },
   {
@@ -128,12 +157,30 @@ export const pagePermissions: PagePermissionDef[] = [
   {
     id: 'member-requests', label: 'Member Requests', path: '/dashboard/requests', icon: 'Inbox', section: 'operations',
     accessPermissions: ['handle_member_requests'],
-    actions: [{ id: 'handle_member_requests', label: 'Handle Member Requests', description: 'Review and respond to member self-service requests (relatives, emergencies, assets, grievances)', isAccess: true }],
+    actions: [
+      { id: 'handle_member_requests', label: 'Handle Member Requests', description: 'Review and respond to member self-service requests (relatives, emergencies, assets, grievances)', isAccess: true },
+      { id: 'export_member_requests', label: 'Export Requests', description: 'Download member requests/grievances (CSV)' },
+    ],
   },
   {
     id: 'documents', label: 'Documents', path: '/dashboard/documents', icon: 'FolderArchive', section: 'governance',
-    accessPermissions: ['view_documents'],
-    actions: [{ id: 'view_documents', label: 'View Documents', description: 'Access the centralized document repository (scope-limited to authorized records)', isAccess: true }],
+    accessPermissions: ['view_documents', 'upload_document', 'approve_document'],
+    actions: [
+      { id: 'view_documents', label: 'View Documents', description: 'Access the centralized document repository (scope-limited to authorized records)', isAccess: true },
+      // ── Maker actions (routed through approval) ──
+      { id: 'upload_document', label: 'Upload Document', description: 'Upload documents (maker — stays pending until approved)' },
+      { id: 'edit_document', label: 'Edit Document', description: 'Propose edits to a document (maker)' },
+      { id: 'classify_document', label: 'Classify Document', description: 'Propose category/tag changes (maker)' },
+      { id: 'share_document', label: 'Share Document', description: 'Propose sharing / visibility changes (maker)' },
+      { id: 'archive_document', label: 'Archive Document', description: 'Propose archiving a document (maker)' },
+      { id: 'delete_document', label: 'Delete Document', description: 'Propose deleting a document (maker)' },
+      // ── Checker actions ──
+      { id: 'review_document', label: 'Review Document', description: 'Open the review/approval queue for documents (checker)' },
+      { id: 'approve_document', label: 'Approve Document', description: 'Authorize document actions (checker)' },
+      { id: 'reject_document', label: 'Reject Document', description: 'Reject document actions (checker)' },
+      { id: 'revoke_document_access', label: 'Revoke Access', description: 'Revoke a document’s shared visibility' },
+      { id: 'export_documents', label: 'Export Documents', description: 'Download document metadata (CSV)' },
+    ],
   },
   {
     id: 'audit', label: 'Audit Log', path: '/dashboard/audit', icon: 'ScrollText', section: 'governance',
@@ -179,18 +226,26 @@ export const pagePermissions: PagePermissionDef[] = [
   // ── System (Super Admin / District & Branch Management) ─────────────────────
   {
     id: 'system-districts', label: 'Districts', path: '/dashboard/system/districts', icon: 'MapPin', section: 'system',
-    accessPermissions: ['manage_districts', 'super_admin'],
+    accessPermissions: ['manage_districts', 'view_districts', 'create_district', 'edit_district', 'super_admin'],
     actions: [
-      { id: 'manage_districts', label: 'Create & Manage Districts', description: 'Create and manage districts', isAccess: true },
-      { id: 'view_districts', label: 'View Districts', description: 'View district information' },
+      { id: 'view_districts', label: 'View Districts', description: 'View district information', isAccess: true },
+      { id: 'manage_districts', label: 'Manage Districts', description: 'Umbrella: all district operations below' },
+      { id: 'create_district', label: 'Create District', description: 'Create new districts' },
+      { id: 'edit_district', label: 'Edit District', description: 'Edit district details' },
+      { id: 'delete_district', label: 'Delete District', description: 'Delete a district (when empty)' },
+      { id: 'import_districts', label: 'Import Districts', description: 'Bulk-import districts from CSV' },
     ],
   },
   {
     id: 'system-branches', label: 'Branches', path: '/dashboard/system/branches', icon: 'Building', section: 'system',
-    accessPermissions: ['manage_branches', 'manage_districts', 'super_admin'],
+    accessPermissions: ['manage_branches', 'view_branches', 'create_branch', 'edit_branch', 'manage_districts', 'super_admin'],
     actions: [
-      { id: 'manage_branches', label: 'Create & Manage Branches', description: 'Create and manage branches within districts', isAccess: true },
-      { id: 'view_branches', label: 'View Branches', description: 'View branch information' },
+      { id: 'view_branches', label: 'View Branches', description: 'View branch information', isAccess: true },
+      { id: 'manage_branches', label: 'Manage Branches', description: 'Umbrella: all branch operations below' },
+      { id: 'create_branch', label: 'Create Branch', description: 'Create new branches' },
+      { id: 'edit_branch', label: 'Edit Branch', description: 'Edit branch details' },
+      { id: 'delete_branch', label: 'Delete Branch', description: 'Delete a branch (when empty)' },
+      { id: 'import_branches', label: 'Import Branches', description: 'Bulk-import branches from CSV' },
     ],
   },
   {
@@ -208,12 +263,14 @@ export const MODULE_CHECKER_PERMISSION: Record<ApprovalModule, Permission> = {
   EMERGENCY_CLAIM: 'approve_emergency_claim',
   EMERGENCY_DISBURSEMENT: 'approve_emergency_disbursement',
   ASSET_ISSUANCE: 'approve_asset_issuance',
+  ASSET_RETURN: 'approve_asset_issuance',
   MEMBER_REMOVAL: 'approve_member_removal',
   RULE_CHANGE: 'approve_rule_change',
   PENALTY_WAIVER: 'approve_penalty_waiver',
   EDIR_REGISTRATION: 'approve_edir_registration',
   EDIR_UPDATE: 'approve_edir_update',
   USER_CREATION: 'approve_user_creation',
+  DOCUMENT_ACTION: 'approve_document',
 };
 
 export const MODULE_LABEL: Record<ApprovalModule, string> = {
@@ -221,12 +278,14 @@ export const MODULE_LABEL: Record<ApprovalModule, string> = {
   EMERGENCY_CLAIM: 'Emergency Claim',
   EMERGENCY_DISBURSEMENT: 'Emergency Disbursement',
   ASSET_ISSUANCE: 'Asset Issuance',
+  ASSET_RETURN: 'Asset Return',
   MEMBER_REMOVAL: 'Member Removal',
   RULE_CHANGE: 'Rule Change',
   PENALTY_WAIVER: 'Penalty Waiver',
   EDIR_REGISTRATION: 'Edir Registration',
   EDIR_UPDATE: 'Edir Update',
   USER_CREATION: 'User Creation',
+  DOCUMENT_ACTION: 'Document Action',
 };
 
 // All access permissions that gate an admin/system page — used to decide whether
@@ -269,8 +328,11 @@ export const ALL_PERMISSION_IDS: Permission[] = Array.from(new Set(permissions.m
 // Platform/global permissions — only ever grantable by a Super-Admin. These gate
 // cross-tenant capabilities (managing Edirs, associations, the super switch) and
 // must never appear in an Edir-scoped role editor or be saved on an Edir role.
-export const PLATFORM_PERMISSION_IDS: Permission[] = Array.from(new Set([
+export const PLATFORM_PERMISSION_IDS: Permission[] = Array.from(new Set<Permission>([
   ...pagePermissions.filter(p => p.section === 'system').flatMap(p => p.actions.map(a => a.id)),
+  // Cross-tenant Edir management — grantable only to platform roles, never Edir-scoped roles.
+  'manage_edirs', 'create_edir', 'edit_edir', 'revoke_edir', 'delete_edir',
+  'manage_edir_users', 'manage_edir_associations', 'view_edir_reports',
   'super_admin',
 ])) as Permission[];
 
@@ -323,6 +385,75 @@ const ACTION_OVERRIDES: Partial<Record<Permission, ActionKind>> = {
   view_branch_dashboard: 'View',
   view_district_dashboard: 'View',
   super_admin: 'Other',
+};
+
+// ─── Permission matrix (enterprise Role & Permission Matrix UI) ──────────────
+// Columns of the matrix. A permission is mapped to exactly one column so the
+// matrix can render modules (rows) × actions (columns).
+
+export const MATRIX_ACTIONS = [
+  'Read', 'Create', 'Update', 'Delete', 'Approve', 'Reject', 'Export', 'Import',
+  'Assign', 'Revoke', 'Cancel', 'Reschedule', 'Bulk Create', 'Bulk Update', 'Bulk Delete',
+  'Settings', 'Reports', 'Other',
+] as const;
+export type MatrixAction = (typeof MATRIX_ACTIONS)[number];
+
+const MATRIX_OVERRIDES: Record<string, MatrixAction> = {
+  view_committee_oversight: 'Reports', view_audit_log: 'Reports', view_payment_log: 'Reports',
+  view_branch_dashboard: 'Reports', view_district_dashboard: 'Reports', view_edir_reports: 'Reports',
+  record_payment: 'Create', register_edir: 'Create', report_emergency: 'Create', upload_document: 'Create',
+  remove_members: 'Delete', void_payment: 'Delete', delete_edir: 'Delete',
+  revoke_edir: 'Revoke', cancel_event: 'Cancel', reschedule_event: 'Reschedule',
+  waive_penalty: 'Approve', finalize_attendance: 'Approve', review_member_documents: 'Approve',
+  approve_member: 'Approve', review_document: 'Approve',
+  manage_associations: 'Assign', manage_committee: 'Assign', manage_edir_associations: 'Assign', manage_edir_users: 'Assign',
+  issue_asset: 'Assign', request_disbursement: 'Update', return_asset: 'Update',
+  manage_edir_settings: 'Settings', manage_general_settings: 'Settings', manage_email_settings: 'Settings', manage_asset_categories: 'Settings',
+  suspend_member: 'Update', reinstate_member: 'Update', handle_member_requests: 'Update',
+  reset_password: 'Update', lock_user: 'Update', unlock_user: 'Update',
+  super_admin: 'Other',
+};
+
+/** Map a permission to its matrix action column. */
+export function permissionMatrixAction(id: string): MatrixAction {
+  if (MATRIX_OVERRIDES[id]) return MATRIX_OVERRIDES[id];
+  if (id.startsWith('view_')) return 'Read';
+  if (id.startsWith('approve_')) return 'Approve';
+  if (id.startsWith('reject_')) return 'Reject';
+  if (id.startsWith('export_')) return 'Export';
+  if (id.startsWith('import_')) return 'Import';
+  if (id.startsWith('assign_')) return 'Assign';
+  if (id.startsWith('revoke_')) return 'Revoke';
+  if (id.startsWith('cancel_')) return 'Cancel';
+  if (id.startsWith('reschedule_')) return 'Reschedule';
+  if (id.startsWith('create_') || id.startsWith('add_')) return 'Create';
+  if (id.startsWith('edit_') || id.startsWith('update_')) return 'Update';
+  if (id.startsWith('delete_') || id.startsWith('remove_')) return 'Delete';
+  if (id.includes('settings')) return 'Settings';
+  if (id.startsWith('manage_')) return 'Update';
+  return 'Other';
+}
+
+/** Destructive / high-blast-radius permissions — flagged red in the matrix. */
+export function isDangerousPermission(id: string): boolean {
+  if (id === 'super_admin') return true;
+  return /^(delete_|remove_|revoke_|void_|suspend_)/.test(id) || id === 'waive_penalty';
+}
+
+/** Checker (approval) permissions — the second half of a maker–checker pair. */
+export function isCheckerPermission(id: string): boolean {
+  return id.startsWith('approve_') || id.startsWith('reject_') || id === 'finalize_attendance' || id === 'review_member_documents';
+}
+
+/** True if the permission is platform/cross-tenant scoped (scope restriction). */
+export function isPlatformPermission(id: string): boolean {
+  return PLATFORM_SET.has(id);
+}
+
+/** Module (page) id → its section id, for grouping matrix rows under categories. */
+export const MODULE_SECTION: Record<string, string> = {
+  ...Object.fromEntries(pagePermissions.map(p => [p.id, p.section])),
+  super: 'system',
 };
 
 /** Classify a permission id into its action kind (prefix heuristic + overrides). */

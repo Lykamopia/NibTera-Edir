@@ -32,6 +32,17 @@ export interface NavSection {
   items: NavItem[];
 }
 
+// Edir-operational pages a platform Super-Admin should NOT see. Edir-specific
+// operations (approvals, payments, emergencies, events, assets, members, rules,
+// documents, Edir settings, …) belong to Edir Administrators or users holding
+// Edir-level permissions — the Super-Admin manages the platform, tenants, users,
+// roles and governance instead.
+export const SUPER_ADMIN_HIDDEN_PAGES = new Set<string>([
+  'people', 'payments', 'payment-log', 'approvals', 'member-requests',
+  'emergencies', 'events', 'assets', 'rules', 'committee', 'documents',
+  'admin-settings',
+]);
+
 /** Build the visible, permission-filtered navigation grouped by section. */
 export function buildNav(permissions: Permission[], isSuperAdmin: boolean): NavSection[] {
   const has = (perms: Permission[]) => isSuperAdmin || perms.some(p => permissions.includes(p));
@@ -40,7 +51,10 @@ export function buildNav(permissions: Permission[], isSuperAdmin: boolean): NavS
     id: section.id,
     label: section.label,
     items: pagePermissions.filter(
-      p => p.section === section.id && IMPLEMENTED_PAGES.has(p.id) && has(p.accessPermissions),
+      p => p.section === section.id
+        && IMPLEMENTED_PAGES.has(p.id)
+        && !(isSuperAdmin && SUPER_ADMIN_HIDDEN_PAGES.has(p.id))
+        && has(p.accessPermissions),
     ),
   })).filter(s => s.items.length > 0);
 }

@@ -20,7 +20,7 @@ import { failure } from '@/lib/action-result';
 // Admins" role) may use it.
 async function requireSuperAdmin() {
   const actor = await getActor();
-  if (!actorHasPermission(actor, ['super_admin', 'manage_associations'])) {
+  if (!actorHasPermission(actor, ['super_admin', 'manage_associations', 'manage_edir_associations', 'manage_edir_users'])) {
     throw new AccessDeniedError('You do not have permission to manage Edir associations.');
   }
   return actor;
@@ -62,6 +62,23 @@ export async function getAssociationUsers(params: { edirId?: string; query?: str
     orderBy: { name: 'asc' }, take: 200,
   });
   return users.map(serializeUser);
+}
+
+/** Current association detail for the Edit dialog (scope, placement, role, status). */
+export async function getUserAssociationDetail(userId: string) {
+  await requireSuperAdmin();
+  const u = await prisma.user.findUnique({
+    where: { id: userId },
+    include: { role: { select: { id: true, name: true, scope: true } }, edir: { select: { name: true } }, district: { select: { name: true } }, branch: { select: { name: true } } },
+  });
+  if (!u) return null;
+  const scope: 'HEAD_OFFICE' | 'DISTRICT' | 'BRANCH' | 'EDIR' = u.edirId ? 'EDIR' : u.branchId ? 'BRANCH' : u.districtId ? 'DISTRICT' : 'HEAD_OFFICE';
+  return {
+    id: u.id, name: u.name, email: u.email, phone: u.phone, status: u.status,
+    scope, edirId: u.edirId, districtId: u.districtId, branchId: u.branchId,
+    roleId: u.roleId, roleName: u.role?.name ?? null, roleScope: u.role?.scope ?? null,
+    isSuperAdmin: u.role?.scope === 'SUPER_ADMIN',
+  };
 }
 
 /** All users that currently belong to a specific Edir. */
@@ -398,6 +415,107 @@ export async function associateUsers(input: z.infer<typeof associateSchema>) {
   }
 }
 
+const editAssociationSchema = z.object({
+  userId: z.string().min(1),
+  scope: z.enum(['HEAD_OFFICE', 'DISTRICT', 'BRANCH', 'EDIR']),
+  edirId: z.string().optional().nullable(),
+  districtId: z.string().optional().nullable(),
+  branchId: z.string().optional().nullable(),
+  roleId: z.string().optional().nullable(),
+  status: z.enum(['ACTIVE', 'INACTIVE', 'SUSPENDED']),
+});
+
+/**
+ * Comprehensive edit of a single user's association — organizational scope
+ * (Head Office / District / Branch / Edir), role, and status — in one place,
+ * with a complete before→after audit entry. Platform Super-Admins are protected.
+ */
+export async function updateUserAssociation(input: z.infer<typeof editAssociationSchema>) {
+  try {
+    const actor = await requireSuperAdmin();
+    const data = editAssociationSchema.parse(input);
+
+    const user = await prisma.user.findUnique({
+      where: { id: data.userId },
+      include: { role: { select: { name: true, scope: true, permissions: true } }, edir: { select: { name: true } }, district: { select: { name: true } }, branch: { select: { name: true, districtId: true } } },
+    });
+    if (!user) return { success: false as const, error: 'User not found.' };
+    if ((user.role?.permissions ?? '').split(',').includes('super_admin')) {
+      return { success: false as const, error: 'The full Super Administrator cannot be edited here.' };
+    }
+
+    // Resolve the new placement from the chosen scope.
+    let edirId: string | null = null, districtId: string | null = null, branchId: string | null = null;
+    let placementLabel = 'Head Office';
+    if (data.scope === 'EDIR') {
+      if (!data.edirId) return { success: false as const, error: 'Select an Edir.' };
+      const edir = await prisma.edir.findUnique({ where: { id: data.edirId }, select: { id: true, name: true } });
+      if (!edir) return { success: false as const, error: 'Edir not found.' };
+      edirId = edir.id; placementLabel = `Edir · ${edir.name}`;
+    } else if (data.scope === 'BRANCH') {
+      if (!data.branchId) return { success: false as const, error: 'Select a branch.' };
+      const branch = await prisma.branch.findUnique({ where: { id: data.branchId }, select: { id: true, name: true, districtId: true, district: { select: { name: true } } } });
+      if (!branch) return { success: false as const, error: 'Branch not found.' };
+      branchId = branch.id; districtId = branch.districtId; placementLabel = `Branch · ${branch.district?.name ?? ''} / ${branch.name}`.trim();
+    } else if (data.scope === 'DISTRICT') {
+      if (!data.districtId) return { success: false as const, error: 'Select a district.' };
+      const district = await prisma.district.findUnique({ where: { id: data.districtId }, select: { id: true, name: true } });
+      if (!district) return { success: false as const, error: 'District not found.' };
+      districtId = district.id; placementLabel = `District · ${district.name}`;
+    }
+
+    // Validate the chosen role matches the chosen scope.
+    let roleName: string | null = null;
+    if (data.roleId) {
+      const role = await prisma.role.findUnique({ where: { id: data.roleId }, select: { scope: true, name: true, edirId: true, districtId: true, branchId: true } });
+      if (!role) return { success: false as const, error: 'Role not found.' };
+      if (role.scope === 'SUPER_ADMIN' && data.scope !== 'HEAD_OFFICE') return { success: false as const, error: 'A platform role can only be assigned to a Head Office user.' };
+      const roleOk =
+        (data.scope === 'EDIR' && role.scope === 'EDIR' && (!role.edirId || role.edirId === edirId)) ||
+        (data.scope === 'DISTRICT' && role.scope === 'DISTRICT' && (!role.districtId || role.districtId === districtId)) ||
+        (data.scope === 'BRANCH' && role.scope === 'BRANCH' && (!role.branchId || role.branchId === branchId)) ||
+        (data.scope === 'HEAD_OFFICE' && (role.scope === 'SUPER_ADMIN' || role.scope === 'HEAD_OFFICE'));
+      if (!roleOk) return { success: false as const, error: 'The selected role does not match the chosen scope.' };
+      roleName = role.name;
+    }
+
+    const scopeChanged = user.edirId !== edirId || user.districtId !== districtId || user.branchId !== branchId;
+    const roleChanged = (user.roleId ?? null) !== (data.roleId ?? null);
+    const statusChanged = user.status !== data.status;
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        edirId, districtId, branchId,
+        roleId: data.roleId || null,
+        status: data.status,
+        // Invalidate existing sessions when scope or status changes.
+        ...(scopeChanged || statusChanged ? { tokenVersion: { increment: 1 } } : {}),
+      },
+    });
+
+    // Edir-scoped users are enrolled as members of their Edir.
+    if (data.scope === 'EDIR' && edirId) { try { await ensureMembershipForUser(user.id); } catch { /* non-fatal */ } }
+
+    // Compose a readable before→after audit trail.
+    const prevPlacement = user.edir?.name ? `Edir · ${user.edir.name}` : user.branch?.name ? `Branch · ${user.branch.name}` : user.district?.name ? `District · ${user.district.name}` : 'Head Office';
+    const parts: string[] = [];
+    if (scopeChanged) parts.push(`placement ${prevPlacement} → ${placementLabel}`);
+    if (roleChanged) parts.push(`role ${user.role?.name ?? 'none'} → ${roleName ?? 'none'}`);
+    if (statusChanged) parts.push(`status ${user.status} → ${data.status}`);
+    await writeAudit({
+      edirId: edirId ?? user.edirId, userId: actor.id,
+      action: 'USER_ASSOCIATION_UPDATED', targetType: 'User', targetId: user.id,
+      details: `${user.name ?? user.email ?? user.id}: ${parts.length ? parts.join('; ') : 'no changes'}.`,
+    });
+
+    revalidatePath('/dashboard/system/associations');
+    return { success: true as const, changed: scopeChanged || roleChanged || statusChanged };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
 /** Remove a user from their Edir (unassign + deactivate). */
 export async function removeUserFromEdir(userId: string) {
   try {
@@ -439,7 +557,7 @@ export async function setAssociationUserStatus(userId: string, status: 'ACTIVE' 
 export async function getAssociationAudit() {
   await requireSuperAdmin();
   const logs = await prisma.auditLog.findMany({
-    where: { action: { in: ['USER_ASSOCIATED', 'USER_TRANSFERRED', 'USER_REMOVED_FROM_EDIR', 'USER_STATUS_CHANGED'] } },
+    where: { action: { in: ['USER_ASSOCIATED', 'USER_TRANSFERRED', 'USER_REMOVED_FROM_EDIR', 'USER_STATUS_CHANGED', 'USER_ASSOCIATION_UPDATED', 'PLATFORM_USER_CREATED', 'USER_CREATED'] } },
     orderBy: { createdAt: 'desc' }, take: 100, include: { user: { select: { name: true, email: true } } },
   });
   return logs.map(l => ({ id: l.id, action: l.action, details: l.details, createdAt: l.createdAt, by: l.user?.name ?? l.user?.email ?? 'System' }));

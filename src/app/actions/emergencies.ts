@@ -222,7 +222,7 @@ const reportSchema = z.object({
 
 export async function reportClaim(input: z.infer<typeof reportSchema>) {
   try {
-    const { actor, edirId } = await requireActor('manage_emergencies');
+    const { actor, edirId } = await requireActor(['report_emergency', 'manage_emergencies']);
     const data = reportSchema.parse(input);
 
     const member = await prisma.member.findUnique({ where: { id: data.memberId } });
@@ -270,7 +270,7 @@ export async function reportClaim(input: z.infer<typeof reportSchema>) {
 
 export async function rejectReportedClaim(claimId: string, reason?: string) {
   try {
-    const { actor, edirId } = await requireActor('manage_emergencies');
+    const { actor, edirId } = await requireActor(['reject_emergency', 'manage_emergencies']);
     const claim = await prisma.emergencyClaim.findUnique({ where: { id: claimId } });
     if (!claim) return { success: false as const, error: 'Claim not found.' };
     await assertSameTenant(actor, claim.edirId);
@@ -352,15 +352,17 @@ export async function submitClaimForApproval(input: z.infer<typeof submitClaimSc
   }
 }
 
+const receiptSchema = z.object({ path: z.string().min(1), name: z.string().min(1) });
 const disburseSchema = z.object({
   claimId: z.string().min(1),
   amount: z.coerce.number().min(0),
+  receipts: z.array(receiptSchema).optional(),
 });
 
 /** Maker requests disbursement of an approved (ACTIVE) claim (EMERGENCY_DISBURSEMENT). */
 export async function requestDisbursement(input: z.infer<typeof disburseSchema>) {
   try {
-    const { actor, edirId } = await requireActor('manage_emergencies');
+    const { actor, edirId } = await requireActor(['request_disbursement', 'manage_emergencies']);
     const data = disburseSchema.parse(input);
 
     const claim = await prisma.emergencyClaim.findUnique({
@@ -372,6 +374,14 @@ export async function requestDisbursement(input: z.infer<typeof disburseSchema>)
     if (claim.status !== 'ACTIVE') return { success: false as const, error: 'Only approved (active) claims can be disbursed.' };
     if (await hasOpenRequest('EMERGENCY_DISBURSEMENT', claim.id)) return { success: false as const, error: 'This claim already has a pending disbursement.' };
     if (data.amount <= 0) return { success: false as const, error: 'Disbursement amount must be greater than zero.' };
+
+    // Store any uploaded receipts / supporting documents on the claim for evidence.
+    if (data.receipts?.length) {
+      await prisma.emergencyClaim.update({
+        where: { id: claim.id },
+        data: { disbursementReceipts: data.receipts as unknown as Prisma.InputJsonValue },
+      });
+    }
 
     const requestId = await submitForApproval(actor, {
       edirId,

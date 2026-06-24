@@ -13,11 +13,15 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Loader2, Search, Plus, CalendarDays, Users, CheckCircle2, Ban, X, Download, ChevronUp, ChevronDown, ArrowUpDown, CalendarClock, AlertTriangle } from 'lucide-react';
 import { getMembers } from '@/app/actions/members';
 import {
-  getEvents, getEvent, getEventsSummary, saveEvent, cancelEvent,
-  addParticipants, inviteAllActiveMembers, removeParticipant, setAttendance, finalizeAttendance,
+  getEvents, getEvent, getEventsSummary, saveEvent, cancelEvent, rescheduleEvent, getEventCapabilities,
+  addParticipants, inviteAllActiveMembers, removeParticipant, setAttendance, setAttendanceBulk, finalizeAttendance,
 } from '@/app/actions/events';
+
+type EventCaps = { canManage: boolean; canReschedule: boolean; canCancel: boolean; canFinalize: boolean };
+const NO_CAPS: EventCaps = { canManage: false, canReschedule: false, canCancel: false, canFinalize: false };
 import { useConfirm } from '@/components/ui/confirm-provider';
 import { PageHeader, StatCard, LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
+import { DateRangeFilter, ALL_TIME, inDateRange, type DateRangeValue } from '@/components/ui/date-range-filter';
 
 const STATUS: Record<string, { label: string; cls: string }> = {
   SCHEDULED: { label: 'Scheduled', cls: 'border-info/20 bg-info/10 text-info' },
@@ -35,9 +39,14 @@ export default function EventsClient() {
   const [error, setError] = useState(false);
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState('all');
+  const [dateRange, setDateRange] = useState<DateRangeValue>(ALL_TIME);
   const [sort, setSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'datetime', dir: 'desc' });
   const [editing, setEditing] = useState<any | null | undefined>(undefined);
   const [manageId, setManageId] = useState<string | null>(null);
+  const [reschedTarget, setReschedTarget] = useState<any | null>(null);
+  const [caps, setCaps] = useState<EventCaps>(NO_CAPS);
+
+  useEffect(() => { getEventCapabilities().then(setCaps).catch(() => setCaps(NO_CAPS)); }, []);
 
   const load = useCallback(() => {
     setLoading(true); setError(false);
@@ -49,7 +58,7 @@ export default function EventsClient() {
 
   const toggleSort = (key: string) => setSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' });
   const SortIcon = ({ k }: { k: string }) => sort.key !== k ? <ArrowUpDown className="h-3.5 w-3.5 opacity-40" /> : sort.dir === 'asc' ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />;
-  const sorted = [...items].sort((a, b) => {
+  const sorted = [...items].filter(e => inDateRange(e.datetime, dateRange)).sort((a, b) => {
     let cmp = 0;
     if (sort.key === 'title') cmp = (a.title || '').localeCompare(b.title || '');
     else if (sort.key === 'penalty') cmp = (a.absencePenalty || 0) - (b.absencePenalty || 0);
@@ -69,7 +78,7 @@ export default function EventsClient() {
   return (
     <div className="space-y-5">
       <PageHeader title="Events" description="Schedule events, track attendance, and finalize to apply absence penalties." icon={CalendarDays}
-        actions={<Button onClick={() => setEditing(null)}><Plus className="mr-1 h-4 w-4" /> New Event</Button>} />
+        actions={caps.canManage ? <Button onClick={() => setEditing(null)}><Plus className="mr-1 h-4 w-4" /> New Event</Button> : undefined} />
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard title="Upcoming" value={summary?.upcoming ?? '—'} icon={CalendarClock} accent="primary" hint={summary ? `${summary.scheduled} scheduled` : undefined} />
@@ -92,13 +101,16 @@ export default function EventsClient() {
             <SelectItem value="CANCELLED">Cancelled</SelectItem>
           </SelectContent>
         </Select>
+        <DateRangeFilter value={dateRange} onChange={setDateRange} className="w-44" />
         <Button variant="outline" onClick={exportCsv}><Download className="mr-1.5 h-4 w-4" /> Export</Button>
       </div>
 
       <Card>
         <CardContent className="p-0">
-          {loading ? <LoadingState rows={5} /> : error ? <ErrorState onRetry={load} /> : items.length === 0 ? (
-            <EmptyState icon={CalendarDays} title="No events yet" description="Schedule your first event to track attendance." />
+          {loading ? <LoadingState rows={5} /> : error ? <ErrorState onRetry={load} /> : sorted.length === 0 ? (
+            items.length === 0
+              ? <EmptyState icon={CalendarDays} title="No events yet" description="Schedule your first event to track attendance." />
+              : <EmptyState icon={Search} title="No events in range" description="Adjust the date range or filters to see more." />
           ) : (
             <Table>
               <TableHeader>
@@ -123,7 +135,8 @@ export default function EventsClient() {
                     <TableCell><Badge variant="outline" className={STATUS[e.status]?.cls}>{STATUS[e.status]?.label ?? e.status}</Badge></TableCell>
                     <TableCell className="text-right whitespace-nowrap">
                       <Button size="sm" variant="outline" className="mr-1" onClick={() => setManageId(e.id)}><Users className="h-4 w-4 mr-1" /> Manage</Button>
-                      {e.status === 'SCHEDULED' && <Button size="sm" variant="ghost" onClick={() => setEditing(e)}>Edit</Button>}
+                      {e.status === 'SCHEDULED' && caps.canReschedule && <Button size="sm" variant="ghost" className="mr-1" onClick={() => setReschedTarget(e)}><CalendarClock className="h-4 w-4 mr-1" /> Reschedule</Button>}
+                      {e.status === 'SCHEDULED' && caps.canManage && <Button size="sm" variant="ghost" onClick={() => setEditing(e)}>Edit</Button>}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -135,7 +148,72 @@ export default function EventsClient() {
       <p className="text-xs text-muted-foreground">{sorted.length} event(s)</p>
 
       {editing !== undefined && <EventFormDialog event={editing} onClose={() => setEditing(undefined)} onDone={() => { setEditing(undefined); load(); }} />}
-      {manageId && <ManageDialog eventId={manageId} onClose={() => setManageId(null)} onChanged={load} />}
+      {manageId && <ManageDialog eventId={manageId} caps={caps} onClose={() => setManageId(null)} onChanged={load} />}
+      {reschedTarget && <RescheduleDialog event={reschedTarget} onClose={() => setReschedTarget(null)} onDone={() => { setReschedTarget(null); load(); }} />}
+    </div>
+  );
+}
+
+/** Member / role / group selector used to choose expected participants at creation. */
+function ParticipantPicker({ selected, onChange }: { selected: Set<string>; onChange: (s: Set<string>) => void }) {
+  const [members, setMembers] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState('');
+
+  useEffect(() => {
+    getMembers({ status: 'ACTIVE', pageSize: 500 }).then(r => setMembers(r.items)).catch(() => {}).finally(() => setLoading(false));
+  }, []);
+
+  const roles = useMemo(() => Array.from(new Set(members.map(m => m.role).filter(Boolean))).sort() as string[], [members]);
+  const filtered = members.filter(m => !query || `${m.name ?? ''} ${m.memberId ?? ''}`.toLowerCase().includes(query.toLowerCase()));
+
+  const setSel = (next: Set<string>) => onChange(new Set(next));
+  const toggle = (id: string) => { const n = new Set(selected); n.has(id) ? n.delete(id) : n.add(id); setSel(n); };
+  const toggleRole = (role: string) => {
+    const ids = members.filter(m => m.role === role).map(m => m.id);
+    const allOn = ids.length > 0 && ids.every(id => selected.has(id));
+    const n = new Set(selected);
+    ids.forEach(id => (allOn ? n.delete(id) : n.add(id)));
+    setSel(n);
+  };
+  const roleAllOn = (role: string) => { const ids = members.filter(m => m.role === role).map(m => m.id); return ids.length > 0 && ids.every(id => selected.has(id)); };
+
+  if (loading) return <div className="flex h-16 items-center justify-center"><Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /></div>;
+  if (members.length === 0) return <p className="text-xs text-muted-foreground">No active members to invite.</p>;
+
+  return (
+    <div className="space-y-2">
+      {/* Groups */}
+      <div className="flex flex-wrap gap-1.5">
+        <button type="button" onClick={() => setSel(new Set(members.map(m => m.id)))} className="rounded-full border bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary hover:bg-primary/20">All active members ({members.length})</button>
+        <button type="button" onClick={() => setSel(new Set())} className="rounded-full border px-2.5 py-1 text-xs text-muted-foreground hover:bg-muted">Clear</button>
+      </div>
+      {/* Role-based selection */}
+      {roles.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {roles.map(r => (
+            <button key={r} type="button" onClick={() => toggleRole(r)} className={`rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${roleAllOn(r) ? 'border-primary bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'}`}>
+              {r} ({members.filter(m => m.role === r).length})
+            </button>
+          ))}
+        </div>
+      )}
+      {/* Specific members */}
+      <div className="relative">
+        <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+        <Input className="h-9 pl-8 text-sm" placeholder="Search members…" value={query} onChange={e => setQuery(e.target.value)} />
+      </div>
+      <div className="max-h-44 overflow-y-auto rounded-md border">
+        {filtered.length === 0 ? (
+          <p className="p-3 text-center text-xs text-muted-foreground">No members match.</p>
+        ) : filtered.map(m => (
+          <label key={m.id} className="flex cursor-pointer items-center gap-2 border-b px-2.5 py-1.5 text-sm last:border-0 hover:bg-muted/50">
+            <input type="checkbox" checked={selected.has(m.id)} onChange={() => toggle(m.id)} />
+            <span className="min-w-0 flex-1 truncate">{m.name}</span>
+            <span className="shrink-0 text-xs text-muted-foreground">{m.role || m.memberId}</span>
+          </label>
+        ))}
+      </div>
     </div>
   );
 }
@@ -149,7 +227,9 @@ function EventFormDialog({ event, onClose, onDone }: { event: any | null; onClos
     attendanceRequired: !!event?.attendanceRequired,
     absencePenalty: event?.absencePenalty != null ? String(event.absencePenalty) : '0',
   });
+  const [participants, setParticipants] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
+  const isCreate = !event;
 
   const submit = async () => {
     if (form.title.trim().length < 2) { toast.error('Title is required.'); return; }
@@ -157,15 +237,18 @@ function EventFormDialog({ event, onClose, onDone }: { event: any | null; onClos
     const res = await saveEvent({
       id: event?.id, title: form.title.trim(), datetime: form.datetime, location: form.location || null,
       attendanceRequired: form.attendanceRequired, absencePenalty: Number(form.absencePenalty) || 0,
+      participantMemberIds: isCreate ? Array.from(participants) : undefined,
     });
     setSaving(false);
-    if (res?.success) { toast.success('Saved.'); onDone(); }
-    else toast.error(res?.error || 'Failed to save event.');
+    if (res?.success) {
+      toast.success(isCreate && (res as any).addedParticipants ? `Event created with ${(res as any).addedParticipants} participant(s).` : 'Saved.');
+      onDone();
+    } else toast.error(res?.error || 'Failed to save event.');
   };
 
   return (
     <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent>
+      <DialogContent className="max-h-[88vh] max-w-lg overflow-y-auto">
         <DialogHeader><DialogTitle>{event ? 'Edit Event' : 'New Event'}</DialogTitle></DialogHeader>
         <div className="space-y-3">
           <div className="space-y-1"><Label>Title</Label><Input value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} /></div>
@@ -180,6 +263,15 @@ function EventFormDialog({ event, onClose, onDone }: { event: any | null; onClos
           {form.attendanceRequired && (
             <div className="space-y-1"><Label>Absence Penalty</Label><Input type="number" min={0} value={form.absencePenalty} onChange={e => setForm(f => ({ ...f, absencePenalty: e.target.value }))} /></div>
           )}
+          {isCreate && (
+            <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
+              <div className="flex items-center justify-between">
+                <Label className="text-sm font-medium">Expected Participants</Label>
+                <span className="text-xs text-muted-foreground">{participants.size} selected</span>
+              </div>
+              <ParticipantPicker selected={participants} onChange={setParticipants} />
+            </div>
+          )}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
@@ -190,11 +282,46 @@ function EventFormDialog({ event, onClose, onDone }: { event: any | null; onClos
   );
 }
 
-function ManageDialog({ eventId, onClose, onChanged }: { eventId: string; onClose: () => void; onChanged: () => void }) {
+function RescheduleDialog({ event, onClose, onDone }: { event: any; onClose: () => void; onDone: () => void }) {
+  const toLocalInput = (d: any) => { const dt = d ? new Date(d) : new Date(); const off = dt.getTimezoneOffset(); return new Date(dt.getTime() - off * 60000).toISOString().slice(0, 16); };
+  const [datetime, setDatetime] = useState(toLocalInput(event.datetime));
+  const [saving, setSaving] = useState(false);
+
+  const submit = async () => {
+    if (!datetime) { toast.error('Pick a new date and time.'); return; }
+    setSaving(true);
+    const res = await rescheduleEvent(event.id, datetime);
+    setSaving(false);
+    if (res?.success) { toast.success('Event rescheduled.'); onDone(); }
+    else toast.error(res?.error || 'Failed to reschedule.');
+  };
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><CalendarClock className="h-5 w-5 text-primary" /> Reschedule Event</DialogTitle>
+          <DialogDescription>{event.title} — currently {fmt(event.datetime)}.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-1.5">
+          <Label className="text-xs">New date &amp; time</Label>
+          <Input type="datetime-local" value={datetime} onChange={e => setDatetime(e.target.value)} />
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
+          <Button onClick={submit} disabled={saving}>{saving && <Loader2 className="h-4 w-4 mr-1 animate-spin" />} Reschedule</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ManageDialog({ eventId, caps, onClose, onChanged }: { eventId: string; caps: EventCaps; onClose: () => void; onChanged: () => void }) {
   const [event, setEvent] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [adding, setAdding] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const confirm = useConfirm();
 
   const load = useCallback(() => {
@@ -209,6 +336,14 @@ function ManageDialog({ eventId, onClose, onChanged }: { eventId: string; onClos
     const res = await setAttendance(pid, status as any);
     if (res?.success) load(); else toast.error(res?.error || 'Failed to update attendance.');
   };
+  const onBulk = async (status: string, ids?: string[]) => {
+    setBusy(true);
+    const res = await setAttendanceBulk(eventId, status as any, ids);
+    setBusy(false);
+    if (res?.success) { toast.success(`Marked ${res.updated} as ${status.toLowerCase()}.`); setSelected(new Set()); load(); }
+    else toast.error(res?.error || 'Failed to update attendance.');
+  };
+  const toggleSel = (id: string) => setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const onRemove = async (pid: string) => {
     const res = await removeParticipant(pid);
     if (res?.success) load(); else toast.error(res?.error || 'Failed to remove participant.');
@@ -244,10 +379,29 @@ function ManageDialog({ eventId, onClose, onChanged }: { eventId: string; onClos
               </DialogDescription>
             </DialogHeader>
 
-            {!locked && (
-              <div className="flex flex-wrap gap-2">
-                <Button size="sm" variant="outline" onClick={() => setAdding(true)} disabled={busy}><Plus className="h-4 w-4 mr-1" /> Add members</Button>
-                <Button size="sm" variant="outline" onClick={onInviteAll} disabled={busy}>Invite all active</Button>
+            {!locked && caps.canManage && (
+              <div className="space-y-2">
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" variant="outline" onClick={() => setAdding(true)} disabled={busy}><Plus className="h-4 w-4 mr-1" /> Add members</Button>
+                  <Button size="sm" variant="outline" onClick={onInviteAll} disabled={busy}>Invite all active</Button>
+                </div>
+                {event.participants.length > 0 && (() => {
+                  const allPids: string[] = event.participants.map((p: any) => p.id);
+                  const roles = Array.from(new Set(event.participants.map((p: any) => p.role).filter(Boolean))) as string[];
+                  const selectByRole = (role: string) => setSelected(new Set(event.participants.filter((p: any) => p.role === role).map((p: any) => p.id)));
+                  return (
+                    <div className="flex flex-wrap items-center gap-1.5 rounded-md border bg-muted/30 p-2">
+                      <button type="button" onClick={() => setSelected(new Set(allPids))} className="rounded-full border bg-card px-2.5 py-1 text-xs font-medium hover:bg-muted">Select all ({allPids.length})</button>
+                      {roles.map(r => (
+                        <button key={r} type="button" onClick={() => selectByRole(r)} className="rounded-full border bg-card px-2.5 py-1 text-xs text-muted-foreground hover:bg-muted">{r}</button>
+                      ))}
+                      {selected.size > 0 && <button type="button" onClick={() => setSelected(new Set())} className="rounded-full px-2.5 py-1 text-xs text-muted-foreground hover:underline">Clear</button>}
+                      <span className="mx-1 h-4 w-px bg-border" />
+                      <Button size="sm" variant="outline" disabled={busy} onClick={() => onBulk('PRESENT')}>Mark all attended</Button>
+                      <Button size="sm" disabled={busy || selected.size === 0} onClick={() => onBulk('PRESENT', Array.from(selected))}>Mark selected attended ({selected.size})</Button>
+                    </div>
+                  );
+                })()}
               </div>
             )}
 
@@ -257,15 +411,22 @@ function ManageDialog({ eventId, onClose, onChanged }: { eventId: string; onClos
               ) : (
                 <Table>
                   <TableHeader>
-                    <TableRow><TableHead>Member</TableHead><TableHead>Attendance</TableHead><TableHead></TableHead></TableRow>
+                    <TableRow>
+                      {!locked && caps.canManage && <TableHead className="w-8"></TableHead>}
+                      <TableHead>Member</TableHead><TableHead>Role</TableHead><TableHead>Attendance</TableHead><TableHead></TableHead>
+                    </TableRow>
                   </TableHeader>
                   <TableBody>
                     {event.participants.map((p: any) => (
-                      <TableRow key={p.id}>
+                      <TableRow key={p.id} className={selected.has(p.id) ? 'bg-primary/5' : ''}>
+                        {!locked && caps.canManage && (
+                          <TableCell><input type="checkbox" checked={selected.has(p.id)} onChange={() => toggleSel(p.id)} /></TableCell>
+                        )}
                         <TableCell>
                           <div className="font-medium">{p.name}</div>
                           <div className="font-mono text-xs text-muted-foreground">{p.memberCode}{p.penalized && <span className="ml-2 text-red-600">penalized</span>}</div>
                         </TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{p.role || '—'}</TableCell>
                         <TableCell>
                           {locked ? (
                             <span className="text-sm">{p.status}</span>
@@ -289,12 +450,12 @@ function ManageDialog({ eventId, onClose, onChanged }: { eventId: string; onClos
             </div>
 
             <DialogFooter className="gap-2 sm:justify-between">
-              {event.status === 'SCHEDULED' ? (
+              {event.status === 'SCHEDULED' && caps.canCancel ? (
                 <Button variant="ghost" className="text-destructive" onClick={async () => { if (await confirm({ title: 'Cancel event', description: 'This event will be cancelled.', destructive: true, confirmText: 'Cancel event', cancelText: 'Keep' })) { const r = await cancelEvent(eventId); if (r?.success) { toast.success('Event cancelled.'); load(); onChanged(); } else toast.error(r?.error || 'Failed.'); } }}>
                   <Ban className="h-4 w-4 mr-1" /> Cancel Event
                 </Button>
               ) : <span />}
-              {event.status === 'SCHEDULED' && (
+              {event.status === 'SCHEDULED' && caps.canFinalize && (
                 <Button onClick={onFinalize} disabled={busy}>{busy ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <CheckCircle2 className="h-4 w-4 mr-1" />} Finalize Attendance</Button>
               )}
             </DialogFooter>

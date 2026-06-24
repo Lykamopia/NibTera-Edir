@@ -136,7 +136,10 @@ export function DashboardContentWrapper({ user, children }: { user: LoggedInUser
             </div>
           </header>
           <main className="flex flex-1 flex-col bg-muted/40 overflow-auto no-print">
-            <div key={pathname} className="page-enter mx-auto w-full max-w-7xl flex-1 p-4 min-h-0 min-w-0 sm:p-6">{children}</div>
+            {/* Global content container: fills the available width next to the sidebar
+               with a consistent responsive gutter, capping only on ultra-wide screens
+               so content stays readable. Equal padding on all sides. */}
+            <div key={pathname} className="page-enter mx-auto w-full max-w-[1920px] flex-1 p-4 min-h-0 min-w-0 sm:p-5 lg:p-6">{children}</div>
           </main>
         </div>
       </div>

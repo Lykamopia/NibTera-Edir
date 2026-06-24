@@ -83,6 +83,70 @@ export function ensureApprovalModules() {
     },
   });
 
+  // ── Asset Return (approve → free inventory + apply any compensation) ─────────
+  registerModule('ASSET_RETURN', {
+    async execute(payload: { issuanceId: string; returnedQty: number; condition?: string | null; compensation: number }, { tx }) {
+      const issuance = await tx.assetIssuance.findUnique({ where: { id: payload.issuanceId } });
+      if (!issuance) throw new Error('The asset issuance no longer exists.');
+      if (issuance.status !== 'ISSUED') throw new Error('This asset is no longer in an issued state.');
+      if (payload.returnedQty > issuance.issuedQty) throw new Error(`Cannot return more than the ${issuance.issuedQty} issued.`);
+      const compensation = Number(payload.compensation) || 0;
+      const newStatus = compensation > 0 ? 'COMPENSATION_PENDING' : 'CLOSED';
+      await tx.asset.update({
+        where: { id: issuance.assetId },
+        data: { issuedQuantity: { decrement: payload.returnedQty }, status: 'available' },
+      });
+      await tx.assetIssuance.update({
+        where: { id: issuance.id },
+        data: { status: newStatus, returnedQty: payload.returnedQty, condition: payload.condition || null, compensation: new Prisma.Decimal(compensation) },
+      });
+      // Loss/damage compensation is added to the member's outstanding balance.
+      if (compensation > 0 && issuance.memberId) {
+        await tx.paymentStatus.upsert({
+          where: { memberId: issuance.memberId },
+          update: { balance: { increment: compensation }, status: 'PENDING' },
+          create: { memberId: issuance.memberId, balance: new Prisma.Decimal(compensation), status: 'PENDING' },
+        });
+      }
+    },
+  });
+
+  // ── Document Action (maker–checker for the document repository) ──────────────
+  registerModule('DOCUMENT_ACTION', {
+    async execute(payload: { documentId: string; action: string; changes?: any }, { tx, actor }) {
+      const doc = await tx.dmsDocument.findUnique({ where: { id: payload.documentId } });
+      if (!doc) throw new Error('The document no longer exists.');
+      const now = new Date();
+      const stamp = { reviewedById: actor.id, approvedById: actor.id, reviewedAt: now, approvedAt: now, pendingAction: null, pendingPayload: Prisma.DbNull, rejectionReason: null };
+      const changes = payload.changes ?? {};
+      switch (payload.action) {
+        case 'upload':
+          await tx.dmsDocument.update({ where: { id: doc.id }, data: { ...stamp, status: 'APPROVED' } });
+          break;
+        case 'edit':
+          await tx.dmsDocument.update({ where: { id: doc.id }, data: { ...stamp, title: changes.title ?? doc.title, purpose: changes.purpose ?? doc.purpose, fileUrl: changes.fileUrl ?? doc.fileUrl, fileName: changes.fileName ?? doc.fileName, fileType: changes.fileType ?? doc.fileType } });
+          break;
+        case 'classify':
+          await tx.dmsDocument.update({ where: { id: doc.id }, data: { ...stamp, category: changes.category ?? doc.category, tags: changes.tags ?? doc.tags } });
+          break;
+        case 'share':
+          await tx.dmsDocument.update({ where: { id: doc.id }, data: { ...stamp, visibility: changes.visibility ?? doc.visibility } });
+          break;
+        case 'revoke':
+          await tx.dmsDocument.update({ where: { id: doc.id }, data: { ...stamp, visibility: 'staff' } });
+          break;
+        case 'archive':
+          await tx.dmsDocument.update({ where: { id: doc.id }, data: { ...stamp, status: 'ARCHIVED', archivedAt: now } });
+          break;
+        case 'delete':
+          await tx.dmsDocument.delete({ where: { id: doc.id } });
+          break;
+        default:
+          throw new Error(`Unknown document action: ${payload.action}`);
+      }
+    },
+  });
+
   // ── Rule Change (apply governance-setting or bylaw change + log the diff) ─────
   registerModule('RULE_CHANGE', {
     async execute(payload: any, { tx, request, actor }) {

@@ -9,8 +9,9 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
-import { Loader2, Inbox, FileText, ExternalLink } from 'lucide-react';
+import { Loader2, Inbox, FileText, ExternalLink, Search } from 'lucide-react';
 import { PageHeader, LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
+import { DateRangeFilter, ALL_TIME, inDateRange, type DateRangeValue } from '@/components/ui/date-range-filter';
 import { getMemberRequests, respondMemberRequest } from '@/app/actions/member-requests';
 
 const STATUS: Record<string, string> = {
@@ -26,6 +27,7 @@ export default function RequestsClient() {
   const [error, setError] = useState(false);
   const [status, setStatus] = useState('all');
   const [type, setType] = useState('all');
+  const [dateRange, setDateRange] = useState<DateRangeValue>(ALL_TIME);
   const [target, setTarget] = useState<any | null>(null);
 
   const load = useCallback(() => {
@@ -33,6 +35,8 @@ export default function RequestsClient() {
     getMemberRequests({ status, type }).then(setItems).catch(() => setError(true)).finally(() => setLoading(false));
   }, [status, type]);
   useEffect(() => { load(); }, [load]);
+
+  const visibleItems = items.filter(r => inDateRange(r.createdAt, dateRange));
 
   return (
     <div className="space-y-4">
@@ -61,13 +65,18 @@ export default function RequestsClient() {
             <SelectItem value="REJECTED">Rejected</SelectItem>
           </SelectContent>
         </Select>
+        <DateRangeFilter value={dateRange} onChange={setDateRange} className="w-44" />
       </div>
 
-      {loading ? <LoadingState label="Loading requests…" /> : error ? <ErrorState onRetry={load} /> : items.length === 0 ? (
-        <Card><CardContent className="p-0"><EmptyState icon={Inbox} title="No member requests" description="Requests submitted by members will appear here for review." /></CardContent></Card>
+      {loading ? <LoadingState label="Loading requests…" /> : error ? <ErrorState onRetry={load} /> : visibleItems.length === 0 ? (
+        <Card><CardContent className="p-0">
+          {items.length === 0
+            ? <EmptyState icon={Inbox} title="No member requests" description="Requests submitted by members will appear here for review." />
+            : <EmptyState icon={Search} title="No requests in range" description="Adjust the date range or filters to see more." />}
+        </CardContent></Card>
       ) : (
         <div className="space-y-2">
-          {items.map(r => (
+          {visibleItems.map(r => (
             <Card key={r.id} className="card-interactive cursor-pointer" onClick={() => setTarget(r)}>
               <CardContent className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between">
                 <div className="min-w-0">

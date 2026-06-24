@@ -1,147 +1,425 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import Link from 'next/link';
+import { toast } from 'sonner';
+import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import {
-  Loader2, Search, FolderArchive, FileText, FileImage, FileType2, Download, ExternalLink, User, Eye, ArrowUpRight,
+  Loader2, Search, FolderArchive, FileText, FileImage, FileType2, Upload, Eye, Folder, Files,
+  CheckCircle2, XCircle, Clock, Archive, Trash2, Share2, Tag, Shield, Download, History, FolderOpen, X,
 } from 'lucide-react';
 import { PageHeader, LoadingState, ErrorState, EmptyState, StatCard } from '@/components/ui/states';
-import { getDocuments, type DocItem } from '@/app/actions/documents';
+import { useConfirm, usePrompt } from '@/components/ui/confirm-provider';
+import { uploadFile } from '@/lib/upload';
+import {
+  listDmsDocuments, getDmsDocumentDetail, createDmsDocument, submitDocumentAction,
+  approveDmsDocument, rejectDmsDocument,
+} from '@/app/actions/dms-documents';
 
-const STATUS: Record<string, string> = {
-  PENDING: 'border-warning/20 bg-warning/10 text-warning', IN_REVIEW: 'border-info/20 bg-info/10 text-info',
-  APPROVED: 'border-success/20 bg-success/10 text-success', RESOLVED: 'border-success/20 bg-success/10 text-success',
-  REJECTED: 'border-destructive/20 bg-destructive/10 text-destructive',
+const STATUS: Record<string, { label: string; cls: string; icon: any }> = {
+  DRAFT: { label: 'Draft', cls: 'bg-muted text-muted-foreground border-border', icon: FileText },
+  PENDING: { label: 'Pending Approval', cls: 'border-warning/30 bg-warning/10 text-warning', icon: Clock },
+  APPROVED: { label: 'Approved', cls: 'border-success/30 bg-success/10 text-success', icon: CheckCircle2 },
+  REJECTED: { label: 'Rejected', cls: 'border-destructive/30 bg-destructive/10 text-destructive', icon: XCircle },
+  ARCHIVED: { label: 'Archived', cls: 'border-slate-300 bg-slate-100 text-slate-600', icon: Archive },
 };
-const SOURCE_LABEL: Record<string, string> = { MEMBER: 'Member', RELATIVE: 'Relative', REQUEST: 'Request' };
-const TypeIcon = ({ type, className }: { type: string; className?: string }) =>
-  type === 'image' ? <FileImage className={className} /> : type === 'pdf' ? <FileType2 className={className} /> : <FileText className={className} />;
+const VIS_LABEL: Record<string, string> = { staff: 'Staff only', committee: 'Committee', all: 'All members' };
+const TypeIcon = ({ t, className }: { t: string; className?: string }) =>
+  t === 'image' ? <FileImage className={className} /> : t === 'pdf' ? <FileType2 className={className} /> : <FileText className={className} />;
+const fmt = (d: any) => (d ? new Date(d).toLocaleDateString(undefined, { dateStyle: 'medium' }) : '—');
+const fmtTime = (d: any) => new Date(d).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 
-const fmt = (d: any) => new Date(d).toLocaleDateString(undefined, { dateStyle: 'medium' });
+function StatusBadge({ status, pending }: { status: string; pending?: string | null }) {
+  const s = STATUS[status] ?? STATUS.DRAFT;
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <Badge variant="outline" className={cn('gap-1', s.cls)}><s.icon className="h-3 w-3" /> {s.label}</Badge>
+      {pending && <Badge variant="outline" className="border-warning/30 bg-warning/10 text-warning text-[10px]">{pending} pending</Badge>}
+    </span>
+  );
+}
 
 export default function DocumentsClient() {
-  const [data, setData] = useState<{ items: DocItem[]; isStaff: boolean; stats?: any } | null>(null);
+  const [data, setData] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [query, setQuery] = useState('');
-  const [source, setSource] = useState('all');
+  const [category, setCategory] = useState('all');
   const [status, setStatus] = useState('all');
-  const [type, setType] = useState('all');
-  const [preview, setPreview] = useState<DocItem | null>(null);
+  const [tag, setTag] = useState('all');
+  const [visibility, setVisibility] = useState('all');
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [detailId, setDetailId] = useState<string | null>(null);
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const confirm = useConfirm();
 
   const load = useCallback(() => {
     setLoading(true); setError(false);
-    getDocuments({ query, source, status, type }).then(setData).catch(() => setError(true)).finally(() => setLoading(false));
-  }, [query, source, status, type]);
+    listDmsDocuments({ query, category, status, tag: tag === 'all' ? undefined : tag, visibility })
+      .then((r: any) => { if (r?.success) setData(r); else setError(true); })
+      .catch(() => setError(true)).finally(() => setLoading(false));
+  }, [query, category, status, tag, visibility]);
   useEffect(() => { load(); }, [load]);
 
-  return (
-    <div className="space-y-4">
-      <PageHeader title="Documents" description="The central repository for every document uploaded across the system — scoped to what you're authorized to see." icon={FolderArchive} />
+  const items: any[] = data?.items ?? [];
+  const isStaff = data?.isStaff ?? false;
 
+  const toggleSel = (id: string) => setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const allSel = items.length > 0 && items.every(i => selected.has(i.id));
+
+  const bulk = async (action: 'archive' | 'delete') => {
+    const ids = Array.from(selected);
+    if (ids.length === 0) return;
+    if (!(await confirm({ title: `${action === 'archive' ? 'Archive' : 'Delete'} ${ids.length} document(s)?`, description: `Each ${action} is submitted for checker approval before taking effect.`, destructive: action === 'delete', confirmText: action === 'archive' ? 'Archive' : 'Delete' }))) return;
+    let ok = 0;
+    for (const id of ids) { const r = await submitDocumentAction({ documentId: id, action }); if (r?.success) ok++; }
+    toast.success(`${ok} ${action} request(s) submitted for approval.`);
+    setSelected(new Set()); load();
+  };
+
+  return (
+    <div className="space-y-5">
+      <PageHeader
+        icon={FolderArchive}
+        title="Documents"
+        description="Enterprise document repository with a maker–checker workflow — every action stays pending until a checker approves."
+        actions={isStaff ? <Button onClick={() => setUploadOpen(true)} className="gap-2"><Upload className="h-4 w-4" /> Upload Document</Button> : undefined}
+      />
+
+      {/* Stats */}
       {data?.stats && (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <StatCard title="Total" value={data.stats.total} icon={FolderArchive} accent="primary" />
-          <StatCard title="Pending Review" value={data.stats.pending} icon={FileText} accent="warning" />
-          <StatCard title="Approved" value={data.stats.approved} icon={FileText} accent="success" />
-          <StatCard title="Rejected" value={data.stats.rejected} icon={FileText} accent="destructive" />
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+          <StatCard title="Total" value={data.stats.total} icon={Files} accent="primary" />
+          <StatCard title="Pending" value={data.stats.pending} icon={Clock} accent="warning" />
+          <StatCard title="Approved" value={data.stats.approved} icon={CheckCircle2} accent="success" />
+          <StatCard title="Rejected" value={data.stats.rejected} icon={XCircle} accent="destructive" />
+          <StatCard title="Archived" value={data.stats.archived} icon={Archive} accent="info" />
         </div>
       )}
 
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="relative max-w-xs flex-1">
-          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-          <Input className="pl-8" placeholder="Search file, owner, record…" value={query} onChange={e => setQuery(e.target.value)} />
+      <div className="grid gap-4 lg:grid-cols-[220px_1fr]">
+        {/* Folders / categories */}
+        <Card className="lg:sticky lg:top-4 lg:self-start">
+          <CardContent className="p-2">
+            <div className="px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Folders</div>
+            <button onClick={() => setCategory('all')} className={cn('flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-sm transition-colors', category === 'all' ? 'bg-primary/10 font-medium text-primary' : 'hover:bg-muted')}>
+              <span className="inline-flex items-center gap-2"><FolderOpen className="h-4 w-4" /> All Documents</span>
+              <span className="text-xs text-muted-foreground">{data?.stats?.total ?? 0}</span>
+            </button>
+            <div className="mt-0.5 max-h-[50vh] space-y-0.5 overflow-y-auto">
+              {(data?.categoryCounts ?? []).map((c: any) => (
+                <button key={c.name} onClick={() => setCategory(c.name)} className={cn('flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-sm transition-colors', category === c.name ? 'bg-primary/10 font-medium text-primary' : 'hover:bg-muted')}>
+                  <span className="inline-flex min-w-0 items-center gap-2"><Folder className="h-4 w-4 shrink-0" /> <span className="truncate">{c.name}</span></span>
+                  <span className="shrink-0 text-xs text-muted-foreground">{c.count}</span>
+                </button>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Main */}
+        <div className="space-y-3">
+          {/* Toolbar */}
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative min-w-48 flex-1">
+              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input className="pl-8" placeholder="Search title, file, tag, purpose…" value={query} onChange={e => setQuery(e.target.value)} />
+            </div>
+            <Select value={status} onValueChange={setStatus}>
+              <SelectTrigger className="w-44"><SelectValue placeholder="Status" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All statuses</SelectItem>
+                {Object.entries(STATUS).map(([k, v]) => <SelectItem key={k} value={k}>{v.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            {(data?.tags?.length ?? 0) > 0 && (
+              <Select value={tag} onValueChange={setTag}>
+                <SelectTrigger className="w-36"><Tag className="mr-1 h-3.5 w-3.5 text-muted-foreground" /><SelectValue placeholder="Tag" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All tags</SelectItem>
+                  {data.tags.map((t: string) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            )}
+            {isStaff && (
+              <Select value={visibility} onValueChange={setVisibility}>
+                <SelectTrigger className="w-36"><Shield className="mr-1 h-3.5 w-3.5 text-muted-foreground" /><SelectValue placeholder="Visibility" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All visibility</SelectItem>
+                  <SelectItem value="staff">Staff only</SelectItem>
+                  <SelectItem value="committee">Committee</SelectItem>
+                </SelectContent>
+              </Select>
+            )}
+          </div>
+
+          {/* Bulk bar */}
+          {isStaff && selected.size > 0 && (
+            <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-primary/5 px-3 py-2 text-sm">
+              <span className="font-medium">{selected.size} selected</span>
+              <span className="text-muted-foreground">— bulk actions are submitted for approval</span>
+              <div className="ml-auto flex gap-1.5">
+                <Button size="sm" variant="outline" onClick={() => bulk('archive')}><Archive className="mr-1 h-4 w-4" /> Archive</Button>
+                <Button size="sm" variant="outline" className="text-destructive" onClick={() => bulk('delete')}><Trash2 className="mr-1 h-4 w-4" /> Delete</Button>
+                <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>Clear</Button>
+              </div>
+            </div>
+          )}
+
+          {/* List */}
+          <Card>
+            <CardContent className="p-0">
+              {loading ? <LoadingState label="Loading documents…" rows={6} />
+                : error ? <ErrorState onRetry={load} />
+                : items.length === 0 ? (
+                  <EmptyState icon={FolderArchive} title="No documents found"
+                    description={isStaff ? 'Upload a document to get started — it stays pending until a checker approves.' : 'Approved documents shared with members will appear here.'}
+                    action={isStaff ? <Button variant="outline" className="gap-2" onClick={() => setUploadOpen(true)}><Upload className="h-4 w-4" /> Upload</Button> : undefined} />
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        {isStaff && <TableHead className="w-8"><Checkbox checked={allSel} onCheckedChange={(c) => setSelected(c === true ? new Set(items.map(i => i.id)) : new Set())} /></TableHead>}
+                        <TableHead>Document</TableHead>
+                        <TableHead>Category</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Uploaded by</TableHead>
+                        <TableHead className="text-right">Updated</TableHead>
+                        <TableHead></TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {items.map(d => (
+                        <TableRow key={d.id} className={cn('cursor-pointer', selected.has(d.id) && 'bg-primary/5')} onClick={() => setDetailId(d.id)}>
+                          {isStaff && <TableCell onClick={e => e.stopPropagation()}><Checkbox checked={selected.has(d.id)} onCheckedChange={() => toggleSel(d.id)} /></TableCell>}
+                          <TableCell>
+                            <div className="flex items-center gap-2.5">
+                              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground"><TypeIcon t={d.fileType} className="h-4 w-4" /></span>
+                              <div className="min-w-0">
+                                <div className="truncate font-medium">{d.title}</div>
+                                <div className="flex flex-wrap items-center gap-1">
+                                  {d.tags.slice(0, 3).map((t: string) => <span key={t} className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{t}</span>)}
+                                </div>
+                              </div>
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-sm text-muted-foreground">{d.category}</TableCell>
+                          <TableCell><StatusBadge status={d.status} pending={d.pendingAction && d.pendingAction !== 'upload' ? d.pendingAction : null} /></TableCell>
+                          <TableCell className="text-sm text-muted-foreground">{d.uploadedBy ?? '—'}</TableCell>
+                          <TableCell className="text-right text-xs text-muted-foreground">{fmt(d.approvedAt ?? d.createdAt)}</TableCell>
+                          <TableCell className="text-right" onClick={e => e.stopPropagation()}>
+                            <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => setDetailId(d.id)}><Eye className="h-4 w-4" /></Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+            </CardContent>
+          </Card>
         </div>
-        <Select value={source} onValueChange={setSource}>
-          <SelectTrigger className="w-36"><SelectValue placeholder="Source" /></SelectTrigger>
-          <SelectContent><SelectItem value="all">All sources</SelectItem><SelectItem value="MEMBER">Member docs</SelectItem><SelectItem value="RELATIVE">Relative docs</SelectItem><SelectItem value="REQUEST">Request files</SelectItem></SelectContent>
-        </Select>
-        <Select value={type} onValueChange={setType}>
-          <SelectTrigger className="w-32"><SelectValue placeholder="Type" /></SelectTrigger>
-          <SelectContent><SelectItem value="all">All types</SelectItem><SelectItem value="image">Images</SelectItem><SelectItem value="pdf">PDFs</SelectItem><SelectItem value="file">Other</SelectItem></SelectContent>
-        </Select>
-        <Select value={status} onValueChange={setStatus}>
-          <SelectTrigger className="w-36"><SelectValue placeholder="Status" /></SelectTrigger>
-          <SelectContent><SelectItem value="all">All statuses</SelectItem><SelectItem value="PENDING">Pending</SelectItem><SelectItem value="APPROVED">Approved</SelectItem><SelectItem value="REJECTED">Rejected</SelectItem></SelectContent>
-        </Select>
       </div>
 
-      {loading ? <LoadingState label="Loading documents…" /> : error || !data ? <ErrorState onRetry={load} /> : data.items.length === 0 ? (
-        <Card><CardContent className="p-0"><EmptyState icon={FolderArchive} title="No documents found" description="Documents uploaded across the system will appear here." /></CardContent></Card>
-      ) : (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {data.items.map(d => (
-            <Card key={d.id} className="card-interactive overflow-hidden">
-              <button type="button" className="block w-full text-left" onClick={() => setPreview(d)}>
-                <div className="flex h-32 items-center justify-center border-b bg-muted/40">
-                  {d.fileType === 'image'
-                    ? <img src={d.fileUrl} alt={d.fileName} className="h-full w-full object-cover" />
-                    : <TypeIcon type={d.fileType} className="h-12 w-12 text-muted-foreground" />}
-                </div>
-              </button>
-              <CardContent className="space-y-2 p-3">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-medium" title={d.fileName}>{d.fileName}</div>
-                    <div className="text-xs text-muted-foreground">{SOURCE_LABEL[d.source]} · {d.category.replace(/_/g, ' ')}</div>
-                  </div>
-                  <Badge variant="outline" className={STATUS[d.status] ?? 'bg-muted text-muted-foreground'}>{d.status.replace('_', ' ')}</Badge>
-                </div>
-                <div className="flex items-center gap-1.5 text-xs text-muted-foreground"><User className="h-3.5 w-3.5" /> {d.ownerName} · {d.ownerCode}</div>
-                <div className="flex items-center justify-between border-t pt-2 text-xs">
-                  <span className="text-muted-foreground">{fmt(d.uploadedAt)}</span>
-                  <div className="flex items-center gap-2">
-                    <button onClick={() => setPreview(d)} className="inline-flex items-center gap-1 text-primary hover:underline"><Eye className="h-3.5 w-3.5" /> Preview</button>
-                    <a href={d.fileUrl} download className="inline-flex items-center gap-1 text-primary hover:underline"><Download className="h-3.5 w-3.5" /></a>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      )}
-
-      {preview && <PreviewDialog doc={preview} onClose={() => setPreview(null)} />}
+      {uploadOpen && <UploadDialog categories={data?.categories ?? []} onClose={() => setUploadOpen(false)} onDone={() => { setUploadOpen(false); load(); }} />}
+      {detailId && <DetailDialog id={detailId} isStaff={isStaff} onClose={() => setDetailId(null)} onChanged={load} />}
     </div>
   );
 }
 
-function PreviewDialog({ doc, onClose }: { doc: DocItem; onClose: () => void }) {
+// ─── Upload (maker) ──────────────────────────────────────────────────────────
+
+function UploadDialog({ categories, onClose, onDone }: { categories: string[]; onClose: () => void; onDone: () => void }) {
+  const [form, setForm] = useState({ title: '', category: categories[0] ?? 'General', newCategory: '', tags: '', purpose: '', visibility: 'staff' });
+  const [file, setFile] = useState<{ path: string; name: string } | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const onFile = async (f?: File) => {
+    if (!f) return;
+    setUploading(true);
+    const res = await uploadFile(f, 'documents');
+    setUploading(false);
+    if (res) setFile(res); else toast.error('Upload failed. Use a PDF/image/doc under 10MB.');
+  };
+
+  const submit = async () => {
+    if (form.title.trim().length < 2) { toast.error('A title is required.'); return; }
+    if (!file) { toast.error('Attach a file.'); return; }
+    const category = (form.category === '__new__' ? form.newCategory.trim() : form.category) || 'General';
+    setSaving(true);
+    const res = await createDmsDocument({ title: form.title.trim(), category, tags: form.tags.trim() || null, purpose: form.purpose.trim() || null, fileUrl: file.path, fileName: file.name, visibility: form.visibility as any });
+    setSaving(false);
+    if (res?.success) { toast.success('Document submitted — pending checker approval.'); onDone(); }
+    else toast.error(res?.error || 'Failed to upload.');
+  };
+
   return (
     <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
+      <DialogContent className="max-h-[88vh] max-w-lg overflow-y-auto">
         <DialogHeader>
-          <DialogTitle className="truncate">{doc.fileName}</DialogTitle>
-          <DialogDescription>{doc.sourceLabel} · {doc.category.replace(/_/g, ' ')}</DialogDescription>
+          <DialogTitle>Upload Document</DialogTitle>
+          <DialogDescription>The document is created in a <span className="font-medium text-warning">Pending Approval</span> state and only becomes active once a Checker approves it.</DialogDescription>
         </DialogHeader>
-        <div className="flex min-h-48 items-center justify-center overflow-hidden rounded-lg border bg-muted/40">
-          {doc.fileType === 'image'
-            ? <img src={doc.fileUrl} alt={doc.fileName} className="max-h-[55vh] w-full object-contain" />
-            : <div className="flex flex-col items-center gap-2 py-10 text-muted-foreground"><TypeIcon type={doc.fileType} className="h-14 w-14" /><a href={doc.fileUrl} target="_blank" rel="noopener noreferrer" className="text-sm text-primary hover:underline">Open file <ExternalLink className="inline h-3.5 w-3.5" /></a></div>}
+        <div className="space-y-3">
+          <div className="space-y-1.5"><Label className="text-xs">Title</Label><Input value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} placeholder="e.g. 2026 Annual Bylaws" /></div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5"><Label className="text-xs">Folder / Category</Label>
+              <Select value={form.category} onValueChange={v => setForm(f => ({ ...f, category: v }))}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {!categories.includes('General') && <SelectItem value="General">General</SelectItem>}
+                  {categories.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+                  <SelectItem value="__new__">+ New folder…</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5"><Label className="text-xs">Visibility</Label>
+              <Select value={form.visibility} onValueChange={v => setForm(f => ({ ...f, visibility: v }))}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent><SelectItem value="staff">Staff only</SelectItem><SelectItem value="committee">Committee</SelectItem><SelectItem value="all">All members</SelectItem></SelectContent>
+              </Select>
+            </div>
+          </div>
+          {form.category === '__new__' && <div className="space-y-1.5"><Label className="text-xs">New folder name</Label><Input value={form.newCategory} onChange={e => setForm(f => ({ ...f, newCategory: e.target.value }))} placeholder="e.g. Legal" /></div>}
+          <div className="space-y-1.5"><Label className="text-xs">Tags <span className="font-normal text-muted-foreground">(comma-separated)</span></Label><Input value={form.tags} onChange={e => setForm(f => ({ ...f, tags: e.target.value }))} placeholder="bylaws, 2026, legal" /></div>
+          <div className="space-y-1.5"><Label className="text-xs">Purpose</Label><Textarea rows={2} value={form.purpose} onChange={e => setForm(f => ({ ...f, purpose: e.target.value }))} placeholder="Why is this document being uploaded?" /></div>
+          <div className="space-y-1.5"><Label className="text-xs">File</Label>
+            {file ? (
+              <div className="flex items-center justify-between gap-2 rounded-md border bg-muted/30 px-2.5 py-1.5 text-sm">
+                <span className="inline-flex min-w-0 items-center gap-1.5"><FileText className="h-4 w-4 shrink-0 text-primary" /><span className="truncate">{file.name}</span></span>
+                <button type="button" onClick={() => setFile(null)} className="text-muted-foreground hover:text-destructive"><X className="h-4 w-4" /></button>
+              </div>
+            ) : (
+              <label className="flex cursor-pointer items-center gap-2 rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground hover:border-primary/50 hover:bg-primary/5">
+                <input type="file" accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.xls,.xlsx" className="hidden" onChange={e => onFile(e.target.files?.[0])} />
+                {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />} {uploading ? 'Uploading…' : 'Attach a file'}
+              </label>
+            )}
+          </div>
         </div>
-        <div className="space-y-1.5 text-sm">
-          <Row label="Owner" value={`${doc.ownerName} · ${doc.ownerCode}`} />
-          <Row label="Category" value={doc.category.replace(/_/g, ' ')} />
-          <Row label="Status" value={<Badge variant="outline" className={STATUS[doc.status] ?? ''}>{doc.status.replace('_', ' ')}</Badge>} />
-          <Row label="Uploaded" value={fmt(doc.uploadedAt)} />
-          <Row label="Related record" value={<span>{doc.relatedType}: {doc.relatedLabel}</span>} />
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button asChild variant="outline"><a href={doc.fileUrl} download><Download className="mr-1.5 h-4 w-4" /> Download</a></Button>
-          <Button asChild><Link href={doc.relatedHref}><ArrowUpRight className="mr-1.5 h-4 w-4" /> Go to {doc.relatedType}</Link></Button>
-        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
+          <Button onClick={submit} disabled={saving || uploading}>{saving && <Loader2 className="mr-1 h-4 w-4 animate-spin" />} Submit for Approval</Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );
 }
 
-function Row({ label, value }: { label: string; value: React.ReactNode }) {
-  return <div className="flex items-center justify-between gap-3"><span className="text-muted-foreground">{label}</span><span className="text-right font-medium">{value}</span></div>;
+// ─── Detail / preview / timeline ─────────────────────────────────────────────
+
+function DetailDialog({ id, isStaff, onClose, onChanged }: { id: string; isStaff: boolean; onClose: () => void; onChanged: () => void }) {
+  const [d, setD] = useState<any | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const confirm = useConfirm();
+  const prompt = usePrompt();
+
+  const load = useCallback(() => {
+    setLoading(true);
+    getDmsDocumentDetail(id).then((r: any) => { if (r?.success) setD(r); else { toast.error(r?.error || 'Failed to load.'); onClose(); } }).finally(() => setLoading(false));
+  }, [id]);
+  useEffect(() => { load(); }, [load]);
+
+  const act = async (fn: () => Promise<any>, ok: string) => {
+    setBusy(true); const res = await fn(); setBusy(false);
+    if (res?.success) { toast.success(ok); onChanged(); load(); } else toast.error(res?.error || 'Action failed.');
+  };
+  const onSubmitAction = async (action: 'archive' | 'delete' | 'share' | 'classify' | 'edit', changes?: any) => {
+    const labels: any = { archive: 'Archive request submitted', delete: 'Delete request submitted', share: 'Visibility change submitted', classify: 'Re-classification submitted', edit: 'Edit submitted' };
+    await act(() => submitDocumentAction({ documentId: id, action, changes }), `${labels[action]} for approval.`);
+  };
+
+  if (loading || !d) {
+    return <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}><DialogContent className="max-w-3xl"><div className="flex h-64 items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div></DialogContent></Dialog>;
+  }
+
+  const doc = d.document;
+  const isImage = doc.fileType === 'image';
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-h-[90vh] max-w-4xl overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex flex-wrap items-center gap-2">{doc.title} <StatusBadge status={doc.status} pending={doc.pendingAction && doc.pendingAction !== 'upload' ? doc.pendingAction : null} /></DialogTitle>
+          <DialogDescription>{doc.category}{doc.purpose ? ` · ${doc.purpose}` : ''}</DialogDescription>
+        </DialogHeader>
+
+        <div className="grid gap-4 md:grid-cols-[1fr_280px]">
+          {/* Preview + metadata */}
+          <div className="space-y-3">
+            <div className="flex min-h-48 items-center justify-center overflow-hidden rounded-lg border bg-muted/30">
+              {isImage ? <img src={doc.fileUrl} alt={doc.fileName} className="max-h-72 w-full object-contain" /> : <div className="flex flex-col items-center gap-2 p-8 text-muted-foreground"><TypeIcon t={doc.fileType} className="h-12 w-12" /><span className="text-sm">{doc.fileName}</span></div>}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <a href={doc.fileUrl} target="_blank" rel="noopener noreferrer"><Button variant="outline" size="sm"><Download className="mr-1 h-4 w-4" /> Open file</Button></a>
+              {doc.tags.map((t: string) => <span key={t} className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground"><Tag className="h-3 w-3" /> {t}</span>)}
+            </div>
+            <div className="grid grid-cols-2 gap-x-6 gap-y-2 rounded-lg border p-3 text-sm">
+              <Meta label="Visibility" value={VIS_LABEL[doc.visibility] ?? doc.visibility} />
+              <Meta label="Uploaded" value={`${doc.uploadedBy ?? '—'} · ${fmt(doc.createdAt)}`} />
+              <Meta label="Reviewed by" value={doc.reviewedBy ?? '—'} />
+              <Meta label="Approved by" value={doc.approvedBy ? `${doc.approvedBy} · ${fmt(doc.approvedAt)}` : '—'} />
+              {doc.rejectionReason && <div className="col-span-2"><Meta label="Rejection reason" value={doc.rejectionReason} /></div>}
+            </div>
+          </div>
+
+          {/* Approval timeline */}
+          <div className="rounded-lg border">
+            <div className="flex items-center gap-1.5 border-b bg-muted/30 px-3 py-2 text-xs font-semibold text-muted-foreground"><History className="h-3.5 w-3.5" /> Approval Timeline</div>
+            <div className="max-h-72 space-y-0 overflow-y-auto p-3">
+              {d.timeline.length === 0 ? <p className="py-4 text-center text-xs text-muted-foreground">No workflow events yet.</p> : d.timeline.map((e: any, i: number) => (
+                <div key={e.id} className="flex gap-3 pb-3 last:pb-0">
+                  <div className="flex flex-col items-center">
+                    <span className="mt-0.5 h-2 w-2 shrink-0 rounded-full bg-primary" />
+                    {i < d.timeline.length - 1 && <span className="my-0.5 w-px flex-1 bg-border" />}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-medium">{e.module} · {e.action}</div>
+                    <div className="text-[11px] text-muted-foreground">{e.by} · {fmtTime(e.at)}</div>
+                    {e.comment && <div className="mt-0.5 rounded bg-muted/50 px-1.5 py-1 text-[11px]">“{e.comment}”</div>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Actions */}
+        {isStaff && (
+          <div className="flex flex-wrap gap-2 border-t pt-3">
+            {d.canApprove && (
+              <>
+                <Button size="sm" className="bg-success hover:bg-success/90" disabled={busy} onClick={async () => { const c = await prompt({ title: 'Approve document', label: 'Comment (optional)', multiline: true, confirmText: 'Approve' }); if (c === null) return; await act(() => approveDmsDocument(id, c || undefined), 'Approved.'); }}><CheckCircle2 className="mr-1 h-4 w-4" /> Approve</Button>
+                <Button size="sm" variant="destructive" disabled={busy} onClick={async () => { const r = await prompt({ title: 'Reject document', label: 'Reason', multiline: true, required: true, confirmText: 'Reject' }); if (!r) return; await act(() => rejectDmsDocument(id, r), 'Rejected.'); }}><XCircle className="mr-1 h-4 w-4" /> Reject</Button>
+              </>
+            )}
+            {doc.status === 'APPROVED' && !doc.pendingAction && (
+              <>
+                <Button size="sm" variant="outline" disabled={busy} onClick={async () => { const t = await prompt({ title: 'Edit document', label: 'Title', defaultValue: doc.title, required: true }); if (!t) return; const p = await prompt({ title: 'Edit document', label: 'Purpose (optional)', defaultValue: doc.purpose ?? '', multiline: true }); if (p === null) return; onSubmitAction('edit', { title: t, purpose: p }); }}><FileText className="mr-1 h-4 w-4" /> Edit</Button>
+                <Button size="sm" variant="outline" disabled={busy} onClick={async () => { const v = await prompt({ title: 'Share / change visibility', label: 'Visibility (staff | committee | all)', defaultValue: doc.visibility, required: true }); if (!v || !['staff', 'committee', 'all'].includes(v)) { if (v) toast.error('Enter staff, committee, or all.'); return; } onSubmitAction('share', { visibility: v }); }}><Share2 className="mr-1 h-4 w-4" /> Share</Button>
+                <Button size="sm" variant="outline" disabled={busy} onClick={async () => { const c = await prompt({ title: 'Re-classify', label: 'New folder/category', defaultValue: doc.category, required: true }); if (!c) return; onSubmitAction('classify', { category: c }); }}><Tag className="mr-1 h-4 w-4" /> Classify</Button>
+                <Button size="sm" variant="outline" disabled={busy} onClick={() => onSubmitAction('archive')}><Archive className="mr-1 h-4 w-4" /> Archive</Button>
+                <Button size="sm" variant="outline" className="text-destructive" disabled={busy} onClick={async () => { if (await confirm({ title: 'Request deletion?', description: 'Submitted for checker approval before the document is removed.', destructive: true, confirmText: 'Request delete' })) onSubmitAction('delete'); }}><Trash2 className="mr-1 h-4 w-4" /> Delete</Button>
+              </>
+            )}
+            {doc.pendingAction && <span className="inline-flex items-center gap-1.5 text-xs text-warning"><Clock className="h-3.5 w-3.5" /> A “{doc.pendingAction}” action is awaiting approval.</span>}
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function Meta({ label, value }: { label: string; value: string }) {
+  return <div><div className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</div><div className="font-medium">{value}</div></div>;
 }

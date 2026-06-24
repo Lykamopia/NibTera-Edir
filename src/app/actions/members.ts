@@ -277,7 +277,7 @@ function relativeData(data: z.infer<typeof relativeSchema>) {
 export async function addRelative(memberId: string, input: z.infer<typeof relativeSchema>) {
   try {
     const actor = await getActor();
-    await assertPermission(actor, 'manage_members');
+    await assertPermission(actor, ['manage_relatives', 'manage_members']);
     const member = await prisma.member.findUnique({ where: { id: memberId } });
     if (!member) return { success: false as const, error: 'Member not found.' };
     await assertSameTenant(actor, member.edirId);
@@ -296,7 +296,7 @@ export async function addRelative(memberId: string, input: z.infer<typeof relati
 export async function updateRelative(relativeId: string, input: z.infer<typeof relativeSchema>) {
   try {
     const actor = await getActor();
-    await assertPermission(actor, 'manage_members');
+    await assertPermission(actor, ['manage_relatives', 'manage_members']);
     const rel = await prisma.relative.findUnique({ where: { id: relativeId }, include: { member: true } });
     if (!rel) return { success: false as const, error: 'Relative not found.' };
     await assertSameTenant(actor, rel.member.edirId);
@@ -314,7 +314,7 @@ export async function updateRelative(relativeId: string, input: z.infer<typeof r
 export async function removeRelative(relativeId: string) {
   try {
     const actor = await getActor();
-    await assertPermission(actor, 'manage_members');
+    await assertPermission(actor, ['manage_relatives', 'manage_members']);
     const rel = await prisma.relative.findUnique({ where: { id: relativeId }, include: { member: true } });
     if (!rel) return { success: false as const, error: 'Relative not found.' };
     await assertSameTenant(actor, rel.member.edirId);
@@ -337,7 +337,7 @@ const documentSchema = z.object({
 export async function addRelativeDocument(relativeId: string, input: z.infer<typeof documentSchema>) {
   try {
     const actor = await getActor();
-    await assertPermission(actor, 'manage_members');
+    await assertPermission(actor, ['manage_documents', 'manage_members']);
     const rel = await prisma.relative.findUnique({ where: { id: relativeId }, include: { member: true } });
     if (!rel) return { success: false as const, error: 'Relative not found.' };
     await assertSameTenant(actor, rel.member.edirId);
@@ -403,7 +403,7 @@ const memberDocSchema = z.object({
 export async function addMemberDocument(memberId: string, input: z.infer<typeof memberDocSchema>) {
   try {
     const actor = await getActor();
-    await assertPermission(actor, 'manage_members');
+    await assertPermission(actor, ['manage_documents', 'manage_members']);
     const member = await prisma.member.findUnique({ where: { id: memberId } });
     if (!member) return { success: false as const, error: 'Member not found.' };
     await assertSameTenant(actor, member.edirId);
@@ -423,7 +423,7 @@ export async function addMemberDocument(memberId: string, input: z.infer<typeof 
 export async function deleteMemberDocument(documentId: string) {
   try {
     const actor = await getActor();
-    await assertPermission(actor, 'manage_members');
+    await assertPermission(actor, ['manage_documents', 'manage_members']);
     const doc = await prisma.memberDocument.findUnique({ where: { id: documentId }, include: { member: true } });
     if (!doc) return { success: false as const, error: 'Document not found.' };
     await assertSameTenant(actor, doc.member.edirId);
@@ -465,7 +465,7 @@ export async function createMember(input: MemberInput) {
   try {
     const data = memberSchema.parse(input);
     const actor = await getActor();
-    await assertPermission(actor, 'manage_members');
+    await assertPermission(actor, ['create_member', 'manage_members']);
     // Super-Admins act across tenants, so they must choose the target Edir.
     if (actor.isSuperAdmin && !data.edirId) {
       return { success: false as const, error: 'Select an Edir for the new member.' };
@@ -608,7 +608,7 @@ export async function createMember(input: MemberInput) {
 export async function updateMember(id: string, input: MemberInput) {
   try {
     const actor = await getActor();
-    await assertPermission(actor, 'manage_members');
+    await assertPermission(actor, ['edit_member', 'manage_members']);
     const existing = await prisma.member.findUnique({ where: { id } });
     if (!existing) return { success: false as const, error: 'Member not found.' };
     await assertSameTenant(actor, existing.edirId);
@@ -701,7 +701,13 @@ export async function resetMemberPassword(memberId: string) {
 export async function setMemberStatus(id: string, status: 'ACTIVE' | 'INACTIVE' | 'SUSPENDED') {
   try {
     const actor = await getActor();
-    await assertPermission(actor, 'manage_members');
+    // Suspending vs reinstating are separately grantable; manage_members is the umbrella.
+    const perm = status === 'SUSPENDED'
+      ? ['suspend_member', 'manage_members'] as const
+      : status === 'ACTIVE'
+        ? ['reinstate_member', 'manage_members'] as const
+        : ['edit_member', 'manage_members'] as const;
+    await assertPermission(actor, [...perm]);
     const existing = await prisma.member.findUnique({ where: { id } });
     if (!existing) return { success: false as const, error: 'Member not found.' };
     await assertSameTenant(actor, existing.edirId);

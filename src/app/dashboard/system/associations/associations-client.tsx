@@ -11,7 +11,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
-import { Loader2, Network, Search, UserPlus, ArrowRightLeft, UserMinus, Building2, ScrollText, Users, UserCog, Crown, KeyRound } from 'lucide-react';
+import { Loader2, Network, Search, UserPlus, ArrowRightLeft, UserMinus, Building2, ScrollText, Users, UserCog, Crown, KeyRound, Pencil } from 'lucide-react';
 import { PageHeader, LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
 import { useConfirm } from '@/components/ui/confirm-provider';
 import { CredentialsDialog, type Credentials } from '@/components/credentials-dialog';
@@ -20,6 +20,7 @@ import {
   associateUsers, removeUserFromEdir, setAssociationUserStatus, getAssociationAudit,
   createPlatformUser, createPlatformAdmin, getPlatformUsers, resetAssociationUserPassword,
   getOrgUnitsForAssociation, getScopedRolesForAssociation,
+  getUserAssociationDetail, updateUserAssociation,
 } from '@/app/actions/associations';
 import { getEdirContext } from '@/app/actions/edir-context';
 
@@ -99,7 +100,7 @@ export default function AssociationsClient({ embedded }: { embedded?: boolean } 
         </TabsList>
         <TabsContent value="edir" className="mt-4"><ByEdirTab edirs={edirs} onChanged={refreshAll} /></TabsContent>
         <TabsContent value="user" className="mt-4"><ByUserTab edirs={edirs} onChanged={refreshAll} /></TabsContent>
-        {isSuperAdmin && <TabsContent value="platform" className="mt-4"><PlatformUsersTab refreshKey={refreshKey} onCredentials={setCred} /></TabsContent>}
+        {isSuperAdmin && <TabsContent value="platform" className="mt-4"><PlatformUsersTab refreshKey={refreshKey} edirs={edirs} onCredentials={setCred} /></TabsContent>}
         <TabsContent value="audit" className="mt-4"><AuditTab /></TabsContent>
       </Tabs>
     </div>
@@ -108,9 +109,10 @@ export default function AssociationsClient({ embedded }: { embedded?: boolean } 
 
 // ─── Platform Users ──────────────────────────────────────────────────────────
 
-function PlatformUsersTab({ refreshKey, onCredentials }: { refreshKey: number; onCredentials: (c: { name: string; credentials: Credentials }) => void }) {
+function PlatformUsersTab({ refreshKey, edirs, onCredentials }: { refreshKey: number; edirs: any[]; onCredentials: (c: { name: string; credentials: Credentials }) => void }) {
   const [users, setUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [editUser, setEditUser] = useState<any | null>(null);
   const confirm = useConfirm();
 
   const load = useCallback(() => {
@@ -152,10 +154,7 @@ function PlatformUsersTab({ refreshKey, onCredentials }: { refreshKey: number; o
                 <div className="text-xs text-muted-foreground">{u.phone || u.email}{placement ? ` · ${placement}` : ''} · last login {fmt(u.lastLoginAt)}</div>
               </div>
               <div className="flex shrink-0 flex-wrap gap-1.5">
-                <Select value={u.status} onValueChange={(v) => onStatus(u, v)}>
-                  <SelectTrigger className="h-8 w-32 text-xs"><SelectValue /></SelectTrigger>
-                  <SelectContent><SelectItem value="ACTIVE">Active</SelectItem><SelectItem value="INACTIVE">Inactive</SelectItem><SelectItem value="SUSPENDED">Suspended</SelectItem></SelectContent>
-                </Select>
+                <Button size="sm" variant="outline" onClick={() => setEditUser(u)}><Pencil className="mr-1 h-4 w-4" /> Edit</Button>
                 <Button size="sm" variant="outline" onClick={() => onReset(u)}><KeyRound className="mr-1 h-4 w-4" /> Reset password</Button>
               </div>
             </div>
@@ -163,7 +162,9 @@ function PlatformUsersTab({ refreshKey, onCredentials }: { refreshKey: number; o
           })}
         </div>
       )}
-    </CardContent></Card>
+    </CardContent>
+    {editUser && <EditAssociationDialog userId={editUser.id} userLabel={editUser.name || editUser.email || editUser.phone} edirs={edirs} onClose={() => setEditUser(null)} onDone={() => { setEditUser(null); load(); }} />}
+    </Card>
   );
 }
 
@@ -252,6 +253,7 @@ function ByUserTab({ edirs, onChanged }: { edirs: any[]; onChanged: () => void }
   const [users, setUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [reassign, setReassign] = useState<any | null>(null);
+  const [editUser, setEditUser] = useState<any | null>(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -275,7 +277,10 @@ function ByUserTab({ edirs, onChanged }: { edirs: any[]; onChanged: () => void }
                     <div className="flex flex-wrap items-center gap-2"><span className="font-medium">{u.name || u.email}</span><Badge variant="outline" className={STATUS[u.status] ?? ''}>{u.status}</Badge></div>
                     <div className="text-xs text-muted-foreground">{u.phone || u.email} · {u.edirName ? <>Edir: <span className="font-medium text-foreground">{u.edirName}</span>{u.roleName ? ` · ${u.roleName}` : ''}</> : <span className="text-warning">Unassigned</span>}</div>
                   </div>
-                  <Button size="sm" variant="outline" onClick={() => setReassign(u)}><ArrowRightLeft className="mr-1 h-4 w-4" /> {u.edirId ? 'Reassign' : 'Assign'}</Button>
+                  <div className="flex shrink-0 gap-1.5">
+                    <Button size="sm" variant="outline" onClick={() => setEditUser(u)}><Pencil className="mr-1 h-4 w-4" /> Edit</Button>
+                    <Button size="sm" variant="outline" onClick={() => setReassign(u)}><ArrowRightLeft className="mr-1 h-4 w-4" /> {u.edirId ? 'Reassign' : 'Assign'}</Button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -283,6 +288,7 @@ function ByUserTab({ edirs, onChanged }: { edirs: any[]; onChanged: () => void }
         </CardContent></Card>
       )}
       {reassign && <ReassignDialog user={reassign} edirs={edirs} onClose={() => setReassign(null)} onDone={() => { setReassign(null); load(); onChanged(); }} />}
+      {editUser && <EditAssociationDialog userId={editUser.id} userLabel={editUser.name || editUser.email || editUser.phone} edirs={edirs} onClose={() => setEditUser(null)} onDone={() => { setEditUser(null); load(); onChanged(); }} />}
     </div>
   );
 }
@@ -395,6 +401,141 @@ function ReassignDialog({ user, edirs, onClose, onDone }: { user: any; edirs: an
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
           <Button onClick={submit} disabled={saving}>{saving && <Loader2 className="mr-1 h-4 w-4 animate-spin" />} {user.edirId ? 'Transfer' : 'Assign'}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+const SCOPES: { id: 'HEAD_OFFICE' | 'DISTRICT' | 'BRANCH' | 'EDIR'; label: string }[] = [
+  { id: 'HEAD_OFFICE', label: 'Head Office' }, { id: 'DISTRICT', label: 'District' },
+  { id: 'BRANCH', label: 'Branch' }, { id: 'EDIR', label: 'Edir' },
+];
+
+function EditAssociationDialog({ userId, userLabel, edirs, onClose, onDone }: { userId: string; userLabel: string; edirs: any[]; onClose: () => void; onDone: () => void }) {
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [orgUnits, setOrgUnits] = useState<any[]>([]);
+  const [roles, setRoles] = useState<any[]>([]);
+  const [form, setForm] = useState({
+    scope: 'HEAD_OFFICE' as 'HEAD_OFFICE' | 'DISTRICT' | 'BRANCH' | 'EDIR',
+    edirId: '', districtId: '', branchId: '', roleId: '', status: 'ACTIVE' as 'ACTIVE' | 'INACTIVE' | 'SUSPENDED',
+  });
+  const [blocked, setBlocked] = useState<string | null>(null);
+
+  useEffect(() => {
+    Promise.all([getUserAssociationDetail(userId), getOrgUnitsForAssociation().catch(() => [])])
+      .then(([detail, units]) => {
+        setOrgUnits(units as any[]);
+        if (!detail) { setBlocked('User not found.'); return; }
+        if (detail.isSuperAdmin) { setBlocked('Platform Super-Admins cannot be edited here.'); return; }
+        setForm({
+          scope: detail.scope,
+          edirId: detail.edirId ?? '', districtId: detail.districtId ?? '', branchId: detail.branchId ?? '',
+          roleId: detail.roleId ?? '', status: (detail.status as any) ?? 'ACTIVE',
+        });
+      })
+      .finally(() => setLoading(false));
+  }, [userId]);
+
+  // Load scope-appropriate roles whenever the placement changes.
+  const scopeId = form.scope === 'EDIR' ? form.edirId : form.scope === 'BRANCH' ? form.branchId : form.scope === 'DISTRICT' ? form.districtId : null;
+  useEffect(() => {
+    if (loading) return;
+    const run = async () => {
+      try {
+        if (form.scope === 'EDIR') setRoles(form.edirId ? await getEdirRolesForAssociation(form.edirId) : []);
+        else setRoles(await getScopedRolesForAssociation(form.scope, scopeId));
+      } catch { setRoles([]); }
+    };
+    run();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.scope, scopeId, loading]);
+
+  const branchesForDistrict: any[] = orgUnits.find(d => d.id === form.districtId)?.branches ?? [];
+  const setScope = (scope: typeof form.scope) => setForm(f => ({ ...f, scope, edirId: '', districtId: '', branchId: '', roleId: '' }));
+
+  const submit = async () => {
+    if (form.scope === 'EDIR' && !form.edirId) { toast.error('Select an Edir.'); return; }
+    if (form.scope === 'DISTRICT' && !form.districtId) { toast.error('Select a district.'); return; }
+    if (form.scope === 'BRANCH' && !form.branchId) { toast.error('Select a branch.'); return; }
+    setSaving(true);
+    const res = await updateUserAssociation({
+      userId, scope: form.scope,
+      edirId: form.edirId || null, districtId: form.districtId || null, branchId: form.branchId || null,
+      roleId: form.roleId || null, status: form.status,
+    });
+    setSaving(false);
+    if (res?.success) { toast.success('Association updated.'); onDone(); }
+    else toast.error(res?.error || 'Failed to update.');
+  };
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Edit Association</DialogTitle>
+          <DialogDescription>{userLabel} — update scope, role, and status. Existing sessions are revoked on scope/status change.</DialogDescription>
+        </DialogHeader>
+        {loading ? (
+          <div className="flex h-32 items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
+        ) : blocked ? (
+          <p className="rounded-md bg-warning/10 p-3 text-sm text-warning">{blocked}</p>
+        ) : (
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs">Scope</Label>
+              <div className="flex flex-wrap rounded-lg border p-0.5">
+                {SCOPES.map(s => (
+                  <button key={s.id} type="button" onClick={() => setScope(s.id)} className={`flex-1 rounded-md px-2 py-1.5 text-xs font-medium ${form.scope === s.id ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}>{s.label}</button>
+                ))}
+              </div>
+            </div>
+
+            {form.scope === 'EDIR' && (
+              <div className="space-y-1.5"><Label className="text-xs">Edir</Label>
+                <Select value={form.edirId} onValueChange={v => setForm(f => ({ ...f, edirId: v, roleId: '' }))}>
+                  <SelectTrigger><SelectValue placeholder="Select an Edir" /></SelectTrigger>
+                  <SelectContent>{edirs.map(e => <SelectItem key={e.id} value={e.id}>{e.name}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+            )}
+            {(form.scope === 'DISTRICT' || form.scope === 'BRANCH') && (
+              <div className="space-y-1.5"><Label className="text-xs">District</Label>
+                <Select value={form.districtId} onValueChange={v => setForm(f => ({ ...f, districtId: v, branchId: '', roleId: '' }))}>
+                  <SelectTrigger><SelectValue placeholder="Select a district" /></SelectTrigger>
+                  <SelectContent>{orgUnits.map(d => <SelectItem key={d.id} value={d.id}>{d.name}{d.code ? ` (${d.code})` : ''}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+            )}
+            {form.scope === 'BRANCH' && (
+              <div className="space-y-1.5"><Label className="text-xs">Branch</Label>
+                <Select value={form.branchId} onValueChange={v => setForm(f => ({ ...f, branchId: v, roleId: '' }))} disabled={!form.districtId}>
+                  <SelectTrigger><SelectValue placeholder={form.districtId ? 'Select a branch' : 'Pick a district first'} /></SelectTrigger>
+                  <SelectContent>{branchesForDistrict.map((b: any) => <SelectItem key={b.id} value={b.id}>{b.name}{b.code ? ` (${b.code})` : ''}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5"><Label className="text-xs">Role</Label>
+                <Select value={form.roleId || 'none'} onValueChange={v => setForm(f => ({ ...f, roleId: v === 'none' ? '' : v }))}>
+                  <SelectTrigger><SelectValue placeholder="No role" /></SelectTrigger>
+                  <SelectContent><SelectItem value="none">No role</SelectItem>{roles.map(r => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5"><Label className="text-xs">Status</Label>
+                <Select value={form.status} onValueChange={v => setForm(f => ({ ...f, status: v as any }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent><SelectItem value="ACTIVE">Active</SelectItem><SelectItem value="INACTIVE">Inactive</SelectItem><SelectItem value="SUSPENDED">Suspended</SelectItem></SelectContent>
+                </Select>
+              </div>
+            </div>
+          </div>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
+          {!blocked && <Button onClick={submit} disabled={saving || loading}>{saving && <Loader2 className="mr-1 h-4 w-4 animate-spin" />} Save changes</Button>}
         </DialogFooter>
       </DialogContent>
     </Dialog>

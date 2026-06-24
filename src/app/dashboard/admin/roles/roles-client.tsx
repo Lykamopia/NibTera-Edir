@@ -196,7 +196,7 @@ function RoleDialog({ role, isSuperAdmin, edirs, onClose, onDone }: {
   // When scope changes, drop any selected permissions not valid for the new scope.
   const changeScope = (k: RoleScopeKind) => {
     setScopeKind(k);
-    const allowed = new Set(getPermissionGroupsForScope(k).flatMap(g => g.permissions.map(p => p.id)));
+    const allowed = new Set<string>(getPermissionGroupsForScope(k).flatMap(g => g.permissions.map(p => p.id as string)));
     setPerms(prev => prev.filter(p => allowed.has(p)));
   };
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -16,9 +16,10 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import {
   Loader2, Save, Plus, Trash2, ArrowUp, ArrowDown, Info, HelpCircle, Coins, AlertTriangle,
-  Users, Siren, ScrollText, Pencil, ArrowRight,
+  Users, Siren, ScrollText, Pencil, ArrowRight, Search,
 } from 'lucide-react';
 import { PageHeader, LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
+import { DateRangeFilter, ALL_TIME, inDateRange, type DateRangeValue } from '@/components/ui/date-range-filter';
 import { SelectEdirNotice } from '@/components/select-edir-notice';
 import { getRuleConfig, saveRuleConfig } from '@/app/actions/rule-config';
 import { saveEmergencyType, deleteEmergencyType } from '@/app/actions/emergencies';
@@ -30,6 +31,7 @@ type Cfg = {
   monthlyFee: number; registrationFee: number; currency: string; dueDay: number; gracePeriodDays: number;
   autoSuspendMonths: number; autoTerminateMonths: number; minMembershipMonths: number; reinstatementFee: number;
   autoSuspendEnabled: boolean; autoReminderEnabled: boolean; memberRoles: string[];
+  dailyPenaltyEnabled: boolean; dailyPenaltyType: 'FIXED' | 'PERCENT'; dailyPenaltyValue: number; dailyPenaltyMaxDays: number;
 };
 
 const newId = () => (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -69,13 +71,31 @@ export default function RuleConfigClient() {
   const [needsEdir, setNeedsEdir] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editingType, setEditingType] = useState<any | null | undefined>(undefined);
+  // Change Log advanced filters
+  const [logRange, setLogRange] = useState<DateRangeValue>(ALL_TIME);
+  const [logUser, setLogUser] = useState('all');
+  const [logField, setLogField] = useState('all');
+  const [logQuery, setLogQuery] = useState('');
   const confirm = useConfirm();
+
+  const logUsers = useMemo(() => Array.from(new Set(changeLog.map(c => c.changedBy).filter(Boolean))).sort(), [changeLog]);
+  const logFields = useMemo(() => Array.from(new Set(changeLog.map(c => c.field).filter(Boolean))).sort(), [changeLog]);
+  const filteredLog = useMemo(() => {
+    const q = logQuery.trim().toLowerCase();
+    return changeLog.filter(c => {
+      if (!inDateRange(c.createdAt, logRange)) return false;
+      if (logUser !== 'all' && c.changedBy !== logUser) return false;
+      if (logField !== 'all' && c.field !== logField) return false;
+      if (q && !`${c.field} ${c.previousValue ?? ''} ${c.newValue ?? ''} ${c.comment ?? ''} ${c.changedBy ?? ''}`.toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [changeLog, logRange, logUser, logField, logQuery]);
 
   const load = useCallback(() => {
     setLoading(true); setError(false); setNeedsEdir(false);
     getRuleConfig().then(r => {
       if ((r as any).needsEdir) { setNeedsEdir(true); return; }
-      const s = r.settings ?? { monthlyFee: 0, registrationFee: 0, currency: 'ETB', dueDay: 1, gracePeriodDays: 5, autoSuspendMonths: 3, autoTerminateMonths: 6, minMembershipMonths: 0, reinstatementFee: 0, autoSuspendEnabled: true, autoReminderEnabled: true, memberRoles: [], penaltyTiers: [] };
+      const s = r.settings ?? { monthlyFee: 0, registrationFee: 0, currency: 'ETB', dueDay: 1, gracePeriodDays: 5, autoSuspendMonths: 3, autoTerminateMonths: 6, minMembershipMonths: 0, reinstatementFee: 0, autoSuspendEnabled: true, autoReminderEnabled: true, memberRoles: [], penaltyTiers: [], dailyPenaltyEnabled: false, dailyPenaltyType: 'FIXED', dailyPenaltyValue: 0, dailyPenaltyMaxDays: 0 };
       const { penaltyTiers, ...scalar } = s as any;
       setCfg(scalar);
       setTiers(((penaltyTiers as any[]) ?? []).map(t => ({ id: t.id ?? newId(), label: t.label ?? '', fromDays: Number(t.fromDays ?? 0), toDays: t.toDays == null ? null : Number(t.toDays), type: t.type === 'PERCENT' ? 'PERCENT' : 'FIXED', value: Number(t.value ?? 0) })));
@@ -189,6 +209,41 @@ export default function RuleConfigClient() {
               <p className="flex items-start gap-1.5 text-xs text-muted-foreground"><Info className="mt-0.5 h-3.5 w-3.5 shrink-0" /> Leave “To day” empty for the final, open-ended tier (e.g. “61 days and beyond”). Percentage penalties are charged on the outstanding amount.</p>
             </CardContent>
           </Card>
+
+          {/* Daily Penalty Accrual */}
+          <Card className="mt-4">
+            <CardHeader>
+              <CardTitle className="text-base">Daily Penalty Accrual</CardTitle>
+              <CardDescription>Optionally charge an additional penalty that grows for each day a contribution stays overdue past the grace period.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <ToggleRow
+                label="Enable daily accrual"
+                description="When on, the penalty increases every day after the grace window, on top of any matching tier."
+                checked={cfg.dailyPenaltyEnabled}
+                onChange={v => set('dailyPenaltyEnabled', v)}
+              />
+              {cfg.dailyPenaltyEnabled && (
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                  <FieldRow label="Charge type" hint="Fixed amount per day, or a percentage of the outstanding balance per day.">
+                    <Select value={cfg.dailyPenaltyType} onValueChange={(v) => set('dailyPenaltyType', v as 'FIXED' | 'PERCENT')}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="FIXED">Fixed ({cur}/day)</SelectItem>
+                        <SelectItem value="PERCENT">Percent (%/day)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </FieldRow>
+                  <FieldRow label={cfg.dailyPenaltyType === 'PERCENT' ? 'Rate (% per day)' : `Amount (${cur} per day)`} hint="Applied for each overdue day past the grace period.">
+                    <Input type="number" min={0} step="0.01" value={cfg.dailyPenaltyValue} onChange={e => set('dailyPenaltyValue', Number(e.target.value) || 0)} />
+                  </FieldRow>
+                  <FieldRow label="Cap (max days)" hint="Stop accruing after this many days. Leave 0 for no cap.">
+                    <Input type="number" min={0} value={cfg.dailyPenaltyMaxDays} onChange={e => set('dailyPenaltyMaxDays', Number(e.target.value) || 0)} />
+                  </FieldRow>
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </TabsContent>
 
         {/* ── Membership ── */}
@@ -216,15 +271,6 @@ export default function RuleConfigClient() {
               <Separator />
               <ToggleRow label="Automatic Suspension" description="Automatically suspend members who pass the suspension threshold." checked={cfg.autoSuspendEnabled} onChange={v => set('autoSuspendEnabled', v)} />
               <ToggleRow label="Automatic Reminder Notifications" description="Send members reminders before their contribution is due and when they fall behind." checked={cfg.autoReminderEnabled} onChange={v => set('autoReminderEnabled', v)} />
-              <Separator />
-              <div className="space-y-2">
-                <div className="flex items-center gap-1.5">
-                  <Label className="text-sm font-medium">Member Roles</Label>
-                  <Hint text="The roles available when registering or editing a member (e.g. Member, Chairperson, Treasurer). Used dynamically across the app." />
-                </div>
-                <p className="text-xs text-muted-foreground">These options populate the role selector on the member form.</p>
-                <RolesEditor roles={cfg.memberRoles} onChange={v => set('memberRoles', v)} />
-              </div>
             </CardContent>
           </Card>
         </TabsContent>
@@ -273,12 +319,39 @@ export default function RuleConfigClient() {
               <CardTitle className="text-base">Change Log</CardTitle>
               <CardDescription>A complete audit trail of every rule modification.</CardDescription>
             </CardHeader>
-            <CardContent className="p-0">
+            <CardContent className="space-y-3 p-0">
+              {/* Advanced filters */}
+              <div className="flex flex-wrap items-center gap-2 border-b px-4 py-3">
+                <div className="relative min-w-[180px] flex-1">
+                  <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                  <Input className="pl-8" placeholder="Search changes…" value={logQuery} onChange={e => setLogQuery(e.target.value)} />
+                </div>
+                <DateRangeFilter value={logRange} onChange={setLogRange} className="w-44" />
+                <Select value={logUser} onValueChange={setLogUser}>
+                  <SelectTrigger className="w-40"><SelectValue placeholder="User" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All users</SelectItem>
+                    {logUsers.map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <Select value={logField} onValueChange={setLogField}>
+                  <SelectTrigger className="w-48"><SelectValue placeholder="Section changed" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All sections</SelectItem>
+                    {logFields.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                {(logRange.preset !== 'all' || logUser !== 'all' || logField !== 'all' || logQuery) && (
+                  <Button variant="ghost" size="sm" onClick={() => { setLogRange(ALL_TIME); setLogUser('all'); setLogField('all'); setLogQuery(''); }}>Clear</Button>
+                )}
+              </div>
               {changeLog.length === 0 ? (
                 <EmptyState icon={ScrollText} title="No changes recorded" description="Rule modifications will appear here with full attribution." className="min-h-32" />
+              ) : filteredLog.length === 0 ? (
+                <EmptyState icon={Search} title="No matching changes" description="Adjust the filters to see more results." className="min-h-32" />
               ) : (
                 <div className="divide-y">
-                  {changeLog.map(c => (
+                  {filteredLog.map(c => (
                     <div key={c.id} className="flex flex-col gap-1 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
                       <div className="min-w-0">
                         <div className="font-medium">{c.field}</div>
@@ -303,33 +376,6 @@ export default function RuleConfigClient() {
       </Tabs>
 
       {editingType !== undefined && <EmergencyTypeDialog type={editingType} currency={cur} onClose={() => setEditingType(undefined)} onDone={() => { setEditingType(undefined); load(); }} />}
-    </div>
-  );
-}
-
-function RolesEditor({ roles, onChange }: { roles: string[]; onChange: (v: string[]) => void }) {
-  const [draft, setDraft] = useState('');
-  const add = () => {
-    const v = draft.trim();
-    if (!v) return;
-    if (roles.some(r => r.toLowerCase() === v.toLowerCase())) { toast.error('That role already exists.'); return; }
-    onChange([...roles, v]); setDraft('');
-  };
-  return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap gap-1.5">
-        {roles.length === 0 && <span className="text-xs text-muted-foreground">No roles defined — defaults will be used.</span>}
-        {roles.map(r => (
-          <Badge key={r} variant="secondary" className="gap-1 py-1 pl-2.5 pr-1">
-            {r}
-            <button type="button" className="rounded-full p-0.5 hover:bg-foreground/10" onClick={() => onChange(roles.filter(x => x !== r))}><Trash2 className="h-3 w-3" /></button>
-          </Badge>
-        ))}
-      </div>
-      <div className="flex gap-2">
-        <Input className="max-w-xs" placeholder="Add a role…" value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); add(); } }} />
-        <Button type="button" variant="outline" size="sm" onClick={add}><Plus className="mr-1 h-4 w-4" /> Add</Button>
-      </div>
     </div>
   );
 }
@@ -427,7 +473,7 @@ function EmergencyTypeDialog({ type, currency, onClose, onDone }: { type: any | 
             <FieldRow label="Waiting Period (days)" hint="Days that must pass after the event before a claim can be paid.">
               <Input type="number" min={0} value={form.waitingPeriodDays} onChange={e => set('waitingPeriodDays', e.target.value)} />
             </FieldRow>
-            <FieldRow label="Required Documents" hint="Comma-separated list, e.g. Death certificate, Hospital records.">
+            <FieldRow label="Required Document Name" hint="Comma-separated list of document names, e.g. Death certificate, Hospital records.">
               <Input value={form.requiredDocuments} onChange={e => set('requiredDocuments', e.target.value)} placeholder="Doc A, Doc B" />
             </FieldRow>
           </div>

@@ -396,12 +396,57 @@ enum ApprovalModule {
   EMERGENCY_CLAIM
   EMERGENCY_DISBURSEMENT
   ASSET_ISSUANCE
+  ASSET_RETURN
   MEMBER_REMOVAL
   RULE_CHANGE
   PENALTY_WAIVER
   EDIR_REGISTRATION
   EDIR_UPDATE
   USER_CREATION
+  DOCUMENT_ACTION
+}
+
+// ─── Document Management System (maker–checker) ──────────────────────────────
+
+enum DmsDocStatus {
+  DRAFT
+  PENDING
+  APPROVED
+  REJECTED
+  ARCHIVED
+}
+
+// A first-class repository document with its own maker–checker lifecycle. Stays
+// PENDING until a Checker approves; every sensitive action (upload, edit, delete,
+// classify, share, archive, revoke) is routed through an ApprovalRequest. Kept
+// separate from member profile pictures (which live on Member, not here).
+model DmsDocument {
+  id              String       @id @default(cuid())
+  edirId          String
+  title           String
+  category        String       @default("General") // folder / category
+  tags            String? // CSV of tags
+  purpose         String? // why the document was uploaded
+  fileUrl         String
+  fileName        String
+  fileType        String       @default("file") // image | pdf | file
+  status          DmsDocStatus @default(PENDING)
+  visibility      String       @default("staff") // staff | committee | all (role-based visibility)
+  pendingAction   String? // action awaiting approval: upload|edit|delete|archive|classify|share|revoke
+  pendingPayload  Json? // proposed change for the pending action
+  rejectionReason String?
+  uploadedById    String?
+  reviewedById    String?
+  approvedById    String?
+  reviewedAt      DateTime?
+  approvedAt      DateTime?
+  archivedAt      DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@index([edirId])
+  @@index([status])
+  @@index([category])
 }
 
 enum ApprovalStatus {
@@ -473,6 +518,11 @@ model EdirSettings {
   dueDay            Int     @default(1) // day of month payments are due
   gracePeriodDays   Int     @default(5)
   penaltyTiers      Json? // [{ id, label, fromDays, toDays|null, type: 'FIXED'|'PERCENT', value }]
+  // Optional daily penalty accrual: penalties grow each day past the grace window.
+  dailyPenaltyEnabled Boolean @default(false)
+  dailyPenaltyType    String  @default("FIXED") // FIXED | PERCENT (charged per overdue day)
+  dailyPenaltyValue   Decimal @default(0) @db.Decimal(15, 2) // ETB/day (FIXED) or %/day of balance (PERCENT)
+  dailyPenaltyMaxDays Int     @default(0) // cap on accruing days; 0 = no cap
   autoSuspendMonths Int     @default(3)
   autoTerminateMonths Int   @default(6)
   // Membership rules
@@ -645,6 +695,8 @@ model EmergencyClaim {
   status         EmergencyStatus @default(REPORTED)
   approvedAmount Decimal?        @db.Decimal(15, 2)
   disbursedAmount Decimal?       @db.Decimal(15, 2)
+  // Receipts / supporting documents for the disbursement: [{ path, name }]
+  disbursementReceipts Json?
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
   notes          EmergencyNote[]

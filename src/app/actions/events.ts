@@ -3,7 +3,7 @@
 import { z } from 'zod';
 import prisma from '@/lib/prisma';
 import { Prisma } from '@prisma/client';
-import { requireActor, getActor, assertPermission, assertSameTenant, tenantWhere } from '@/lib/tenant-scope';
+import { requireActor, getActor, assertPermission, assertSameTenant, tenantWhere, actorHasPermission } from '@/lib/tenant-scope';
 import { writeAudit } from '@/lib/audit';
 import { createNotifications } from '@/lib/notification-helpers';
 import { revalidatePath } from 'next/cache';
@@ -70,7 +70,7 @@ export async function getEvent(id: string) {
     where: { id },
     include: {
       participants: {
-        include: { member: { select: { id: true, name: true, memberId: true } } },
+        include: { member: { select: { id: true, name: true, memberId: true, role: true } } },
         orderBy: { member: { name: 'asc' } },
       },
     },
@@ -90,6 +90,7 @@ export async function getEvent(id: string) {
       memberId: p.member.id,
       memberCode: p.member.memberId,
       name: p.member.name,
+      role: p.member.role,
       status: p.status,
       penalized: p.penalized,
     })),
@@ -105,6 +106,9 @@ const eventSchema = z.object({
   location: z.string().optional().nullable(),
   attendanceRequired: z.boolean().default(false),
   absencePenalty: z.coerce.number().min(0).default(0),
+  // Expected participants chosen during creation (members / roles / groups resolve
+  // to member IDs on the client). Applied only when creating a new event.
+  participantMemberIds: z.array(z.string()).optional(),
 });
 
 export async function saveEvent(input: z.infer<typeof eventSchema>) {
@@ -138,9 +142,25 @@ export async function saveEvent(input: z.infer<typeof eventSchema>) {
         status: 'SCHEDULED',
       },
     });
-    await writeAudit({ edirId, userId: actor.id, action: 'EVENT_CREATED', targetType: 'Event', targetId: created.id, details: data.title });
+
+    // Add the chosen expected participants (tenant-scoped) in the same flow.
+    let addedParticipants = 0;
+    if (data.participantMemberIds?.length) {
+      const members = await prisma.member.findMany({
+        where: { id: { in: data.participantMemberIds }, edirId }, select: { id: true },
+      });
+      if (members.length) {
+        const res = await prisma.eventParticipant.createMany({
+          data: members.map(m => ({ eventId: created.id, memberId: m.id, status: 'INVITED' as const })),
+          skipDuplicates: true,
+        });
+        addedParticipants = res.count;
+      }
+    }
+
+    await writeAudit({ edirId, userId: actor.id, action: 'EVENT_CREATED', targetType: 'Event', targetId: created.id, details: `${data.title}${addedParticipants ? ` · ${addedParticipants} participant(s)` : ''}` });
     revalidatePath('/dashboard/events');
-    return { success: true as const, eventId: created.id };
+    return { success: true as const, eventId: created.id, addedParticipants };
   } catch (error) {
     return failure(error);
   }
@@ -148,11 +168,12 @@ export async function saveEvent(input: z.infer<typeof eventSchema>) {
 
 export async function cancelEvent(id: string) {
   try {
-    const { actor, edirId } = await requireActor('manage_events');
+    const { actor, edirId } = await requireActor(['cancel_event', 'manage_events']);
     const event = await prisma.event.findUnique({ where: { id } });
     if (!event) return { success: false as const, error: 'Event not found.' };
     await assertSameTenant(actor, event.edirId);
     if (event.status === 'COMPLETED') return { success: false as const, error: 'A finalized event cannot be cancelled.' };
+    if (event.status === 'CANCELLED') return { success: false as const, error: 'This event is already cancelled.' };
     await prisma.event.update({ where: { id }, data: { status: 'CANCELLED' } });
     await writeAudit({ edirId, userId: actor.id, action: 'EVENT_CANCELLED', targetType: 'Event', targetId: id, details: event.title });
     revalidatePath('/dashboard/events');
@@ -160,6 +181,40 @@ export async function cancelEvent(id: string) {
   } catch (error) {
     return failure(error);
   }
+}
+
+/** Reschedule a scheduled event to a new date/time (distinct from full edit). */
+export async function rescheduleEvent(id: string, datetime: string) {
+  try {
+    const { actor, edirId } = await requireActor(['reschedule_event', 'manage_events']);
+    const when = new Date(datetime);
+    if (isNaN(+when)) return { success: false as const, error: 'Invalid date/time.' };
+    const event = await prisma.event.findUnique({ where: { id } });
+    if (!event) return { success: false as const, error: 'Event not found.' };
+    await assertSameTenant(actor, event.edirId);
+    if (event.status === 'COMPLETED') return { success: false as const, error: 'A finalized event cannot be rescheduled.' };
+    if (event.status === 'CANCELLED') return { success: false as const, error: 'A cancelled event cannot be rescheduled.' };
+    await prisma.event.update({ where: { id }, data: { datetime: when } });
+    await writeAudit({
+      edirId, userId: actor.id, action: 'EVENT_RESCHEDULED', targetType: 'Event', targetId: id,
+      details: `${event.title}: ${event.datetime.toISOString()} → ${when.toISOString()}`,
+    });
+    revalidatePath('/dashboard/events');
+    return { success: true as const };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/** The current actor's event-management capabilities, for gating UI actions. */
+export async function getEventCapabilities() {
+  const actor = await getActor();
+  return {
+    canManage: actorHasPermission(actor, 'manage_events'),
+    canReschedule: actorHasPermission(actor, ['reschedule_event', 'manage_events']),
+    canCancel: actorHasPermission(actor, ['cancel_event', 'manage_events']),
+    canFinalize: actorHasPermission(actor, ['finalize_attendance', 'manage_events']),
+  };
 }
 
 // ─── Participants ────────────────────────────────────────────────────────────
@@ -227,6 +282,32 @@ export async function setAttendance(participantId: string, status: (typeof atten
     await prisma.eventParticipant.update({ where: { id: participantId }, data: { status } });
     revalidatePath('/dashboard/events');
     return { success: true as const };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/**
+ * Bulk-set attendance for many participants of one event at once (productivity:
+ * Mark All Attended / Mark Selected Attended). When `participantIds` is omitted,
+ * every participant of the event is updated.
+ */
+export async function setAttendanceBulk(eventId: string, status: (typeof attendanceStatuses)[number], participantIds?: string[]) {
+  try {
+    const { actor, edirId } = await requireActor('manage_events');
+    if (!attendanceStatuses.includes(status)) return { success: false as const, error: 'Invalid status.' };
+    const event = await prisma.event.findUnique({ where: { id: eventId } });
+    if (!event) return { success: false as const, error: 'Event not found.' };
+    await assertSameTenant(actor, event.edirId);
+    if (event.status === 'COMPLETED') return { success: false as const, error: 'Attendance is locked for a finalized event.' };
+
+    const where = participantIds?.length
+      ? { eventId, id: { in: participantIds } }
+      : { eventId };
+    const result = await prisma.eventParticipant.updateMany({ where, data: { status } });
+    await writeAudit({ edirId, userId: actor.id, action: 'EVENT_ATTENDANCE_BULK', targetType: 'Event', targetId: eventId, details: `Set ${result.count} participant(s) to ${status}.` });
+    revalidatePath('/dashboard/events');
+    return { success: true as const, updated: result.count };
   } catch (error) {
     return failure(error);
   }

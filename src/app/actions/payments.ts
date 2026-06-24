@@ -107,18 +107,37 @@ export async function getMemberOutstanding(memberId: string) {
 function computeOutstandingPenalty(balance: number, monthsBehind: number, settings: any, gracePeriodDays: number) {
   if (monthsBehind <= 0 || balance <= 0) return null;
   const tiers = Array.isArray(settings?.penaltyTiers) ? settings.penaltyTiers : [];
-  if (tiers.length === 0) return null;
   const now = new Date();
   const dueDay = settings?.dueDay ?? 1;
   const cycleDue = new Date(now.getFullYear(), now.getMonth(), dueDay);
   const ref = now >= cycleDue ? cycleDue : new Date(now.getFullYear(), now.getMonth() - 1, dueDay);
   const overdueDays = Math.max(0, Math.floor((now.getTime() - ref.getTime()) / 86400000) - gracePeriodDays) + Math.max(0, monthsBehind - 1) * 30;
   if (overdueDays <= 0) return null;
+
   const tier = tiers.find((t: any) => overdueDays >= Number(t.fromDays ?? 0) && (t.toDays == null || overdueDays <= Number(t.toDays)));
-  if (!tier) return null;
-  const value = Number(tier.value ?? 0);
-  const amount = tier.type === 'PERCENT' ? Math.round((balance * value) / 100) : value;
-  return { amount, rule: tier.label || `${tier.fromDays}${tier.toDays == null ? '+' : `–${tier.toDays}`} days late`, overdueDays };
+  let amount = 0;
+  let rule = '';
+  if (tier) {
+    const value = Number(tier.value ?? 0);
+    amount = tier.type === 'PERCENT' ? Math.round((balance * value) / 100) : value;
+    rule = tier.label || `${tier.fromDays}${tier.toDays == null ? '+' : `–${tier.toDays}`} days late`;
+  }
+
+  // Daily accrual (optional), consistent with computePenalty in lib/data.
+  if (settings?.dailyPenaltyEnabled && Number(settings?.dailyPenaltyValue ?? 0) > 0) {
+    const maxDays = Number(settings?.dailyPenaltyMaxDays ?? 0);
+    const days = maxDays > 0 ? Math.min(overdueDays, maxDays) : overdueDays;
+    const dailyVal = Number(settings.dailyPenaltyValue);
+    const perDay = settings.dailyPenaltyType === 'PERCENT' ? Math.round((balance * dailyVal) / 100) : dailyVal;
+    const dailyAmount = perDay * days;
+    if (dailyAmount > 0) {
+      amount += dailyAmount;
+      rule = rule ? `${rule} + daily accrual` : `Daily accrual (${days} day${days === 1 ? '' : 's'})`;
+    }
+  }
+
+  if (amount <= 0) return null;
+  return { amount, rule, overdueDays };
 }
 
 /** Tenant-wide payment KPIs for the Payments dashboard summary cards. */
@@ -163,7 +182,7 @@ const breakdownSchema = z.object({
   other: z.coerce.number().min(0).default(0),
 });
 
-export async function recordManualPayment(memberId: string, breakdownInput: z.infer<typeof breakdownSchema>) {
+export async function recordManualPayment(memberId: string, breakdownInput: z.infer<typeof breakdownSchema>, receiptUrl?: string | null) {
   try {
     const actor = await getActor();
     await assertPermission(actor, 'record_payment');
@@ -190,6 +209,7 @@ export async function recordManualPayment(memberId: string, breakdownInput: z.in
         status: 'PENDING',
         description: JSON.stringify(breakdown),
         transactionId,
+        receiptUrl: receiptUrl || null,
         verificationType: 'MANUAL',
       },
     });
@@ -215,15 +235,19 @@ export async function recordManualPayment(memberId: string, breakdownInput: z.in
 
 // ─── Payment log (read) ──────────────────────────────────────────────────────
 
-function paymentLogWhere(actor: Awaited<ReturnType<typeof getActor>>, params: { status?: string; query?: string }): Prisma.PaymentLogWhereInput {
+function paymentLogWhere(actor: Awaited<ReturnType<typeof getActor>>, params: { status?: string; query?: string; from?: string; to?: string }): Prisma.PaymentLogWhereInput {
+  const createdAt: Prisma.DateTimeFilter = {};
+  if (params.from) createdAt.gte = new Date(params.from);
+  if (params.to) createdAt.lte = new Date(params.to);
   return {
     ...tenantWhere(actor),
     ...(params.status && params.status !== 'all' ? { status: params.status as any } : {}),
+    ...(params.from || params.to ? { createdAt } : {}),
     ...(params.query ? { OR: [{ transactionId: { contains: params.query } }, { member: { name: { contains: params.query, mode: 'insensitive' } } }] } : {}),
   };
 }
 
-export async function getPaymentLogs(params: { status?: string; query?: string; page?: number } = {}) {
+export async function getPaymentLogs(params: { status?: string; query?: string; page?: number; from?: string; to?: string } = {}) {
   const actor = await getActor();
   await assertPermission(actor, ['view_payment_log', 'view_payments']);
   const page = Math.max(1, params.page ?? 1);
@@ -257,9 +281,9 @@ export async function getPaymentLogs(params: { status?: string; query?: string; 
   };
 }
 
-export async function exportPaymentLogCsv(params: { status?: string; query?: string } = {}) {
+export async function exportPaymentLogCsv(params: { status?: string; query?: string; from?: string; to?: string } = {}) {
   const actor = await getActor();
-  await assertPermission(actor, ['view_payment_log', 'view_payments']);
+  await assertPermission(actor, ['export_payments', 'view_payment_log']);
   const logs = await prisma.paymentLog.findMany({ where: paymentLogWhere(actor, params), include: { member: true }, orderBy: { createdAt: 'desc' }, take: 5000 });
   const header = ['Date', 'Transaction ID', 'Member', 'Method', 'Status', 'Amount'];
   const rows = logs.map(l => [

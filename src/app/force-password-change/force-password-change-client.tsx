@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import { Loader2, KeyRound, ShieldCheck, LogOut } from 'lucide-react';
+import { Loader2, KeyRound, ShieldCheck, LogOut, Eye, EyeOff } from 'lucide-react';
 import { completeFirstLoginPasswordChange, getFirstAccessiblePage } from '@/app/actions/auth';
 import { getClientBaseUrl } from '@/lib/url';
 
@@ -17,6 +17,8 @@ export default function ForcePasswordChangeClient() {
   const { update } = useSession();
   const [next, setNext] = useState('');
   const [confirm, setConfirm] = useState('');
+  const [showNext, setShowNext] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const submit = async () => {
@@ -47,13 +49,27 @@ export default function ForcePasswordChangeClient() {
         <CardContent className="space-y-4">
           <div className="space-y-1.5">
             <Label className="text-xs">New Password</Label>
-            <Input type="password" value={next} onChange={e => setNext(e.target.value)} autoFocus
-              onKeyDown={e => { if (e.key === 'Enter') submit(); }} />
+            <div className="relative">
+              <Input type={showNext ? 'text' : 'password'} value={next} onChange={e => setNext(e.target.value)} autoFocus
+                className="pr-10" onKeyDown={e => { if (e.key === 'Enter') submit(); }} />
+              <button type="button" tabIndex={-1} aria-label={showNext ? 'Hide password' : 'Show password'}
+                className="absolute inset-y-0 right-0 flex items-center px-3 text-muted-foreground hover:text-foreground"
+                onClick={() => setShowNext(s => !s)}>
+                {showNext ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
           </div>
           <div className="space-y-1.5">
             <Label className="text-xs">Confirm New Password</Label>
-            <Input type="password" value={confirm} onChange={e => setConfirm(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') submit(); }} />
+            <div className="relative">
+              <Input type={showConfirm ? 'text' : 'password'} value={confirm} onChange={e => setConfirm(e.target.value)}
+                className="pr-10" onKeyDown={e => { if (e.key === 'Enter') submit(); }} />
+              <button type="button" tabIndex={-1} aria-label={showConfirm ? 'Hide password' : 'Show password'}
+                className="absolute inset-y-0 right-0 flex items-center px-3 text-muted-foreground hover:text-foreground"
+                onClick={() => setShowConfirm(s => !s)}>
+                {showConfirm ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
           </div>
           <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
             <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" /> Use at least 8 characters with a mix of upper/lowercase letters, a number, and a symbol.

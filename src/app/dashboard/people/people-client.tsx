@@ -46,12 +46,12 @@ export default function PeopleClient() {
   const [query, setQuery] = useState('');
   const [type, setType] = useState('all');
   const [status, setStatus] = useState('all');
+  const [roleFilter, setRoleFilter] = useState('all');
   const [edirFilter, setEdirFilter] = useState('all');
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'name', dir: 'asc' });
 
   const [detail, setDetail] = useState<PersonRow | null>(null);
   const [reassign, setReassign] = useState<PersonRow | null>(null);
-  const [associating, setAssociating] = useState(false);
   const [showActivity, setShowActivity] = useState(false);
   const [cred, setCred] = useState<{ name: string; credentials: Credentials } | null>(null);
   const confirm = useConfirm();
@@ -77,6 +77,12 @@ export default function PeopleClient() {
   const toggleSort = (key: SortKey) =>
     setSort(s => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' }));
 
+  // All distinct Edir roles present (login roles + membership roles) for the role filter.
+  const roleOptions = useMemo(
+    () => Array.from(new Set(rows.flatMap(r => [r.roleName, r.membershipRole]).filter(Boolean))).sort() as string[],
+    [rows],
+  );
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     let list = rows.filter(r => {
@@ -87,6 +93,7 @@ export default function PeopleClient() {
       if (type === 'unassigned' && r.edirId) return false;
       if (type === 'invited' && r.accountStatus !== 'INVITED') return false;
       if (status !== 'all' && r.accountStatus !== status && r.membershipStatus !== status) return false;
+      if (roleFilter !== 'all' && r.roleName !== roleFilter && r.membershipRole !== roleFilter) return false;
       return true;
     });
     const dir = sort.dir === 'asc' ? 1 : -1;
@@ -99,7 +106,7 @@ export default function PeopleClient() {
       }
     });
     return list;
-  }, [rows, query, type, status, sort]);
+  }, [rows, query, type, status, roleFilter, sort]);
 
   const onExport = async () => {
     try {
@@ -217,6 +224,15 @@ export default function PeopleClient() {
             <SelectItem value="TERMINATED">Terminated</SelectItem>
           </SelectContent>
         </Select>
+        {roleOptions.length > 0 && (
+          <Select value={roleFilter} onValueChange={setRoleFilter}>
+            <SelectTrigger className="w-44"><SelectValue placeholder="Role" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All roles</SelectItem>
+              {roleOptions.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        )}
         {isSuper && (
           <Select value={edirFilter} onValueChange={setEdirFilter}>
             <SelectTrigger className="w-52"><SelectValue placeholder="Edir" /></SelectTrigger>
@@ -230,7 +246,8 @@ export default function PeopleClient() {
         <div className="ml-auto flex flex-wrap items-center gap-2">
           <Button variant="outline" size="sm" onClick={onExport}><Download className="mr-1 h-4 w-4" /> Export</Button>
           {isSuper && <Button variant="outline" size="sm" onClick={() => setShowActivity(true)}><History className="mr-1 h-4 w-4" /> Activity</Button>}
-          {isSuper && <Button variant="outline" size="sm" onClick={() => setAssociating(true)}><Network className="mr-1 h-4 w-4" /> Associate</Button>}
+          {/* Cross-Edir bulk association lives in the dedicated User Associations module — link there instead of duplicating it here. */}
+          {isSuper && <Button asChild variant="outline" size="sm"><Link href="/dashboard/system/associations"><Network className="mr-1 h-4 w-4" /> User Associations</Link></Button>}
           {ctx?.canManageMembers && <AddMemberDialog ctx={ctx} onCreated={load} onCredentials={setCred} />}
         </div>
       </div>
@@ -339,7 +356,6 @@ export default function PeopleClient() {
         />
       )}
       {reassign && ctx && <ReassignDialog person={reassign} edirs={ctx.edirs} onClose={() => setReassign(null)} onDone={() => { setReassign(null); load(); }} />}
-      {associating && ctx && <AssociateDialog edirs={ctx.edirs} onClose={() => setAssociating(false)} onDone={() => { setAssociating(false); load(); }} />}
       {showActivity && <ActivityDialog onClose={() => setShowActivity(false)} />}
     </div>
   );
@@ -682,80 +698,6 @@ function ReassignDialog({ person, edirs, onClose, onDone }: { person: PersonRow;
   );
 }
 
-// ─── Bulk associate ──────────────────────────────────────────────────────────
-
-function AssociateDialog({ edirs, onClose, onDone }: { edirs: { id: string; name: string }[]; onClose: () => void; onDone: () => void }) {
-  const [edirId, setEdirId] = useState(edirs[0]?.id ?? '');
-  const [query, setQuery] = useState('');
-  const [onlyUnassigned, setOnlyUnassigned] = useState(true);
-  const [candidates, setCandidates] = useState<any[]>([]);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [roles, setRoles] = useState<any[]>([]);
-  const [roleId, setRoleId] = useState('');
-  const [activate, setActivate] = useState(true);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const edir = edirs.find(e => e.id === edirId);
-
-  useEffect(() => { if (edirId) getEdirRolesForAssociation(edirId).then(r => { setRoles(r); setRoleId(r.find((x: any) => x.name === 'Member')?.id ?? r[0]?.id ?? ''); }); }, [edirId]);
-  useEffect(() => {
-    setLoading(true);
-    getAssociationUsers({ query, unassigned: onlyUnassigned }).then(u => setCandidates(u.filter((x: any) => x.edirId !== edirId))).finally(() => setLoading(false));
-  }, [query, onlyUnassigned, edirId]);
-
-  const toggle = (id: string) => setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
-
-  const submit = async () => {
-    if (!edirId) { toast.error('Select an Edir.'); return; }
-    if (selected.size === 0) { toast.error('Select at least one user.'); return; }
-    setSaving(true);
-    const res = await associateUsers({ userIds: Array.from(selected), edirId, roleId: roleId || null, activate });
-    setSaving(false);
-    if (res?.success) { toast.success(`${res.changed} user(s) associated with ${edir?.name}.`); onDone(); }
-    else toast.error(res?.error || 'Failed to associate.');
-  };
-
-  return (
-    <Dialog open onOpenChange={o => { if (!o) onClose(); }}>
-      <DialogContent className="max-h-[88vh] max-w-lg overflow-y-auto">
-        <DialogHeader><DialogTitle>Associate Users</DialogTitle><DialogDescription>Bulk-add users to an Edir, assign a role, and activate them. Associated users are enrolled as members.</DialogDescription></DialogHeader>
-        <div className="space-y-3">
-          <div className="space-y-1.5"><Label className="text-xs">Target Edir</Label>
-            <Select value={edirId} onValueChange={setEdirId}><SelectTrigger><SelectValue placeholder="Select an Edir" /></SelectTrigger><SelectContent>{edirs.map(e => <SelectItem key={e.id} value={e.id}>{e.name}</SelectItem>)}</SelectContent></Select>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5"><Label className="text-xs">Role</Label>
-              <Select value={roleId} onValueChange={setRoleId}><SelectTrigger><SelectValue placeholder="Keep current" /></SelectTrigger><SelectContent>{roles.map(r => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}</SelectContent></Select>
-            </div>
-            <div className="flex items-end justify-between rounded-lg border p-2.5"><span className="text-sm">Activate</span><Switch checked={activate} onCheckedChange={setActivate} /></div>
-          </div>
-          <div className="flex items-center justify-between gap-2">
-            <div className="relative flex-1">
-              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input className="pl-8" placeholder="Search users…" value={query} onChange={e => setQuery(e.target.value)} />
-            </div>
-            <label className="flex items-center gap-1.5 whitespace-nowrap text-xs"><input type="checkbox" checked={onlyUnassigned} onChange={e => setOnlyUnassigned(e.target.checked)} /> Unassigned only</label>
-          </div>
-          <div className="max-h-72 overflow-y-auto rounded-md border">
-            {loading ? <div className="flex h-24 items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
-              : candidates.length === 0 ? <div className="flex h-24 items-center justify-center"><p className="text-sm text-muted-foreground">No users to add.</p></div>
-              : candidates.map(u => (
-                <label key={u.id} className="flex cursor-pointer items-center gap-3 border-b px-3 py-2 last:border-0 hover:bg-muted/50">
-                  <input type="checkbox" checked={selected.has(u.id)} onChange={() => toggle(u.id)} />
-                  <div className="min-w-0 flex-1"><div className="truncate text-sm font-medium">{u.name || u.email}</div><div className="truncate text-xs text-muted-foreground">{u.phone || u.email} · {u.edirName ? `currently: ${u.edirName}` : 'unassigned'}</div></div>
-                  <Badge variant="outline" className={STATUS_COLORS[u.status] ?? ''}>{u.status}</Badge>
-                </label>
-              ))}
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
-          <Button onClick={submit} disabled={saving}>{saving && <Loader2 className="mr-1 h-4 w-4 animate-spin" />} Associate {selected.size > 0 ? `(${selected.size})` : ''}</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
 
 // ─── Association activity ────────────────────────────────────────────────────
 

@@ -4,7 +4,7 @@ import { z } from 'zod';
 import crypto from 'crypto';
 import prisma from '@/lib/prisma';
 import { Prisma } from '@prisma/client';
-import { getActor, requireActor, assertPermission, assertSameTenant, tenantWhere, resolveEdirId, type Actor } from '@/lib/tenant-scope';
+import { getActor, requireActor, assertPermission, assertSameTenant, tenantWhere, resolveEdirId, actorHasPermission, type Actor } from '@/lib/tenant-scope';
 import { writeAudit } from '@/lib/audit';
 import { ALL_PERMISSION_IDS, PLATFORM_PERMISSION_IDS, filterPermissionsForScope, type RoleScopeKind } from '@/lib/permissions';
 import { normalizeEthiopianPhone, isValidEthiopianPhone } from '@/lib/utils';
@@ -319,18 +319,30 @@ export async function ensureDefaultEdirRoles(edirId: string, client: Prisma.Tran
 
 export async function getEdirs() {
   const actor = await getActor();
-  await assertPermission(actor, ['manage_edirs', 'super_admin']);
+  await assertPermission(actor, ['manage_edirs', 'create_edir', 'edit_edir', 'view_edir_reports', 'super_admin']);
   const edirs = await prisma.edir.findMany({
     include: { _count: { select: { members: true, users: true } } },
     orderBy: { name: 'asc' },
   });
-  return edirs.map(e => ({ id: e.id, name: e.name, description: e.description, members: e._count.members, users: e._count.users }));
+  return edirs.map(e => ({ id: e.id, name: e.name, description: e.description, status: e.status, members: e._count.members, users: e._count.users }));
+}
+
+/** The current actor's Edir-management capabilities, for gating UI actions. */
+export async function getEdirAdminCapabilities() {
+  const actor = await getActor();
+  return {
+    canCreate: actorHasPermission(actor, ['create_edir', 'manage_edirs', 'super_admin']),
+    canEdit: actorHasPermission(actor, ['edit_edir', 'manage_edirs', 'super_admin']),
+    canRevoke: actorHasPermission(actor, ['revoke_edir', 'manage_edirs', 'super_admin']),
+    canDelete: actorHasPermission(actor, ['delete_edir', 'super_admin']),
+  };
 }
 
 export async function saveEdir(input: { id?: string; name: string; description?: string }) {
   try {
     const actor = await getActor();
-    await assertPermission(actor, ['manage_edirs', 'super_admin']);
+    // Granular: editing requires edit_edir, creating requires create_edir (manage_edirs/super_admin are the umbrella).
+    await assertPermission(actor, input.id ? ['edit_edir', 'manage_edirs', 'super_admin'] : ['create_edir', 'manage_edirs', 'super_admin']);
     const name = input.name?.trim();
     if (!name) return { success: false as const, error: 'Name is required.' };
     if (input.id) {
@@ -341,6 +353,74 @@ export async function saveEdir(input: { id?: string; name: string; description?:
       await ensureDefaultEdirRoles(edir.id); // so the Edir can be staffed & configured immediately
     }
     await writeAudit({ userId: actor.id, action: 'EDIR_SAVED', targetType: 'Edir', targetId: input.id ?? null, details: name });
+    revalidatePath('/dashboard/edir-registration');
+    return { success: true as const };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/** Revoke (deactivate) or restore an Edir without deleting it. */
+export async function revokeEdir(edirId: string, status: 'ACTIVE' | 'SUSPENDED' | 'CLOSED') {
+  try {
+    const actor = await getActor();
+    await assertPermission(actor, ['revoke_edir', 'manage_edirs', 'super_admin']);
+    const edir = await prisma.edir.findUnique({ where: { id: edirId }, select: { id: true, name: true, status: true } });
+    if (!edir) return { success: false as const, error: 'Edir not found.' };
+    await prisma.edir.update({ where: { id: edirId }, data: { status } });
+    await writeAudit({
+      edirId, userId: actor.id, action: status === 'ACTIVE' ? 'EDIR_REACTIVATED' : 'EDIR_REVOKED',
+      targetType: 'Edir', targetId: edirId, details: `${edir.name}: ${edir.status} → ${status}`,
+    });
+    revalidatePath('/dashboard/edir-registration');
+    return { success: true as const };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/** Permanently delete an Edir — only when it has no operational data. */
+export async function deleteEdir(edirId: string) {
+  try {
+    const actor = await getActor();
+    await assertPermission(actor, ['delete_edir', 'super_admin']);
+    const edir = await prisma.edir.findUnique({ where: { id: edirId }, select: { id: true, name: true } });
+    if (!edir) return { success: false as const, error: 'Edir not found.' };
+
+    // Guard: refuse if any operational data exists.
+    const [members, payments, approvals, emergencies, events, assets, requests, bylaws, rules, users] = await Promise.all([
+      prisma.member.count({ where: { edirId } }),
+      prisma.paymentLog.count({ where: { edirId } }),
+      prisma.approvalRequest.count({ where: { edirId } }),
+      prisma.emergencyClaim.count({ where: { edirId } }),
+      prisma.event.count({ where: { edirId } }),
+      prisma.asset.count({ where: { edirId } }),
+      prisma.memberRequest.count({ where: { edirId } }),
+      prisma.bylaw.count({ where: { edirId } }),
+      prisma.rulesVersion.count({ where: { edirId } }),
+      prisma.user.count({ where: { edirId } }),
+    ]);
+    const blockers: string[] = [];
+    if (members) blockers.push(`${members} member(s)`);
+    if (users) blockers.push(`${users} user(s)`);
+    if (payments) blockers.push(`${payments} payment(s)`);
+    if (approvals) blockers.push(`${approvals} approval(s)`);
+    if (emergencies) blockers.push(`${emergencies} emergency claim(s)`);
+    if (events) blockers.push(`${events} event(s)`);
+    if (assets) blockers.push(`${assets} asset(s)`);
+    if (requests) blockers.push(`${requests} member request(s)`);
+    if (bylaws || rules) blockers.push('rules/bylaws');
+    if (blockers.length) {
+      return { success: false as const, error: `Cannot delete — this Edir has operational data: ${blockers.join(', ')}. Revoke it instead.` };
+    }
+
+    // Only auto-provisioned roles + settings remain; remove them, then the Edir.
+    await prisma.$transaction(async (tx) => {
+      await tx.role.deleteMany({ where: { edirId } });
+      await tx.edirSettings.deleteMany({ where: { edirId } });
+      await tx.edir.delete({ where: { id: edirId } });
+    });
+    await writeAudit({ userId: actor.id, action: 'EDIR_DELETED', targetType: 'Edir', targetId: edirId, details: edir.name });
     revalidatePath('/dashboard/edir-registration');
     return { success: true as const };
   } catch (error) {

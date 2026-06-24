@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Loader2, Search, Download, ReceiptText, Ban, Receipt, Building2, CheckCircle2, XCircle, Clock, CalendarCheck } from 'lucide-react';
 import { Pagination } from '@/components/ui/pagination';
+import { DateRangeFilter, ALL_TIME, type DateRangeValue } from '@/components/ui/date-range-filter';
 import { getPaymentLogs, exportPaymentLogCsv, voidPayment } from '@/app/actions/payments';
 import { usePrompt } from '@/components/ui/confirm-provider';
 
@@ -21,7 +22,7 @@ const STATUS: Record<string, string> = {
 };
 
 const BREAKDOWN_LABELS: Record<string, string> = {
-  installment: 'Installment / Contribution', arrears: 'Arrears', latePenalty: 'Late Penalty',
+  installment: 'Installment / Contribution', arrears: 'Overdue Amount', latePenalty: 'Late Penalty',
   interest: 'Interest', serviceFees: 'Service Fees', other: 'Other',
 };
 
@@ -43,23 +44,27 @@ export default function PaymentLogClient() {
   const [error, setError] = useState(false);
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState('all');
+  const [dateRange, setDateRange] = useState<DateRangeValue>(ALL_TIME);
   const [page, setPage] = useState(1);
   const [pages, setPages] = useState(1);
   const [total, setTotal] = useState(0);
   const [receipt, setReceipt] = useState<any | null>(null);
   const prompt = usePrompt();
 
+  const from = dateRange.from?.toISOString();
+  const to = dateRange.to?.toISOString();
+
   const load = useCallback(() => {
     setLoading(true); setError(false);
-    getPaymentLogs({ query, status, page })
+    getPaymentLogs({ query, status, page, from, to })
       .then(r => { setItems(r.items); setPages(r.pages); setTotal(r.total); })
       .catch(() => setError(true)).finally(() => setLoading(false));
-  }, [query, status, page]);
+  }, [query, status, page, from, to]);
   useEffect(() => { load(); }, [load]);
-  useEffect(() => { setPage(1); }, [query, status]);
+  useEffect(() => { setPage(1); }, [query, status, from, to]);
 
   const onExport = async () => {
-    try { downloadCsv(await exportPaymentLogCsv({ query, status }), 'payment-log.csv'); }
+    try { downloadCsv(await exportPaymentLogCsv({ query, status, from, to }), 'payment-log.csv'); }
     catch { toast.error('Export failed.'); }
   };
   const onVoid = async (l: any) => {
@@ -92,6 +97,7 @@ export default function PaymentLogClient() {
             {Object.keys(STATUS).map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
           </SelectContent>
         </Select>
+        <DateRangeFilter value={dateRange} onChange={setDateRange} className="w-44" />
       </div>
 
       <Card>

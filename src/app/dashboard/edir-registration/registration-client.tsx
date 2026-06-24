@@ -28,11 +28,12 @@ import { PageHeader, LoadingState, EmptyState, StatCard } from '@/components/ui/
 import { Pagination, usePagination } from '@/components/ui/pagination';
 import { submitEdirRegistration, getEdirRegistrations, type EdirRegistrationInput } from '@/app/actions/edir-registration';
 import { getBranches } from '@/app/actions/branches';
-import { getEdirs } from '@/app/actions/admin';
+import { getEdirs, getEdirAdminCapabilities, revokeEdir, deleteEdir } from '@/app/actions/admin';
+import { useConfirm } from '@/components/ui/confirm-provider';
 import { type Actor } from '@/lib/tenant-scope';
 import {
   Building2, Check, Clock, X, RotateCcw, Upload, FileText, ChevronLeft, ChevronRight,
-  Users, UserCircle, ListChecks,
+  Users, UserCircle, ListChecks, Ban, Trash2,
 } from 'lucide-react';
 
 interface Branch {
@@ -58,9 +59,12 @@ interface EdirItem {
   id: string;
   name: string;
   description: string | null;
+  status: 'PENDING' | 'ACTIVE' | 'SUSPENDED' | 'CLOSED';
   members: number;
   users: number;
 }
+
+type EdirCaps = { canCreate: boolean; canEdit: boolean; canRevoke: boolean; canDelete: boolean };
 
 const FORM_STEPS = [
   { id: 'details', label: 'Edir Details' },
@@ -97,6 +101,8 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
   const [regsLoading, setRegsLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<'PENDING' | 'ACTIVE' | 'REJECTED' | 'RETURNED' | 'ALL'>('PENDING');
   const [activeTab, setActiveTab] = useState('all-edirs');
+  const [edirCaps, setEdirCaps] = useState<EdirCaps>({ canCreate: false, canEdit: false, canRevoke: false, canDelete: false });
+  const confirm = useConfirm();
 
   const [formData, setFormData] = useState<EdirRegistrationInput>({
     name: '',
@@ -145,20 +151,50 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusFilter]);
 
+  const loadEdirs = async () => {
+    try {
+      setEdirsLoading(true);
+      const result = await getEdirs();
+      if (result) setEdirs(result as EdirItem[]);
+    } catch (err) {
+      console.error('Failed to load edirs:', err);
+    } finally {
+      setEdirsLoading(false);
+    }
+  };
+
   useEffect(() => {
-    const loadEdirs = async () => {
-      try {
-        setEdirsLoading(true);
-        const result = await getEdirs();
-        if (result) setEdirs(result);
-      } catch (err) {
-        console.error('Failed to load edirs:', err);
-      } finally {
-        setEdirsLoading(false);
-      }
-    };
     loadEdirs();
+    getEdirAdminCapabilities().then(setEdirCaps).catch(() => {});
   }, []);
+
+  const onRevoke = async (edir: EdirItem) => {
+    const deactivate = edir.status === 'ACTIVE' || edir.status === 'PENDING';
+    const next = deactivate ? 'SUSPENDED' : 'ACTIVE';
+    const ok = await confirm({
+      title: deactivate ? `Revoke ${edir.name}?` : `Reactivate ${edir.name}?`,
+      description: deactivate ? 'The Edir is deactivated (suspended) but not deleted. You can reactivate it later.' : 'The Edir becomes active again.',
+      confirmText: deactivate ? 'Revoke' : 'Reactivate',
+      destructive: deactivate,
+    });
+    if (!ok) return;
+    const res = await revokeEdir(edir.id, next);
+    if (res.success) { toast.success(deactivate ? 'Edir revoked.' : 'Edir reactivated.'); loadEdirs(); }
+    else toast.error(res.error || 'Failed.');
+  };
+
+  const onDelete = async (edir: EdirItem) => {
+    const ok = await confirm({
+      title: `Delete ${edir.name}?`,
+      description: 'Permanently deletes the Edir. Only allowed when it has no operational data (members, payments, etc.).',
+      confirmText: 'Delete',
+      destructive: true,
+    });
+    if (!ok) return;
+    const res = await deleteEdir(edir.id);
+    if (res.success) { toast.success('Edir deleted.'); loadEdirs(); }
+    else toast.error(res.error || 'Failed to delete.');
+  };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
@@ -263,8 +299,10 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
                     <TableRow>
                       <TableHead>Name</TableHead>
                       <TableHead>Description</TableHead>
+                      <TableHead>Status</TableHead>
                       <TableHead className="text-right">Members</TableHead>
                       <TableHead className="text-right">Users</TableHead>
+                      {(edirCaps.canRevoke || edirCaps.canDelete) && <TableHead className="text-right">Actions</TableHead>}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -272,8 +310,25 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
                       <TableRow key={edir.id}>
                         <TableCell className="font-medium">{edir.name}</TableCell>
                         <TableCell className="max-w-md truncate text-muted-foreground">{edir.description || '—'}</TableCell>
+                        <TableCell><StatusBadge status={edir.status} /></TableCell>
                         <TableCell className="text-right tabular-nums">{edir.members}</TableCell>
                         <TableCell className="text-right tabular-nums">{edir.users}</TableCell>
+                        {(edirCaps.canRevoke || edirCaps.canDelete) && (
+                          <TableCell className="text-right">
+                            <div className="flex justify-end gap-1">
+                              {edirCaps.canRevoke && (
+                                <Button size="sm" variant="ghost" className={edir.status === 'SUSPENDED' || edir.status === 'CLOSED' ? 'text-success' : 'text-warning'} onClick={() => onRevoke(edir)} title={edir.status === 'SUSPENDED' || edir.status === 'CLOSED' ? 'Reactivate' : 'Revoke'}>
+                                  {edir.status === 'SUSPENDED' || edir.status === 'CLOSED' ? <RotateCcw className="h-4 w-4" /> : <Ban className="h-4 w-4" />}
+                                </Button>
+                              )}
+                              {edirCaps.canDelete && (
+                                <Button size="sm" variant="ghost" className="text-muted-foreground hover:text-destructive" onClick={() => onDelete(edir)} title="Delete">
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              )}
+                            </div>
+                          </TableCell>
+                        )}
                       </TableRow>
                     ))}
                   </TableBody>

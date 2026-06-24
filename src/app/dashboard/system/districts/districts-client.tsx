@@ -25,9 +25,10 @@ import {
 } from '@/components/ui/table';
 import { PageHeader, LoadingState, EmptyState, StatCard } from '@/components/ui/states';
 import { Pagination, usePagination } from '@/components/ui/pagination';
+import { ImportDialog } from '@/components/ui/import-dialog';
 import { useConfirm } from '@/components/ui/confirm-provider';
-import { getDistricts, saveDistrict, deleteDistrict } from '@/app/actions/districts';
-import { MapPin, Plus, Pencil, Trash2, Building, Network } from 'lucide-react';
+import { getDistricts, saveDistrict, deleteDistrict, importDistricts } from '@/app/actions/districts';
+import { MapPin, Plus, Pencil, Trash2, Building, Network, Upload } from 'lucide-react';
 
 interface District {
   id: string;
@@ -43,6 +44,7 @@ export default function DistrictsClient() {
   const [districts, setDistricts] = useState<District[]>([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formData, setFormData] = useState({ name: '', code: '', description: '' });
@@ -129,12 +131,42 @@ export default function DistrictsClient() {
         title="Districts"
         description="Manage the bank's operational districts — the top tier of the service hierarchy."
         actions={
-          <Button onClick={() => handleOpen()} className="gap-2">
-            <Plus className="h-4 w-4" />
-            New District
-          </Button>
+          <>
+            <Button variant="outline" onClick={() => setImporting(true)} className="gap-2">
+              <Upload className="h-4 w-4" />
+              Import
+            </Button>
+            <Button onClick={() => handleOpen()} className="gap-2">
+              <Plus className="h-4 w-4" />
+              New District
+            </Button>
+          </>
         }
       />
+
+      {importing && (
+        <ImportDialog
+          title="Import Districts"
+          description="Bulk-create or update districts from a CSV. Existing districts (matched by code or name) are updated."
+          templateName="districts-template.csv"
+          columns={[
+            { key: 'name', label: 'Name', required: true, example: 'Addis Ababa District' },
+            { key: 'code', label: 'Code', required: true, example: 'AA-DIST' },
+            { key: 'description', label: 'Description', example: 'Central operational district' },
+          ]}
+          sampleRows={[
+            { name: 'Addis Ababa District', code: 'AA-DIST', description: 'Central operational district' },
+            { name: 'Oromia District', code: 'OR-DIST', description: '' },
+          ]}
+          onImport={async (rows) => {
+            const res = await importDistricts(rows);
+            if (!res.success) return { error: res.error };
+            return { created: res.created, updated: res.updated, errors: res.errors };
+          }}
+          onClose={() => setImporting(false)}
+          onDone={load}
+        />
+      )}
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <StatCard title="Total Districts" value={districts.length} icon={MapPin} accent="primary" />

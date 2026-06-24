@@ -118,7 +118,7 @@ const assetSchema = z.object({
 
 export async function saveAsset(input: z.infer<typeof assetSchema>) {
   try {
-    const { actor, edirId } = await requireActor('manage_assets');
+    const { actor, edirId } = await requireActor(input.id ? ['edit_asset', 'manage_assets'] : ['create_asset', 'manage_assets']);
     const data = assetSchema.parse(input);
     if (data.categoryId) {
       const cat = await prisma.assetCategory.findUnique({ where: { id: data.categoryId } });
@@ -163,7 +163,7 @@ export async function saveAsset(input: z.infer<typeof assetSchema>) {
 
 export async function deleteAsset(id: string) {
   try {
-    const { actor, edirId } = await requireActor('manage_assets');
+    const { actor, edirId } = await requireActor(['delete_asset', 'manage_assets']);
     const existing = await prisma.asset.findUnique({ where: { id }, include: { _count: { select: { issuances: true } } } });
     if (!existing) return { success: false as const, error: 'Asset not found.' };
     await assertSameTenant(actor, existing.edirId);
@@ -225,7 +225,7 @@ const issueSchema = z.object({
 /** Maker requests issuing an asset to a member (ASSET_ISSUANCE Maker–Checker). */
 export async function requestIssuance(input: z.infer<typeof issueSchema>) {
   try {
-    const { actor, edirId } = await requireActor('manage_assets');
+    const { actor, edirId } = await requireActor(['issue_asset', 'manage_assets']);
     const data = issueSchema.parse(input);
 
     const asset = await prisma.asset.findUnique({ where: { id: data.assetId } });
@@ -268,13 +268,13 @@ const returnSchema = z.object({
 });
 
 /**
- * Record the return of an issued asset. Frees inventory (decrements issuedQty);
- * if a compensation is charged for loss/damage it is added to the member's
- * balance. Direct manage_assets action (audited), mirroring events finalize.
+ * Submit an asset return for Maker–Checker approval. The asset is NOT freed and
+ * the member is NOT charged until a checker approves — the ASSET_RETURN executor
+ * applies the return (frees inventory, applies any loss/damage compensation).
  */
 export async function recordReturn(input: z.infer<typeof returnSchema>) {
   try {
-    const { actor, edirId } = await requireActor('manage_assets');
+    const { actor, edirId } = await requireActor(['return_asset', 'manage_assets']);
     const data = returnSchema.parse(input);
 
     const issuance = await prisma.assetIssuance.findUnique({ where: { id: data.issuanceId }, include: { asset: true, member: true } });
@@ -283,42 +283,31 @@ export async function recordReturn(input: z.infer<typeof returnSchema>) {
     if (issuance.status !== 'ISSUED') return { success: false as const, error: 'Only issued assets can be returned.' };
     if (data.returnedQty > issuance.issuedQty) return { success: false as const, error: `Cannot return more than the ${issuance.issuedQty} issued.` };
 
-    const compensation = data.compensation;
-    const newStatus = compensation > 0 ? 'COMPENSATION_PENDING' : 'CLOSED';
+    // Block duplicate pending returns for the same issuance.
+    const openReturn = await prisma.approvalRequest.findFirst({
+      where: { module: 'ASSET_RETURN', targetId: issuance.id, status: { in: ['PENDING', 'RETURNED'] } },
+      select: { id: true },
+    });
+    if (openReturn) return { success: false as const, error: 'A return for this asset is already awaiting approval.' };
 
-    await prisma.$transaction(async (tx) => {
-      await tx.asset.update({
-        where: { id: issuance.assetId },
-        data: { issuedQuantity: { decrement: data.returnedQty }, status: 'available' },
-      });
-      await tx.assetIssuance.update({
-        where: { id: issuance.id },
-        data: { status: newStatus, returnedQty: data.returnedQty, condition: data.condition || null, compensation: new Prisma.Decimal(compensation) },
-      });
-      if (compensation > 0 && issuance.memberId) {
-        await tx.paymentStatus.upsert({
-          where: { memberId: issuance.memberId },
-          update: { balance: { increment: compensation }, status: 'PENDING' },
-          create: { memberId: issuance.memberId, balance: new Prisma.Decimal(compensation), status: 'PENDING' },
-        });
-      }
-      await writeAudit({
-        edirId, userId: actor.id, action: 'ASSET_RETURNED', targetType: 'AssetIssuance', targetId: issuance.id,
-        details: `Returned ${data.returnedQty} × ${issuance.asset.name}${compensation > 0 ? ` with ${compensation} compensation` : ''}.`,
-      }, tx);
+    const compensation = data.compensation;
+    const requestId = await submitForApproval(actor, {
+      edirId,
+      module: 'ASSET_RETURN',
+      title: `Asset return: ${data.returnedQty} × ${issuance.asset.name}`,
+      summary: `${issuance.member?.name ?? 'Member'} returning ${data.returnedQty} × ${issuance.asset.name}${compensation > 0 ? ` · compensation ${compensation}` : ''}${data.condition ? ` · ${data.condition}` : ''}`,
+      payload: { issuanceId: issuance.id, returnedQty: data.returnedQty, condition: data.condition || null, compensation },
+      targetType: 'AssetIssuance', targetId: issuance.id,
     });
 
-    if (compensation > 0 && issuance.member?.userId) {
-      await createNotification({
-        userId: issuance.member.userId, type: 'payment', priority: 'high',
-        title: 'Asset compensation charged',
-        body: `A ${compensation} compensation for "${issuance.asset.name}" was added to your balance.`,
-        edirId,
-      });
-    }
+    await writeAudit({
+      edirId, userId: actor.id, action: 'ASSET_RETURN_REQUESTED', targetType: 'AssetIssuance', targetId: issuance.id,
+      details: `Return submitted for approval: ${data.returnedQty} × ${issuance.asset.name}${compensation > 0 ? ` with ${compensation} compensation` : ''}.`,
+    });
 
     revalidatePath('/dashboard/assets');
-    return { success: true as const };
+    revalidatePath('/dashboard/approvals');
+    return { success: true as const, requestId, pendingApproval: true as const };
   } catch (error) {
     return failure(error);
   }

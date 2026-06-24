@@ -14,9 +14,5 @@ export default async function ApprovalDetailPage({
     redirect('/dashboard/approvals');
   }
 
-  return (
-    <div className="container mx-auto py-8">
-      <ApprovalDetailClient actor={actor} requestId={requestId} />
-    </div>
-  );
+  return <ApprovalDetailClient actor={actor} requestId={requestId} />;
 }
