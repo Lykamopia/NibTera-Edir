@@ -28,13 +28,14 @@ import { PageHeader, LoadingState, EmptyState, StatCard } from '@/components/ui/
 import { Pagination, usePagination } from '@/components/ui/pagination';
 import { submitEdirRegistration, getEdirRegistrations, type EdirRegistrationInput } from '@/app/actions/edir-registration';
 import { getBranches } from '@/app/actions/branches';
-import { getEdirs, getEdirAdminCapabilities, revokeEdir, deleteEdir } from '@/app/actions/admin';
+import { getEdirs, getEdirAdminCapabilities, revokeEdir, deleteEdir, saveEdir } from '@/app/actions/admin';
 import { useConfirm } from '@/components/ui/confirm-provider';
 import { type Actor } from '@/lib/tenant-scope';
 import {
   Building2, Check, Clock, X, RotateCcw, Upload, FileText, ChevronLeft, ChevronRight,
-  Users, UserCircle, ListChecks, Ban, Trash2,
+  Users, UserCircle, ListChecks, Ban, Trash2, Pencil, Loader2,
 } from 'lucide-react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 
 interface Branch {
   id: string;
@@ -102,6 +103,7 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
   const [statusFilter, setStatusFilter] = useState<'PENDING' | 'ACTIVE' | 'REJECTED' | 'RETURNED' | 'ALL'>('PENDING');
   const [activeTab, setActiveTab] = useState('all-edirs');
   const [edirCaps, setEdirCaps] = useState<EdirCaps>({ canCreate: false, canEdit: false, canRevoke: false, canDelete: false });
+  const [editEdir, setEditEdir] = useState<EdirItem | null>(null);
   const confirm = useConfirm();
 
   const [formData, setFormData] = useState<EdirRegistrationInput>({
@@ -302,7 +304,7 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
                       <TableHead>Status</TableHead>
                       <TableHead className="text-right">Members</TableHead>
                       <TableHead className="text-right">Users</TableHead>
-                      {(edirCaps.canRevoke || edirCaps.canDelete) && <TableHead className="text-right">Actions</TableHead>}
+                      {(edirCaps.canEdit || edirCaps.canRevoke || edirCaps.canDelete) && <TableHead className="text-right">Actions</TableHead>}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -313,9 +315,14 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
                         <TableCell><StatusBadge status={edir.status} /></TableCell>
                         <TableCell className="text-right tabular-nums">{edir.members}</TableCell>
                         <TableCell className="text-right tabular-nums">{edir.users}</TableCell>
-                        {(edirCaps.canRevoke || edirCaps.canDelete) && (
+                        {(edirCaps.canEdit || edirCaps.canRevoke || edirCaps.canDelete) && (
                           <TableCell className="text-right">
                             <div className="flex justify-end gap-1">
+                              {edirCaps.canEdit && (
+                                <Button size="sm" variant="ghost" className="text-muted-foreground hover:text-primary" onClick={() => setEditEdir(edir)} title="Edit">
+                                  <Pencil className="h-4 w-4" />
+                                </Button>
+                              )}
                               {edirCaps.canRevoke && (
                                 <Button size="sm" variant="ghost" className={edir.status === 'SUSPENDED' || edir.status === 'CLOSED' ? 'text-success' : 'text-warning'} onClick={() => onRevoke(edir)} title={edir.status === 'SUSPENDED' || edir.status === 'CLOSED' ? 'Reactivate' : 'Revoke'}>
                                   {edir.status === 'SUSPENDED' || edir.status === 'CLOSED' ? <RotateCcw className="h-4 w-4" /> : <Ban className="h-4 w-4" />}
@@ -620,7 +627,43 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
           </Card>
         </TabsContent>
       </Tabs>
+
+      {editEdir && (
+        <EditEdirDialog
+          edir={editEdir}
+          onClose={() => setEditEdir(null)}
+          onDone={() => { setEditEdir(null); loadEdirs(); }}
+        />
+      )}
     </div>
+  );
+}
+
+function EditEdirDialog({ edir, onClose, onDone }: { edir: EdirItem; onClose: () => void; onDone: () => void }) {
+  const [form, setForm] = useState({ name: edir.name, description: edir.description ?? '' });
+  const [saving, setSaving] = useState(false);
+  const submit = async () => {
+    if (!form.name.trim()) { toast.error('Name is required.'); return; }
+    setSaving(true);
+    const res = await saveEdir({ id: edir.id, name: form.name.trim(), description: form.description.trim() || undefined });
+    setSaving(false);
+    if (res?.success) { toast.success('Edir updated.'); onDone(); }
+    else toast.error(res?.error || 'Failed to save.');
+  };
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent>
+        <DialogHeader><DialogTitle>Edit Edir</DialogTitle></DialogHeader>
+        <div className="space-y-3">
+          <div className="space-y-1.5"><Label className="text-xs">Name</Label><Input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} /></div>
+          <div className="space-y-1.5"><Label className="text-xs">Description</Label><Textarea rows={3} value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} /></div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
+          <Button onClick={submit} disabled={saving}>{saving && <Loader2 className="mr-1 h-4 w-4 animate-spin" />} Save Changes</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
