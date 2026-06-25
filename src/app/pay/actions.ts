@@ -162,11 +162,15 @@ export async function getPaymentToken(amount: number, token: string, memberId: s
     return { status: 'error', message: account.reason || 'This Edir cannot accept payments yet.', transactionId };
   }
 
+  // `companyName` identifies the merchant REGISTERED with NIB (matched against the
+  // Key on NIB's side) — it must stay the registered platform merchant name, NOT
+  // the Edir's display name (NIB returns "Company registration not found" otherwise).
+  // Multi-tenancy is expressed through `accountNo` (the per-Edir destination account).
   const signatureString = [
     `accountNo=${account.accountNumber}`,
     `amount=${amount}`,
     `callBackURL=${NIB_CONFIG.CALLBACK_URL}`,
-    `companyName=${account.companyName}`,
+    `companyName=${NIB_CONFIG.COMPANY_NAME}`,
     `Key=${NIB_CONFIG.NIB_PAYMENT_KEY}`,
     `token=${token}`,
     `transactionId=${transactionId}`,
@@ -200,7 +204,7 @@ export async function getPaymentToken(amount: number, token: string, memberId: s
     accountNo: account.accountNumber,
     amount: String(amount),
     callBackURL: NIB_CONFIG.CALLBACK_URL,
-    companyName: account.companyName,
+    companyName: NIB_CONFIG.COMPANY_NAME,
     token, transactionId, transactionTime, signature,
     // Beneficiary identity travels with the gateway request (informational fields,
     // outside the signed set) so the transaction references the member being paid
