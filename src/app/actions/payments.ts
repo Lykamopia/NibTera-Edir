@@ -141,6 +141,74 @@ function computeOutstandingPenalty(balance: number, monthsBehind: number, settin
   return { amount, rule, overdueDays };
 }
 
+// ─── Per-member payment history (detail view) ────────────────────────────────
+
+const BREAKDOWN_KEYS = ['installment', 'arrears', 'latePenalty', 'interest', 'serviceFees', 'other'] as const;
+
+/** Full payment history + running figures for a single member (tenant-scoped). */
+export async function getMemberPaymentHistory(memberId: string) {
+  const actor = await getActor();
+  await assertPermission(actor, ['view_payments', 'view_payment_log', 'record_payment']);
+
+  const member = await prisma.member.findUnique({
+    where: { id: memberId },
+    include: {
+      paymentStatus: true,
+      edir: { select: { settings: { select: { monthlyFee: true, currency: true } } } },
+    },
+  });
+  if (!member) return null;
+  await assertSameTenant(actor, member.edirId);
+
+  const logs = await prisma.paymentLog.findMany({
+    where: { memberId, edirId: member.edirId },
+    orderBy: { createdAt: 'desc' },
+    take: 200,
+  });
+
+  const parse = (d: string | null) => { try { return d ? JSON.parse(d) : {}; } catch { return {}; } };
+  const payments = logs.map(l => {
+    const meta = parse(l.description);
+    const cov = meta.coverage ?? null;
+    return {
+      id: l.id,
+      transactionId: l.transactionId,
+      amount: Number(l.amount),
+      method: l.method,
+      status: l.status,
+      verificationType: l.verificationType,
+      receiptUrl: l.receiptUrl,
+      createdAt: l.createdAt,
+      coverage: cov ? { months: Number(cov.months ?? 0), from: cov.from ?? null, to: cov.to ?? null } : null,
+      breakdown: BREAKDOWN_KEYS.map(k => ({ key: k, value: Number(meta[k] ?? 0) })).filter(b => b.value > 0),
+      note: meta.failureReason ?? null,
+    };
+  });
+
+  const settled = (s: string) => s === 'SUCCESS' || s === 'PARTIAL';
+  const byStatus = logs.reduce<Record<string, number>>((acc, l) => { acc[l.status] = (acc[l.status] ?? 0) + 1; return acc; }, {});
+
+  return {
+    member: {
+      id: member.id, name: member.name, memberCode: member.memberId,
+      phone: member.phone, status: member.status, joinDate: member.joinDate,
+    },
+    summary: {
+      balance: Number(member.paymentStatus?.balance ?? 0),
+      totalPaid: Number(member.paymentStatus?.totalPaid ?? 0),
+      totalSettled: logs.filter(l => settled(l.status)).reduce((s, l) => s + Number(l.amount), 0),
+      monthsPaid: member.paymentStatus?.monthsPaid ?? 0,
+      lastPayment: member.paymentStatus?.lastPayment ?? null,
+      contributionStatus: member.paymentStatus?.status ?? 'PENDING',
+      monthlyFee: Number(member.edir?.settings?.monthlyFee ?? 0),
+      currency: member.edir?.settings?.currency ?? 'ETB',
+      transactionCount: logs.length,
+    },
+    byStatus,
+    payments,
+  };
+}
+
 /** Tenant-wide payment KPIs for the Payments dashboard summary cards. */
 export async function getPaymentsSummary(range?: DateRangeParam) {
   const actor = await getActor();
