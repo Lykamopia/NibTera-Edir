@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -8,7 +9,7 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
-import { Loader2, Plus, Pencil } from 'lucide-react';
+import { Loader2, Plus, Pencil, Eye } from 'lucide-react';
 import { getEdirs, saveEdir, getEdirAdminCapabilities } from '@/app/actions/admin';
 
 type Edir = { id: string; name: string; description: string | null; status?: string; members: number; users: number };
@@ -20,6 +21,7 @@ export default function EdirsClient() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [dialog, setDialog] = useState<{ mode: 'create' | 'edit'; edir?: Edir } | null>(null);
+  const router = useRouter();
 
   const load = () => {
     setLoading(true); setError(false);
@@ -43,19 +45,22 @@ export default function EdirsClient() {
             <div className="flex h-40 flex-col items-center justify-center gap-2"><p className="text-sm text-muted-foreground">Failed to load.</p><Button variant="outline" size="sm" onClick={load}>Retry</Button></div>
           ) : (
             <Table>
-              <TableHeader><TableRow><TableHead>Name</TableHead><TableHead>Description</TableHead><TableHead className="text-right">Members</TableHead><TableHead className="text-right">Users</TableHead>{caps.canEdit && <TableHead className="w-12"></TableHead>}</TableRow></TableHeader>
+              <TableHeader><TableRow><TableHead>Name</TableHead><TableHead>Description</TableHead><TableHead className="text-right">Members</TableHead><TableHead className="text-right">Users</TableHead><TableHead className="w-24 text-right">Actions</TableHead></TableRow></TableHeader>
               <TableBody>
                 {edirs.map(e => (
-                  <TableRow key={e.id}>
+                  <TableRow key={e.id} className="cursor-pointer" onClick={() => router.push(`/dashboard/edirs/${e.id}`)}>
                     <TableCell className="font-medium">{e.name}</TableCell>
                     <TableCell className="text-muted-foreground">{e.description || '—'}</TableCell>
                     <TableCell className="text-right">{e.members}</TableCell>
                     <TableCell className="text-right">{e.users}</TableCell>
-                    {caps.canEdit && (
-                      <TableCell className="text-right">
-                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setDialog({ mode: 'edit', edir: e })} aria-label={`Edit ${e.name}`}><Pencil className="h-4 w-4" /></Button>
-                      </TableCell>
-                    )}
+                    <TableCell className="text-right" onClick={ev => ev.stopPropagation()}>
+                      <div className="flex justify-end gap-1">
+                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => router.push(`/dashboard/edirs/${e.id}`)} aria-label={`View ${e.name}`} title="View details"><Eye className="h-4 w-4" /></Button>
+                        {caps.canEdit && (
+                          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setDialog({ mode: 'edit', edir: e })} aria-label={`Edit ${e.name}`}><Pencil className="h-4 w-4" /></Button>
+                        )}
+                      </div>
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>

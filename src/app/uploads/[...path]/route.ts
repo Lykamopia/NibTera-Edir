@@ -123,7 +123,23 @@ export async function GET(req: NextRequest, { params }: { params: { path: string
         const dmsSameTenant = !!dmsDoc?.edirId && dmsDoc.edirId === userEdirId;
         const canViewDms = perms.includes('view_documents') || perms.includes('review_document') || perms.includes('approve_document');
         const dmsVisibilityOk = dmsDoc?.visibility !== 'committee' || perms.includes('view_committee_oversight') || perms.includes('view_documents');
-        const dmsAllowed = isOwnDms || (canViewDms && dmsSameTenant && dmsVisibilityOk);
+
+        // Oversight roles (platform / district / branch) may view documents for Edirs
+        // within their scope — this powers the Edir Details page document previews for
+        // non-Edir-scoped admins. Scope is checked against the document's Edir.
+        let dmsOversight = false;
+        if (dmsDoc?.edirId && !dmsSameTenant && !isSuper) {
+            const uBranch = (user as any).branchId as string | null;
+            const uDistrict = (user as any).districtId as string | null;
+            if (perms.includes('manage_edirs') || perms.includes('view_edir_reports')) {
+                dmsOversight = true; // platform-level oversight spans all Edirs
+            } else if ((uBranch || uDistrict) && (canViewDms || perms.includes('view_branches') || perms.includes('view_districts') || perms.includes('manage_branches') || perms.includes('manage_districts'))) {
+                const de = await prisma.edir.findUnique({ where: { id: dmsDoc.edirId }, select: { branchId: true, branch: { select: { districtId: true } } } });
+                if (uBranch && de?.branchId === uBranch) dmsOversight = true;
+                else if (uDistrict && de?.branch?.districtId === uDistrict) dmsOversight = true;
+            }
+        }
+        const dmsAllowed = (isOwnDms || (canViewDms && dmsSameTenant) || dmsOversight) && (isOwnDms || dmsVisibilityOk);
 
         if (isSuper || isOwnRequestDoc || (canViewMember && memberSameTenant) || dmsAllowed) isAuthorized = true;
     }

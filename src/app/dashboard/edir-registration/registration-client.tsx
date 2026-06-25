@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -117,9 +118,10 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
   const [activeTab, setActiveTab] = useState('all-edirs');
   const [edirCaps, setEdirCaps] = useState<EdirCaps>({ canCreate: false, canEdit: false, canRevoke: false, canDelete: false });
   const [editEdir, setEditEdir] = useState<EdirItem | null>(null);
-  const [viewEdir, setViewEdir] = useState<EdirItem | null>(null);
   const [edirsRange, setEdirsRange] = useState<DateRangeValue>(ALL_TIME);
+  const router = useRouter();
   const confirm = useConfirm();
+  const openEdir = (id: string) => router.push(`/dashboard/edirs/${id}`);
 
   const [formData, setFormData] = useState<EdirRegistrationInput>({
     name: '',
@@ -333,7 +335,7 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
                   </TableHeader>
                   <TableBody>
                     {edirsPage.pageItems.map(edir => (
-                      <TableRow key={edir.id} className="cursor-pointer" onClick={() => setViewEdir(edir)}>
+                      <TableRow key={edir.id} className="cursor-pointer" onClick={() => openEdir(edir.id)}>
                         <TableCell className="font-medium">{edir.name}</TableCell>
                         <TableCell className="max-w-md truncate text-muted-foreground">{edir.description || '—'}</TableCell>
                         <TableCell><StatusBadge status={edir.status} /></TableCell>
@@ -342,7 +344,7 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
                         <TableCell className="text-right tabular-nums">{edir.users}</TableCell>
                         <TableCell className="text-right" onClick={e => e.stopPropagation()}>
                           <div className="flex justify-end gap-1">
-                            <Button size="sm" variant="ghost" className="text-muted-foreground hover:text-primary" onClick={() => setViewEdir(edir)} title="View details">
+                            <Button size="sm" variant="ghost" className="text-muted-foreground hover:text-primary" onClick={() => openEdir(edir.id)} title="View details">
                               <Eye className="h-4 w-4" />
                             </Button>
                             {edirCaps.canEdit && (
@@ -654,15 +656,6 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
         </TabsContent>
       </Tabs>
 
-      {viewEdir && (
-        <ViewEdirDialog
-          edir={viewEdir}
-          onClose={() => setViewEdir(null)}
-          canEdit={edirCaps.canEdit}
-          onEdit={() => { const e = viewEdir; setViewEdir(null); setEditEdir(e); }}
-        />
-      )}
-
       {editEdir && (
         <EditEdirDialog
           edir={editEdir}
@@ -672,46 +665,6 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
         />
       )}
     </div>
-  );
-}
-
-function ViewEdirDialog({ edir, onClose, canEdit, onEdit }: { edir: EdirItem; onClose: () => void; canEdit: boolean; onEdit: () => void }) {
-  return (
-    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="max-h-[88vh] max-w-2xl overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle className="flex flex-wrap items-center gap-2">{edir.name} <StatusBadge status={edir.status} /></DialogTitle>
-        </DialogHeader>
-        <div className="space-y-5">
-          <ReviewSection title="Edir Information" rows={[
-            ['Edir Name', edir.name],
-            ['Branch', edir.branchName ? `${edir.branchName}${edir.branchCode ? ` (${edir.branchCode})` : ''}` : '—'],
-            ['District', edir.districtName || '—'],
-            ['Account Number', edir.accountNumber || '—'],
-            ['Description', edir.description || '—'],
-          ]} />
-          <ReviewSection title="Chairperson / Contact" rows={[
-            ['Name', edir.contactPersonName || '—'],
-            ['Mobile', edir.contactMobile || '—'],
-            ['Email', edir.contactEmail || '—'],
-            ['Contact Address', edir.contactAddress || '—'],
-          ]} />
-          <ReviewSection title="Address & Document" rows={[
-            ['Edir Address', edir.address || '—'],
-            ['Agreement', edir.agreementDocUrl || 'No document uploaded'],
-          ]} />
-          <ReviewSection title="Statistics" rows={[
-            ['Members', String(edir.members)],
-            ['Linked Users', String(edir.users)],
-            ['Registered', new Date(edir.createdAt).toLocaleDateString()],
-          ]} />
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Close</Button>
-          {canEdit && <Button onClick={onEdit} className="gap-1"><Pencil className="h-4 w-4" /> Edit</Button>}
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   );
 }
 

@@ -29,6 +29,9 @@ const ROUTE_PERMISSIONS: { path: string; perms: string[] }[] = [
   { path: '/dashboard/system/branches', perms: ['view_branches', 'manage_branches', 'create_branch', 'edit_branch', 'delete_branch', 'import_branches', 'manage_districts', 'super_admin'] },
   { path: '/dashboard/system/associations', perms: ['manage_associations', 'manage_edirs', 'super_admin'] },
   { path: '/dashboard/edir-registration', perms: ['register_edir', 'approve_edir_registration', 'manage_edirs', 'super_admin'] },
+  // Edir profile (details) page — reachable by oversight roles and Edir admins; the
+  // getEdirProfile action enforces precise tenant scope + per-tab visibility.
+  { path: '/dashboard/edirs', perms: ['manage_edirs', 'view_edir_reports', 'approve_edir_registration', 'register_edir', 'view_districts', 'manage_districts', 'view_branches', 'manage_branches', 'manage_edir_settings', 'view_members', 'super_admin'] },
 ].sort((a, b) => b.path.length - a.path.length);
 
 // Trusted origins permitted to embed the framable (public pay/portal) routes.
