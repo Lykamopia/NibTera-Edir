@@ -145,6 +145,17 @@ export function ensureApprovalModules() {
           throw new Error(`Unknown document action: ${payload.action}`);
       }
     },
+    // On rejection: a rejected upload becomes REJECTED; a rejected change to an
+    // already-approved document simply drops the proposed action.
+    async onReject(payload: { documentId: string; action: string }, { tx, actor, comment }) {
+      const doc = await tx.dmsDocument.findUnique({ where: { id: payload.documentId } });
+      if (!doc) return;
+      const base = { reviewedById: actor.id, reviewedAt: new Date(), rejectionReason: comment ?? null, pendingAction: null, pendingPayload: Prisma.DbNull };
+      await tx.dmsDocument.update({
+        where: { id: doc.id },
+        data: payload.action === 'upload' ? { ...base, status: 'REJECTED' as const } : base,
+      });
+    },
   });
 
   // ── Rule Change (apply governance-setting or bylaw change + log the diff) ─────

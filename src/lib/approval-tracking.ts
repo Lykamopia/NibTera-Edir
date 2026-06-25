@@ -56,10 +56,16 @@ export async function canUserApprove(
 /**
  * Get approval history with all events and comments
  */
+/** ApprovalEvent.type → the coarse status the history UI displays. */
+const EVENT_STATUS: Record<string, ApprovalHistory['status']> = {
+  SUBMITTED: 'PENDING', COMMENTED: 'PENDING', RESUBMITTED: 'PENDING',
+  APPROVED: 'APPROVED', EXECUTED: 'APPROVED', REJECTED: 'REJECTED', RETURNED: 'RETURNED',
+};
+
 export async function getApprovalHistory(requestId: string): Promise<ApprovalHistory[]> {
   try {
     const events = await prisma.approvalEvent.findMany({
-      where: { approvalRequestId: requestId },
+      where: { requestId },
       include: {
         actor: { select: { id: true, name: true, email: true } },
       },
@@ -68,14 +74,14 @@ export async function getApprovalHistory(requestId: string): Promise<ApprovalHis
 
     return events.map((event) => ({
       id: event.id,
-      requestId: event.approvalRequestId,
-      action: event.action as any,
+      requestId: event.requestId,
+      action: event.type as any,
       actorId: event.actor.id,
       actorName: event.actor.name || 'System',
       actorEmail: event.actor.email || '',
       comment: event.comment,
       timestamp: event.createdAt,
-      status: event.status as any,
+      status: EVENT_STATUS[event.type] ?? 'PENDING',
     }));
   } catch (error) {
     console.error('Failed to get approval history:', error);
@@ -89,17 +95,15 @@ export async function getApprovalHistory(requestId: string): Promise<ApprovalHis
 export async function createApprovalEvent(
   requestId: string,
   userId: string,
-  action: 'SUBMITTED' | 'APPROVED' | 'REJECTED' | 'RETURNED' | 'RESUBMITTED',
-  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'RETURNED',
+  type: 'SUBMITTED' | 'COMMENTED' | 'APPROVED' | 'EXECUTED' | 'REJECTED' | 'RETURNED' | 'RESUBMITTED',
   comment?: string
 ) {
   try {
     const event = await prisma.approvalEvent.create({
       data: {
-        approvalRequestId: requestId,
+        requestId,
         actorId: userId,
-        action,
-        status,
+        type,
         comment: comment || null,
       },
       include: {
@@ -152,66 +156,6 @@ export async function getApprovalStats(
   } catch (error) {
     console.error('Failed to get approval stats:', error);
     return { success: false, error: 'Failed to load statistics' };
-  }
-}
-
-/**
- * Notify relevant users of approval status changes
- */
-export async function notifyApprovalStatusChange(
-  requestId: string,
-  moduleType: ApprovalModule,
-  newStatus: 'APPROVED' | 'REJECTED' | 'RETURNED',
-  notificationMessage: string
-) {
-  try {
-    const request = await prisma.approvalRequest.findUnique({
-      where: { id: requestId },
-      include: {
-        edir: { select: { id: true } },
-        maker: { select: { id: true, email: true, name: true } },
-      },
-    });
-
-    if (!request) {
-      return { success: false, error: 'Request not found' };
-    }
-
-    // Notify the maker (creator)
-    if (request.maker) {
-      await prisma.notification.create({
-        data: {
-          userId: request.maker.id,
-          type: 'approval',
-          priority: newStatus === 'APPROVED' ? 'normal' : 'high',
-          title: `${moduleType} ${newStatus}`,
-          body: notificationMessage,
-          linkUrl: `/dashboard/approvals?id=${requestId}`,
-          edirId: request.edir.id,
-        },
-      });
-    }
-
-    // For rejected/returned, also notify checkers for them to be aware
-    if ((newStatus === 'REJECTED' || newStatus === 'RETURNED') && request.checker) {
-      await prisma.notification.create({
-        data: {
-          userId: request.checker.id,
-          type: 'approval',
-          priority: 'normal',
-          title: `${moduleType} Status Update`,
-          body: `Your ${newStatus.toLowerCase()} action on ${request.edir.id} has been recorded.`,
-          linkUrl: `/dashboard/approvals?id=${requestId}`,
-          edirId: request.edir.id,
-        },
-      });
-    }
-
-    return { success: true };
-  } catch (error) {
-    console.error('Failed to send notifications:', error);
-    // Don't fail the whole operation if notification fails
-    return { success: true };
   }
 }
 

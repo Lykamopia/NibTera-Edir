@@ -23,11 +23,15 @@ import { createNotification, createNotifications } from '@/lib/notification-help
 /** A downstream executor runs inside the approval transaction. */
 export type ModuleExecutor = (
   payload: any,
-  ctx: { tx: Prisma.TransactionClient; request: { id: string; edirId: string; targetId: string | null; targetType: string | null }; actor: Actor },
+  ctx: { tx: Prisma.TransactionClient; request: { id: string; edirId: string; targetId: string | null; targetType: string | null }; actor: Actor; comment?: string },
 ) => Promise<void>;
 
 interface ModuleDef {
+  /** Runs on approval — applies the proposed change. */
   execute: ModuleExecutor;
+  /** Optional: runs on rejection — undo/clean up the pending change (e.g. mark a
+   *  pending document REJECTED). `ctx.comment` carries the rejection reason. */
+  onReject?: ModuleExecutor;
 }
 
 // Per-module downstream actions. Modules register here; the checker permission is
@@ -182,17 +186,29 @@ export async function rejectRequest(requestId: string, comment?: string): Promis
   const request = await loadRequest(requestId);
   assertCanCheck(actor, request);
 
-  await prisma.approvalRequest.update({
-    where: { id: request.id },
-    data: {
-      status: 'REJECTED',
-      checkerId: actor.id,
-      events: { create: { type: 'REJECTED', actorId: actor.id, comment: comment ?? null } },
-    },
-  });
-  await writeAudit({
-    edirId: request.edirId, userId: actor.id, action: 'APPROVAL_REJECTED',
-    targetType: 'ApprovalRequest', targetId: request.id, details: request.title,
+  const def = MODULE_REGISTRY[request.module];
+
+  await prisma.$transaction(async (tx) => {
+    if (def?.onReject) {
+      await def.onReject(request.payload, {
+        tx,
+        request: { id: request.id, edirId: request.edirId, targetId: request.targetId, targetType: request.targetType },
+        actor,
+        comment,
+      });
+    }
+    await tx.approvalRequest.update({
+      where: { id: request.id },
+      data: {
+        status: 'REJECTED',
+        checkerId: actor.id,
+        events: { create: { type: 'REJECTED', actorId: actor.id, comment: comment ?? null } },
+      },
+    });
+    await writeAudit({
+      edirId: request.edirId, userId: actor.id, action: 'APPROVAL_REJECTED',
+      targetType: 'ApprovalRequest', targetId: request.id, details: request.title,
+    }, tx);
   });
   await createNotification({
     userId: request.makerId, type: 'approval', priority: 'high',

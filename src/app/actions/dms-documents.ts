@@ -4,8 +4,7 @@ import { z } from 'zod';
 import prisma from '@/lib/prisma';
 import { Prisma } from '@prisma/client';
 import { getActor, assertPermission, resolveEdirId, tenantWhere, tenantEdirIds, actorHasPermission } from '@/lib/tenant-scope';
-import { submitForApproval } from '@/lib/approval-engine';
-import { approveApprovalRequest, rejectApprovalRequest } from '@/app/actions/approval-management';
+import { submitForApproval, approveRequest, rejectRequest } from '@/lib/approval-engine';
 import '@/lib/approval-modules';
 import { writeAudit } from '@/lib/audit';
 import { revalidatePath } from 'next/cache';
@@ -130,40 +129,34 @@ export async function approveDmsDocument(documentId: string, comment?: string) {
       orderBy: { createdAt: 'desc' }, select: { id: true },
     });
     if (!req) return { success: false as const, error: 'No pending action to approve.' };
-    const res = await approveApprovalRequest(req.id, comment);
+    // Use the generic engine — it runs the DOCUMENT_ACTION executor (flips the
+    // document to APPROVED) in one transaction with the correct schema fields.
+    await approveRequest(req.id, comment);
     revalidatePath('/dashboard/documents');
-    return res?.success ? { success: true as const } : { success: false as const, error: (res as any)?.error || 'Approval failed.' };
+    revalidatePath('/dashboard/approvals');
+    return { success: true as const };
   } catch (error) {
     return failure(error);
   }
 }
 
-/** Checker rejects the open action. Also updates the document (the generic reject
- *  flow doesn't run the executor): a rejected upload → REJECTED; a rejected change
- *  → the proposed action is dropped and the document keeps its prior state. */
+/** Checker rejects the document's open action. The engine's DOCUMENT_ACTION
+ *  onReject hook reconciles the document (rejected upload → REJECTED; rejected
+ *  change → drop the proposed action), so this just routes through the engine. */
 export async function rejectDmsDocument(documentId: string, reason: string) {
   try {
     const actor = await getActor();
     await assertPermission(actor, ['reject_document', 'approve_document', 'super_admin']);
     if (!reason?.trim()) return { success: false as const, error: 'A rejection reason is required.' };
-    const doc = await prisma.dmsDocument.findUnique({ where: { id: documentId } });
-    if (!doc) return { success: false as const, error: 'Document not found.' };
     const req = await prisma.approvalRequest.findFirst({
       where: { module: 'DOCUMENT_ACTION', targetId: documentId, status: { in: ['PENDING', 'RETURNED'] } },
       orderBy: { createdAt: 'desc' }, select: { id: true },
     });
     if (!req) return { success: false as const, error: 'No pending action to reject.' };
 
-    const res = await rejectApprovalRequest(req.id, reason);
-    if (!res?.success) return { success: false as const, error: (res as any)?.error || 'Reject failed.' };
-
-    await prisma.dmsDocument.update({
-      where: { id: doc.id },
-      data: doc.pendingAction === 'upload'
-        ? { status: 'REJECTED', rejectionReason: reason, reviewedById: actor.id, reviewedAt: new Date(), pendingAction: null, pendingPayload: Prisma.DbNull }
-        : { rejectionReason: reason, reviewedById: actor.id, reviewedAt: new Date(), pendingAction: null, pendingPayload: Prisma.DbNull },
-    });
+    await rejectRequest(req.id, reason);
     revalidatePath('/dashboard/documents');
+    revalidatePath('/dashboard/approvals');
     return { success: true as const };
   } catch (error) {
     return failure(error);
@@ -177,6 +170,7 @@ export async function listDmsDocuments(params: { query?: string; category?: stri
     // Keep this in sync with the /dashboard/documents route gate in middleware.ts.
     await assertPermission(actor, ['view_documents', 'upload_document', 'approve_document', 'review_document', 'super_admin']);
     const isStaff = actor.isSuperAdmin || actorHasPermission(actor, ['view_documents', 'upload_document', 'approve_document', 'review_document']);
+    const canUpload = actor.isSuperAdmin || actorHasPermission(actor, 'upload_document');
 
     const where: Prisma.DmsDocumentWhereInput = { ...(tenantWhere(actor) as any), ...dateWhere('createdAt', params.range) };
     if (params.category && params.category !== 'all') where.category = params.category;
@@ -215,6 +209,7 @@ export async function listDmsDocuments(params: { query?: string; category?: stri
     return {
       success: true as const,
       isStaff,
+      canUpload,
       categories,
       categoryCounts,
       tags: allTags,

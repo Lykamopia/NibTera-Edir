@@ -16,6 +16,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import {
   Loader2, Search, FolderArchive, FileText, FileImage, FileType2, Upload, Eye, Folder, Files,
   CheckCircle2, XCircle, Clock, Archive, Trash2, Share2, Tag, Shield, Download, History, FolderOpen, X,
+  FileSpreadsheet, FileArchive, FileCode,
 } from 'lucide-react';
 import { PageHeader, LoadingState, ErrorState, EmptyState, StatCard } from '@/components/ui/states';
 import { DateRangeFilter, ALL_TIME, toParam, type DateRangeValue } from '@/components/ui/date-range-filter';
@@ -34,6 +35,29 @@ const STATUS: Record<string, { label: string; cls: string; icon: any }> = {
   ARCHIVED: { label: 'Archived', cls: 'border-slate-300 bg-slate-100 text-slate-600', icon: Archive },
 };
 const VIS_LABEL: Record<string, string> = { staff: 'Staff only', committee: 'Committee', all: 'All members' };
+
+/** Resolve a file's extension into a label, icon, and accent for non-image previews. */
+function fileFormat(fileName?: string, fileType?: string) {
+  const ext = (fileName?.split('.').pop() || '').toLowerCase();
+  const map: Record<string, { label: string; Icon: any; cls: string }> = {
+    pdf: { label: 'PDF', Icon: FileType2, cls: 'text-red-500' },
+    doc: { label: 'DOC', Icon: FileText, cls: 'text-blue-600' },
+    docx: { label: 'DOCX', Icon: FileText, cls: 'text-blue-600' },
+    xls: { label: 'XLS', Icon: FileSpreadsheet, cls: 'text-emerald-600' },
+    xlsx: { label: 'XLSX', Icon: FileSpreadsheet, cls: 'text-emerald-600' },
+    csv: { label: 'CSV', Icon: FileSpreadsheet, cls: 'text-emerald-600' },
+    ppt: { label: 'PPT', Icon: FileText, cls: 'text-orange-500' },
+    pptx: { label: 'PPTX', Icon: FileText, cls: 'text-orange-500' },
+    zip: { label: 'ZIP', Icon: FileArchive, cls: 'text-amber-600' },
+    rar: { label: 'RAR', Icon: FileArchive, cls: 'text-amber-600' },
+    txt: { label: 'TXT', Icon: FileText, cls: 'text-slate-500' },
+    json: { label: 'JSON', Icon: FileCode, cls: 'text-slate-500' },
+  };
+  if (map[ext]) return map[ext];
+  if (fileType === 'pdf') return map.pdf;
+  return { label: ext ? ext.toUpperCase() : 'FILE', Icon: FileText, cls: 'text-muted-foreground' };
+}
+
 const TypeIcon = ({ t, className }: { t: string; className?: string }) =>
   t === 'image' ? <FileImage className={className} /> : t === 'pdf' ? <FileType2 className={className} /> : <FileText className={className} />;
 const fmt = (d: any) => (d ? new Date(d).toLocaleDateString(undefined, { dateStyle: 'medium' }) : '—');
@@ -76,6 +100,7 @@ export default function DocumentsClient() {
 
   const items: any[] = data?.items ?? [];
   const isStaff = data?.isStaff ?? false;
+  const canUpload = data?.canUpload ?? false;
 
   const toggleSel = (id: string) => setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const allSel = items.length > 0 && items.every(i => selected.has(i.id));
@@ -96,7 +121,7 @@ export default function DocumentsClient() {
         icon={FolderArchive}
         title="Documents"
         description="Enterprise document repository with a maker–checker workflow — every action stays pending until a checker approves."
-        actions={isStaff ? <Button onClick={() => setUploadOpen(true)} className="gap-2"><Upload className="h-4 w-4" /> Upload Document</Button> : undefined}
+        actions={canUpload ? <Button onClick={() => setUploadOpen(true)} className="gap-2"><Upload className="h-4 w-4" /> Upload Document</Button> : undefined}
       />
 
       {/* Stats */}
@@ -187,8 +212,8 @@ export default function DocumentsClient() {
                 : error ? <ErrorState onRetry={load} />
                 : items.length === 0 ? (
                   <EmptyState icon={FolderArchive} title="No documents found"
-                    description={isStaff ? 'Upload a document to get started — it stays pending until a checker approves.' : 'Approved documents shared with members will appear here.'}
-                    action={isStaff ? <Button variant="outline" className="gap-2" onClick={() => setUploadOpen(true)}><Upload className="h-4 w-4" /> Upload</Button> : undefined} />
+                    description={canUpload ? 'Upload a document to get started — it stays pending until a checker approves.' : 'Approved documents shared with members will appear here.'}
+                    action={canUpload ? <Button variant="outline" className="gap-2" onClick={() => setUploadOpen(true)}><Upload className="h-4 w-4" /> Upload</Button> : undefined} />
                 ) : (
                   <Table>
                     <TableHeader>
@@ -363,7 +388,18 @@ function DetailDialog({ id, isStaff, onClose, onChanged }: { id: string; isStaff
           {/* Preview + metadata */}
           <div className="space-y-3">
             <div className="flex min-h-48 items-center justify-center overflow-hidden rounded-lg border bg-muted/30">
-              {isImage ? <img src={doc.fileUrl} alt={doc.fileName} className="max-h-72 w-full object-contain" /> : <div className="flex flex-col items-center gap-2 p-8 text-muted-foreground"><TypeIcon t={doc.fileType} className="h-12 w-12" /><span className="text-sm">{doc.fileName}</span></div>}
+              {isImage ? (
+                <img src={doc.fileUrl} alt={doc.fileName} className="max-h-72 w-full object-contain" />
+              ) : (() => {
+                const f = fileFormat(doc.fileName, doc.fileType);
+                return (
+                  <div className="flex flex-col items-center gap-2 p-8 text-center">
+                    <f.Icon className={cn('h-16 w-16', f.cls)} />
+                    <span className={cn('rounded-md border bg-background px-2 py-0.5 text-xs font-semibold', f.cls)}>{f.label}</span>
+                    <span className="max-w-[16rem] truncate text-sm text-muted-foreground">{doc.fileName}</span>
+                  </div>
+                );
+              })()}
             </div>
             <div className="flex flex-wrap gap-2">
               <a href={doc.fileUrl} target="_blank" rel="noopener noreferrer"><Button variant="outline" size="sm"><Download className="mr-1 h-4 w-4" /> Open file</Button></a>
