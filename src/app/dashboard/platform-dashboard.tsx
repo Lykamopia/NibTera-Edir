@@ -14,6 +14,7 @@ import {
   TrendingUp, TrendingDown, Gauge, AlertTriangle, ShieldAlert, Trophy, Network,
 } from 'lucide-react';
 import { LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
+import { DateRangeFilter, ALL_TIME, toParam, type DateRangeValue } from '@/components/ui/date-range-filter';
 import { getPlatformDashboard } from '@/app/actions/dashboard';
 
 const money = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 0 });
@@ -42,8 +43,9 @@ export default function PlatformDashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [range, setRange] = useState(6);
+  const [dateRange, setDateRange] = useState<DateRangeValue>(ALL_TIME);
 
-  const load = useCallback(() => { setLoading(true); setError(false); getPlatformDashboard().then(setData).catch(() => setError(true)).finally(() => setLoading(false)); }, []);
+  const load = useCallback(() => { setLoading(true); setError(false); getPlatformDashboard(toParam(dateRange)).then(setData).catch(() => setError(true)).finally(() => setLoading(false)); }, [dateRange]);
   useEffect(() => { load(); }, [load]);
 
   const trend = useMemo(() => (data ? data.trend.slice(-range) : []), [data, range]);
@@ -54,7 +56,7 @@ export default function PlatformDashboard() {
     return Math.round(((cur - prev) / prev) * 100);
   }, [trend]);
 
-  if (loading) return <LoadingState label="Building platform overview…" className="min-h-[60vh]" />;
+  if (loading && !data) return <LoadingState label="Building platform overview…" className="min-h-[60vh]" />;
   if (error || !data) return <ErrorState variant="page" onRetry={load} showContact />;
 
   const k = data.kpis;
@@ -67,8 +69,9 @@ export default function PlatformDashboard() {
           <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary/10 text-primary"><Gauge className="h-5 w-5" /></span>
           <div><h1 className="text-2xl font-bold tracking-tight">Platform Overview</h1><p className="text-sm text-muted-foreground">Multi-tenant executive dashboard · {k.totalEdirs} Edirs</p></div>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1 rounded-lg border p-0.5">
+        <div className="flex flex-wrap items-center gap-2">
+          <DateRangeFilter value={dateRange} onChange={setDateRange} align="end" />
+          <div className="flex items-center gap-1 rounded-lg border p-0.5" title="Trend chart window">
             {RANGES.map(r => <button key={r.n} onClick={() => setRange(r.n)} className={`rounded-md px-2.5 py-1 text-xs font-medium ${range === r.n ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}`}>{r.label}</button>)}
           </div>
           <Link href="/dashboard/system/associations"><Button size="sm" variant="outline"><Network className="mr-1.5 h-4 w-4" /> Associations</Button></Link>

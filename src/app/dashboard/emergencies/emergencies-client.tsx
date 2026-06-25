@@ -22,7 +22,7 @@ import { useConfirm, usePrompt } from '@/components/ui/confirm-provider';
 import { PageHeader, StatCard, LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
 import { ReceiptUpload, type ReceiptFile } from '@/components/ui/receipt-upload';
 import { FileText, X } from 'lucide-react';
-import { DateRangeFilter, ALL_TIME, inDateRange, type DateRangeValue } from '@/components/ui/date-range-filter';
+import { DateRangeFilter, ALL_TIME, toParam, type DateRangeValue } from '@/components/ui/date-range-filter';
 
 const STATUS_VARIANT: Record<string, { label: string; cls: string }> = {
   REPORTED: { label: 'Reported', cls: 'border-info/20 bg-info/10 text-info' },
@@ -34,12 +34,14 @@ const STATUS_VARIANT: Record<string, { label: string; cls: string }> = {
 
 export default function EmergenciesClient() {
   const [summary, setSummary] = useState<any | null>(null);
-  useEffect(() => { getEmergencySummary().then(setSummary).catch(() => {}); }, []);
+  const [dateRange, setDateRange] = useState<DateRangeValue>(ALL_TIME);
+  useEffect(() => { getEmergencySummary(toParam(dateRange)).then(setSummary).catch(() => {}); }, [dateRange]);
   const money = (n: number) => `${(n || 0).toLocaleString()} ${summary?.currency ?? 'ETB'}`;
 
   return (
     <div className="space-y-5">
-      <PageHeader title="Emergencies" description="Report claims, route approvals and disbursements through Maker–Checker, and configure payout types." icon={Siren} />
+      <PageHeader title="Emergencies" description="Report claims, route approvals and disbursements through Maker–Checker, and configure payout types." icon={Siren}
+        actions={<DateRangeFilter value={dateRange} onChange={setDateRange} align="end" />} />
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard title="Total Claims" value={summary?.total ?? '—'} icon={Siren} accent="primary" hint={summary ? `${summary.reported} awaiting review` : undefined} />
@@ -53,7 +55,7 @@ export default function EmergenciesClient() {
           <TabsTrigger value="claims"><Siren className="mr-1.5 h-4 w-4" /> Claims</TabsTrigger>
           <TabsTrigger value="types"><ShieldCheck className="mr-1.5 h-4 w-4" /> Payout Types</TabsTrigger>
         </TabsList>
-        <TabsContent value="claims" className="mt-4"><ClaimsTab /></TabsContent>
+        <TabsContent value="claims" className="mt-4"><ClaimsTab dateRange={dateRange} /></TabsContent>
         <TabsContent value="types" className="mt-4"><TypesTab /></TabsContent>
       </Tabs>
     </div>
@@ -62,23 +64,24 @@ export default function EmergenciesClient() {
 
 // ─── Claims ──────────────────────────────────────────────────────────────────
 
-function ClaimsTab() {
+function ClaimsTab({ dateRange }: { dateRange: DateRangeValue }) {
   const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState('all');
-  const [dateRange, setDateRange] = useState<DateRangeValue>(ALL_TIME);
   const [sort, setSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'createdAt', dir: 'desc' });
   const [reporting, setReporting] = useState(false);
   const [submitTarget, setSubmitTarget] = useState<any | null>(null);
   const [disburseTarget, setDisburseTarget] = useState<any | null>(null);
   const prompt = usePrompt();
+  const rangeKey = `${dateRange.preset}:${dateRange.from?.toISOString() ?? ''}:${dateRange.to?.toISOString() ?? ''}`;
 
   const load = useCallback(() => {
     setLoading(true); setError(false);
-    getEmergencyClaims({ query, status }).then(setItems).catch(() => setError(true)).finally(() => setLoading(false));
-  }, [query, status]);
+    getEmergencyClaims({ query, status, range: toParam(dateRange) }).then(setItems).catch(() => setError(true)).finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, status, rangeKey]);
   useEffect(() => { load(); }, [load]);
 
   const onReject = async (c: any) => {
@@ -91,8 +94,7 @@ function ClaimsTab() {
 
   const toggleSort = (key: string) => setSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' });
   const SortIcon = ({ k }: { k: string }) => sort.key !== k ? <ArrowUpDown className="h-3.5 w-3.5 opacity-40" /> : sort.dir === 'asc' ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />;
-  const dateFiltered = items.filter(c => inDateRange(c.createdAt, dateRange));
-  const sorted = [...dateFiltered].sort((a, b) => {
+  const sorted = [...items].sort((a, b) => {
     let cmp = 0;
     if (sort.key === 'member') cmp = (a.memberName || '').localeCompare(b.memberName || '');
     else if (sort.key === 'type') cmp = (a.typeName || '').localeCompare(b.typeName || '');
@@ -127,7 +129,6 @@ function ClaimsTab() {
             <SelectItem value="REJECTED">Rejected</SelectItem>
           </SelectContent>
         </Select>
-        <DateRangeFilter value={dateRange} onChange={setDateRange} className="w-44" />
         <Button variant="outline" onClick={exportCsv}><Download className="mr-1.5 h-4 w-4" /> Export</Button>
         <div className="ml-auto">
           <Button onClick={() => setReporting(true)}><Plus className="h-4 w-4 mr-1" /> Report Claim</Button>

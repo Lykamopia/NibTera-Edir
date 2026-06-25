@@ -19,7 +19,7 @@ const ALL = '__all__';
  * page to that tenant; "All Edirs" restores the platform-wide view. Rendered
  * only for Super-Admins (returns null otherwise).
  */
-export function EdirSwitcher() {
+export function EdirSwitcher({ onChanged }: { onChanged?: () => void }) {
   const router = useRouter();
   const [ctx, setCtx] = useState<EdirContext | null>(null);
   const [open, setOpen] = useState(false);
@@ -37,7 +37,11 @@ export function EdirSwitcher() {
       if (res?.success) {
         setCtx(c => c ? { ...c, activeEdirId: res.activeEdirId, activeEdirName: res.activeEdirName ?? null } : c);
         toast.success(edirId ? `Working in ${res.activeEdirName}` : 'Viewing all Edirs');
+        // Re-render server components (header badge, breadcrumbs) AND remount the
+        // active page so its client-side data re-fetches under the new scope —
+        // no full browser refresh.
         router.refresh();
+        onChanged?.();
       } else {
         toast.error(res?.error || 'Could not switch Edir.');
       }

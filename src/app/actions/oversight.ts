@@ -2,17 +2,23 @@
 
 import prisma from '@/lib/prisma';
 import { getActor, assertPermission, tenantWhere } from '@/lib/tenant-scope';
+import { dateWhere, type DateRangeParam } from '@/lib/date-range';
 
 /**
  * Read-only committee oversight report. Aggregates tenant-scoped KPIs across
  * members, finances, emergencies, events, assets, approvals, and governance.
  * No mutations — committee members get visibility without operational control.
+ * All event/transaction KPIs respect the selected date range; the rolling
+ * 12-month trend stays a trailing-year growth view.
  */
-export async function getOversightReport() {
+export async function getOversightReport(range?: DateRangeParam) {
   const actor = await getActor();
   await assertPermission(actor, ['view_committee_oversight', 'view_dashboard']);
   const where = tenantWhere(actor);
   const memberWhere = where as { edirId?: string };
+  const memDate = dateWhere('joinDate', range);
+  const txDate = dateWhere('createdAt', range);
+  const evDate = dateWhere('datetime', range);
 
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -37,23 +43,23 @@ export async function getOversightReport() {
     grievanceByStatus,
     recentActivity,
   ] = await Promise.all([
-    prisma.member.groupBy({ by: ['status'], where, _count: { _all: true } }),
-    prisma.paymentLog.groupBy({ by: ['status'], where, _count: { _all: true }, _sum: { amount: true } }),
+    prisma.member.groupBy({ by: ['status'], where: { ...where, ...memDate }, _count: { _all: true } }),
+    prisma.paymentLog.groupBy({ by: ['status'], where: { ...where, ...txDate }, _count: { _all: true }, _sum: { amount: true } }),
     prisma.paymentLog.aggregate({ _sum: { amount: true }, where: { ...where, status: { in: ['SUCCESS', 'PARTIAL'] }, createdAt: { gte: monthStart } } }),
     prisma.paymentStatus.aggregate({ _sum: { balance: true }, where: { member: memberWhere } }),
-    prisma.emergencyClaim.groupBy({ by: ['status'], where, _count: { _all: true } }),
-    prisma.emergencyClaim.aggregate({ _sum: { approvedAmount: true, disbursedAmount: true }, where }),
+    prisma.emergencyClaim.groupBy({ by: ['status'], where: { ...where, ...txDate }, _count: { _all: true } }),
+    prisma.emergencyClaim.aggregate({ _sum: { approvedAmount: true, disbursedAmount: true }, where: { ...where, ...txDate } }),
     actor.edirId || actor.isSuperAdmin ? prisma.edirSettings.findFirst({ where: actor.isSuperAdmin ? {} : { edirId: actor.edirId! } }) : Promise.resolve(null),
-    prisma.event.groupBy({ by: ['status'], where, _count: { _all: true } }),
-    prisma.asset.aggregate({ _sum: { currentValue: true, quantity: true, issuedQuantity: true }, _count: { _all: true }, where }),
-    prisma.approvalRequest.groupBy({ by: ['status'], where, _count: { _all: true } }),
-    prisma.approvalRequest.groupBy({ by: ['module'], where, _count: { _all: true } }),
+    prisma.event.groupBy({ by: ['status'], where: { ...where, ...evDate }, _count: { _all: true } }),
+    prisma.asset.aggregate({ _sum: { currentValue: true, quantity: true, issuedQuantity: true }, _count: { _all: true }, where: { ...where, ...txDate } }),
+    prisma.approvalRequest.groupBy({ by: ['status'], where: { ...where, ...txDate }, _count: { _all: true } }),
+    prisma.approvalRequest.groupBy({ by: ['module'], where: { ...where, ...txDate }, _count: { _all: true } }),
     prisma.paymentStatus.findMany({ where: { member: memberWhere, balance: { gt: 0 } }, include: { member: { select: { name: true, memberId: true } } }, orderBy: { balance: 'desc' }, take: 5 }),
     prisma.ruleChangeLog.findMany({ where, orderBy: { createdAt: 'desc' }, take: 5 }),
     prisma.paymentLog.findMany({ where: { ...where, status: { in: ['SUCCESS', 'PARTIAL'] }, createdAt: { gte: windowStart } }, select: { amount: true, createdAt: true, description: true } }),
     prisma.member.findMany({ where: { ...where, joinDate: { gte: windowStart } }, select: { joinDate: true } }),
-    prisma.memberRequest.groupBy({ by: ['status'], where: { ...where, type: { in: ['GRIEVANCE', 'FEEDBACK'] } }, _count: { _all: true } }),
-    prisma.auditLog.findMany({ where, orderBy: { createdAt: 'desc' }, take: 10, include: { user: { select: { name: true, email: true } } } }),
+    prisma.memberRequest.groupBy({ by: ['status'], where: { ...where, type: { in: ['GRIEVANCE', 'FEEDBACK'] }, ...txDate }, _count: { _all: true } }),
+    prisma.auditLog.findMany({ where: { ...where, ...txDate }, orderBy: { createdAt: 'desc' }, take: 10, include: { user: { select: { name: true, email: true } } } }),
   ]);
 
   const countByKey = (rows: { status: string; _count: { _all: number } }[]) =>

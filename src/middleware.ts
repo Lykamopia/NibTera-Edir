@@ -80,9 +80,13 @@ export default withAuth(
         const isSuperAdmin = !!token?.isSuperAdmin;
         const allowed = isSuperAdmin || match.perms.some((p) => perms.includes(p));
         if (!allowed) {
+          // Redirect (not rewrite) so the access-denied screen renders reliably
+          // for both full loads and client-side RSC navigations — a rewrite to a
+          // different layout root can leak the original page through on soft nav.
           const url = req.nextUrl.clone();
-          url.pathname = '/forbidden';
-          return NextResponse.rewrite(url);
+          url.pathname = '/dashboard/access-denied';
+          url.search = '';
+          return NextResponse.redirect(url);
         }
       }
     }

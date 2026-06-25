@@ -3,6 +3,7 @@
 import prisma from '@/lib/prisma';
 import { getActor, actorHasPermission, tenantWhere } from '@/lib/tenant-scope';
 import { AccessDeniedError } from '@/lib/errors';
+import { dateWhere, type DateRangeParam } from '@/lib/date-range';
 
 /**
  * Unified People directory — the single source for the merged Members + User
@@ -134,12 +135,12 @@ function resolveScope(actor: Awaited<ReturnType<typeof getActor>>, edirId?: stri
   return { edirId };
 }
 
-async function collectRows(actor: Awaited<ReturnType<typeof getActor>>, caps: PeopleContext, baseWhere: any): Promise<PersonRow[]> {
+async function collectRows(actor: Awaited<ReturnType<typeof getActor>>, caps: PeopleContext, baseWhere: any, dateFilter: Record<string, any> = {}): Promise<PersonRow[]> {
   const people = new Map<string, PersonRow>();
 
   if (caps.canUsers) {
     const users = await prisma.user.findMany({
-      where: { ...baseWhere, NOT: { role: { is: { scope: 'SUPER_ADMIN' } } } },
+      where: { ...baseWhere, ...dateFilter, NOT: { role: { is: { scope: 'SUPER_ADMIN' } } } },
       include: { role: true, edir: true, member: { include: { paymentStatus: true } } },
       orderBy: { createdAt: 'desc' },
       take: 5000,
@@ -149,7 +150,7 @@ async function collectRows(actor: Awaited<ReturnType<typeof getActor>>, caps: Pe
 
   if (caps.canMembers) {
     // If accounts were already loaded, only add members with no linked login.
-    const memberWhere = caps.canUsers ? { ...baseWhere, userId: null } : baseWhere;
+    const memberWhere = caps.canUsers ? { ...baseWhere, ...dateFilter, userId: null } : { ...baseWhere, ...dateFilter };
     const members = await prisma.member.findMany({
       where: memberWhere,
       include: { paymentStatus: true, edir: true, user: { include: { role: true } } },
@@ -178,7 +179,7 @@ function summarize(rows: PersonRow[]): PeopleStats {
 }
 
 /** Full directory payload in one round-trip: rows + capabilities + filter options + stats. */
-export async function getPeopleDirectory(params: { edirId?: string } = {}): Promise<{
+export async function getPeopleDirectory(params: { edirId?: string; range?: DateRangeParam } = {}): Promise<{
   rows: PersonRow[]; context: PeopleContext; stats: PeopleStats;
 }> {
   const actor = await getActor();
@@ -188,7 +189,7 @@ export async function getPeopleDirectory(params: { edirId?: string } = {}): Prom
   }
 
   const baseWhere = resolveScope(actor, params.edirId);
-  const rows = await collectRows(actor, caps, baseWhere);
+  const rows = await collectRows(actor, caps, baseWhere, dateWhere('createdAt', params.range));
 
   // Filter option lists.
   const edirs = actor.isSuperAdmin
@@ -208,13 +209,13 @@ export async function getPeopleDirectory(params: { edirId?: string } = {}): Prom
 }
 
 /** CSV export of the (Edir-scoped) directory. */
-export async function exportPeopleCsv(params: { edirId?: string } = {}): Promise<string> {
+export async function exportPeopleCsv(params: { edirId?: string; range?: DateRangeParam } = {}): Promise<string> {
   const actor = await getActor();
   const caps = buildCaps(actor);
   if (!caps.canMembers && !caps.canUsers) {
     throw new AccessDeniedError('You do not have access to the People directory.');
   }
-  const rows = await collectRows(actor, caps, resolveScope(actor, params.edirId));
+  const rows = await collectRows(actor, caps, resolveScope(actor, params.edirId), dateWhere('createdAt', params.range));
   const header = ['Member ID', 'Name', 'Phone', 'Email', 'Edir', 'Account Role', 'Membership Role', 'Account Status', 'Membership Status', 'Balance', 'Has Login', 'Last Login'];
   const body = rows.map(r => [
     r.memberCode ?? '', r.name, r.phone ?? '', r.email ?? '', r.edirName ?? '',

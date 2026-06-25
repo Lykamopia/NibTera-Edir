@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { CredentialsDialog, type Credentials } from '@/components/credentials-dialog';
 import { useConfirm } from '@/components/ui/confirm-provider';
+import { DateRangeFilter, ALL_TIME, toParam, type DateRangeValue } from '@/components/ui/date-range-filter';
 import { getPeopleDirectory, exportPeopleCsv, type PersonRow, type PeopleContext, type PeopleStats } from '@/app/actions/people';
 import { createMember, requestMemberRemoval, type MemberInput } from '@/app/actions/members';
 import { setUserRole, setUserStatus, lockUser, unlockUser, adminResetUserPassword } from '@/app/actions/admin';
@@ -48,6 +49,7 @@ export default function PeopleClient() {
   const [status, setStatus] = useState('all');
   const [roleFilter, setRoleFilter] = useState('all');
   const [edirFilter, setEdirFilter] = useState('all');
+  const [dateRange, setDateRange] = useState<DateRangeValue>(ALL_TIME);
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'name', dir: 'asc' });
 
   const [detail, setDetail] = useState<PersonRow | null>(null);
@@ -56,13 +58,15 @@ export default function PeopleClient() {
   const [cred, setCred] = useState<{ name: string; credentials: Credentials } | null>(null);
   const confirm = useConfirm();
 
+  const rangeKey = `${dateRange.preset}:${dateRange.from?.toISOString() ?? ''}:${dateRange.to?.toISOString() ?? ''}`;
   const load = useCallback(() => {
     setLoading(true); setError(false);
-    getPeopleDirectory({ edirId: edirFilter })
+    getPeopleDirectory({ edirId: edirFilter, range: toParam(dateRange) })
       .then(r => { setRows(r.rows); setCtx(r.context); setStats(r.stats); })
       .catch(() => setError(true))
       .finally(() => setLoading(false));
-  }, [edirFilter]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [edirFilter, rangeKey]);
   useEffect(() => { load(); }, [load]);
 
   const isSuper = ctx?.isSuperAdmin ?? false;
@@ -110,7 +114,7 @@ export default function PeopleClient() {
 
   const onExport = async () => {
     try {
-      const csv = await exportPeopleCsv({ edirId: edirFilter });
+      const csv = await exportPeopleCsv({ edirId: edirFilter, range: toParam(dateRange) });
       const blob = new Blob([csv], { type: 'text/csv' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -244,6 +248,7 @@ export default function PeopleClient() {
           </Select>
         )}
         <div className="ml-auto flex flex-wrap items-center gap-2">
+          <DateRangeFilter value={dateRange} onChange={setDateRange} className="h-9" align="end" />
           <Button variant="outline" size="sm" onClick={onExport}><Download className="mr-1 h-4 w-4" /> Export</Button>
           {isSuper && <Button variant="outline" size="sm" onClick={() => setShowActivity(true)}><History className="mr-1 h-4 w-4" /> Activity</Button>}
           {/* Cross-Edir bulk association lives in the dedicated User Associations module — link there instead of duplicating it here. */}

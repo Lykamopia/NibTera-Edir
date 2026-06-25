@@ -10,6 +10,7 @@ import '@/lib/approval-modules';
 import { writeAudit } from '@/lib/audit';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
+import { dateWhere, type DateRangeParam } from '@/lib/date-range';
 
 // Maker action → the maker permission that authorizes proposing it.
 const ACTION_PERMISSION: Record<string, any> = {
@@ -170,13 +171,14 @@ export async function rejectDmsDocument(documentId: string, reason: string) {
 }
 
 /** Scope-aware, role-aware list of repository documents with rich filters. */
-export async function listDmsDocuments(params: { query?: string; category?: string; status?: string; tag?: string; visibility?: string } = {}) {
+export async function listDmsDocuments(params: { query?: string; category?: string; status?: string; tag?: string; visibility?: string; range?: DateRangeParam } = {}) {
   try {
     const actor = await getActor();
-    await assertPermission(actor, ['view_documents', 'upload_document', 'approve_document', 'super_admin']);
+    // Keep this in sync with the /dashboard/documents route gate in middleware.ts.
+    await assertPermission(actor, ['view_documents', 'upload_document', 'approve_document', 'review_document', 'super_admin']);
     const isStaff = actor.isSuperAdmin || actorHasPermission(actor, ['view_documents', 'upload_document', 'approve_document', 'review_document']);
 
-    const where: Prisma.DmsDocumentWhereInput = { ...(tenantWhere(actor) as any) };
+    const where: Prisma.DmsDocumentWhereInput = { ...(tenantWhere(actor) as any), ...dateWhere('createdAt', params.range) };
     if (params.category && params.category !== 'all') where.category = params.category;
     if (params.status && params.status !== 'all') where.status = params.status as any;
     if (params.visibility && params.visibility !== 'all') where.visibility = params.visibility;
@@ -196,8 +198,9 @@ export async function listDmsDocuments(params: { query?: string; category?: stri
     const filtered = params.tag ? docs.filter(d => (d.tags ?? '').split(',').map(t => t.trim()).includes(params.tag!)) : docs;
 
     // Folder/category list with counts — across the whole scope (ignoring the
-    // active category filter) so the sidebar always shows every folder.
-    const baseWhere: Prisma.DmsDocumentWhereInput = { ...(tenantWhere(actor) as any) };
+    // active category filter, but honoring the date range) so the sidebar
+    // counts stay consistent with the filtered list.
+    const baseWhere: Prisma.DmsDocumentWhereInput = { ...(tenantWhere(actor) as any), ...dateWhere('createdAt', params.range) };
     if (!isStaff) { baseWhere.status = 'APPROVED'; baseWhere.visibility = 'all'; }
     const grouped = await prisma.dmsDocument.groupBy({ by: ['category'], where: baseWhere, _count: { _all: true } });
     const categoryCounts = grouped.map(g => ({ name: g.category, count: g._count._all })).sort((a, b) => a.name.localeCompare(b.name));
@@ -243,7 +246,7 @@ export async function listDmsDocuments(params: { query?: string; category?: stri
 export async function getDmsDocumentDetail(documentId: string) {
   try {
     const actor = await getActor();
-    await assertPermission(actor, ['view_documents', 'upload_document', 'approve_document', 'super_admin']);
+    await assertPermission(actor, ['view_documents', 'upload_document', 'approve_document', 'review_document', 'super_admin']);
     const doc = await prisma.dmsDocument.findUnique({ where: { id: documentId } });
     if (!doc) return { success: false as const, error: 'Document not found.' };
     const ids = tenantEdirIds(actor);

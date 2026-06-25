@@ -21,7 +21,7 @@ type EventCaps = { canManage: boolean; canReschedule: boolean; canCancel: boolea
 const NO_CAPS: EventCaps = { canManage: false, canReschedule: false, canCancel: false, canFinalize: false };
 import { useConfirm } from '@/components/ui/confirm-provider';
 import { PageHeader, StatCard, LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
-import { DateRangeFilter, ALL_TIME, inDateRange, type DateRangeValue } from '@/components/ui/date-range-filter';
+import { DateRangeFilter, ALL_TIME, toParam, type DateRangeValue } from '@/components/ui/date-range-filter';
 
 const STATUS: Record<string, { label: string; cls: string }> = {
   SCHEDULED: { label: 'Scheduled', cls: 'border-info/20 bg-info/10 text-info' },
@@ -48,17 +48,19 @@ export default function EventsClient() {
 
   useEffect(() => { getEventCapabilities().then(setCaps).catch(() => setCaps(NO_CAPS)); }, []);
 
+  const rangeKey = `${dateRange.preset}:${dateRange.from?.toISOString() ?? ''}:${dateRange.to?.toISOString() ?? ''}`;
   const load = useCallback(() => {
     setLoading(true); setError(false);
-    Promise.all([getEvents({ query, status }), getEventsSummary()])
+    Promise.all([getEvents({ query, status, range: toParam(dateRange) }), getEventsSummary(toParam(dateRange))])
       .then(([e, s]) => { setItems(e); setSummary(s); })
       .catch(() => setError(true)).finally(() => setLoading(false));
-  }, [query, status]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, status, rangeKey]);
   useEffect(() => { load(); }, [load]);
 
   const toggleSort = (key: string) => setSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' });
   const SortIcon = ({ k }: { k: string }) => sort.key !== k ? <ArrowUpDown className="h-3.5 w-3.5 opacity-40" /> : sort.dir === 'asc' ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />;
-  const sorted = [...items].filter(e => inDateRange(e.datetime, dateRange)).sort((a, b) => {
+  const sorted = [...items].sort((a, b) => {
     let cmp = 0;
     if (sort.key === 'title') cmp = (a.title || '').localeCompare(b.title || '');
     else if (sort.key === 'penalty') cmp = (a.absencePenalty || 0) - (b.absencePenalty || 0);

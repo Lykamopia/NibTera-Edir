@@ -19,6 +19,7 @@ import {
 } from '@/app/actions/assets';
 import { useConfirm } from '@/components/ui/confirm-provider';
 import { PageHeader, StatCard, LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
+import { DateRangeFilter, ALL_TIME, toParam, type DateRangeValue } from '@/components/ui/date-range-filter';
 
 const ISSUE_STATUS: Record<string, { label: string; cls: string }> = {
   REQUESTED: { label: 'Requested', cls: 'border-warning/20 bg-warning/10 text-warning' },
@@ -31,12 +32,14 @@ const ISSUE_STATUS: Record<string, { label: string; cls: string }> = {
 
 export default function AssetsClient() {
   const [summary, setSummary] = useState<any | null>(null);
-  useEffect(() => { getAssetSummary().then(setSummary).catch(() => {}); }, []);
+  const [dateRange, setDateRange] = useState<DateRangeValue>(ALL_TIME);
+  useEffect(() => { getAssetSummary(toParam(dateRange)).then(setSummary).catch(() => {}); }, [dateRange]);
   const money = (n: number) => `${(n || 0).toLocaleString()} ${summary?.currency ?? 'ETB'}`;
 
   return (
     <div className="space-y-5">
-      <PageHeader title="Assets" description="Track inventory, route issuance through Maker–Checker, record returns, and review valuation." icon={Package} />
+      <PageHeader title="Assets" description="Track inventory, route issuance through Maker–Checker, record returns, and review valuation." icon={Package}
+        actions={<DateRangeFilter value={dateRange} onChange={setDateRange} align="end" />} />
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard title="Total Assets" value={summary?.count ?? '—'} icon={Boxes} accent="primary" hint={summary ? `${summary.categories} categor${summary.categories === 1 ? 'y' : 'ies'}` : undefined} />
@@ -51,8 +54,8 @@ export default function AssetsClient() {
           <TabsTrigger value="issuances"><Send className="mr-1.5 h-4 w-4" /> Issuances</TabsTrigger>
           <TabsTrigger value="valuation"><Gauge className="mr-1.5 h-4 w-4" /> Valuation</TabsTrigger>
         </TabsList>
-        <TabsContent value="inventory" className="mt-4"><InventoryTab /></TabsContent>
-        <TabsContent value="issuances" className="mt-4"><IssuancesTab /></TabsContent>
+        <TabsContent value="inventory" className="mt-4"><InventoryTab dateRange={dateRange} /></TabsContent>
+        <TabsContent value="issuances" className="mt-4"><IssuancesTab dateRange={dateRange} /></TabsContent>
         <TabsContent value="valuation" className="mt-4"><ValuationTab /></TabsContent>
       </Tabs>
     </div>
@@ -61,7 +64,7 @@ export default function AssetsClient() {
 
 // ─── Inventory ───────────────────────────────────────────────────────────────
 
-function InventoryTab() {
+function InventoryTab({ dateRange }: { dateRange: DateRangeValue }) {
   const [items, setItems] = useState<any[]>([]);
   const [categories, setCategories] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -73,13 +76,15 @@ function InventoryTab() {
   const [managingCats, setManagingCats] = useState(false);
   const [sort, setSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'name', dir: 'asc' });
   const confirm = useConfirm();
+  const rangeKey = `${dateRange.preset}:${dateRange.from?.toISOString() ?? ''}:${dateRange.to?.toISOString() ?? ''}`;
 
   const load = useCallback(() => {
     setLoading(true); setError(false);
-    Promise.all([getAssets({ query, categoryId }), getAssetCategories()])
+    Promise.all([getAssets({ query, categoryId, range: toParam(dateRange) }), getAssetCategories()])
       .then(([a, c]) => { setItems(a); setCategories(c); })
       .catch(() => setError(true)).finally(() => setLoading(false));
-  }, [query, categoryId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, categoryId, rangeKey]);
   useEffect(() => { load(); }, [load]);
 
   const onDelete = async (a: any) => {
@@ -331,7 +336,7 @@ function CategoriesDialog({ categories, onClose, onChanged }: { categories: any[
 
 // ─── Issuances ───────────────────────────────────────────────────────────────
 
-function IssuancesTab() {
+function IssuancesTab({ dateRange }: { dateRange: DateRangeValue }) {
   const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -339,11 +344,13 @@ function IssuancesTab() {
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'createdAt', dir: 'desc' });
   const [returning, setReturning] = useState<any | null>(null);
+  const rangeKey = `${dateRange.preset}:${dateRange.from?.toISOString() ?? ''}:${dateRange.to?.toISOString() ?? ''}`;
 
   const load = useCallback(() => {
     setLoading(true); setError(false);
-    getIssuances({ status }).then(setItems).catch(() => setError(true)).finally(() => setLoading(false));
-  }, [status]);
+    getIssuances({ status, range: toParam(dateRange) }).then(setItems).catch(() => setError(true)).finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, rangeKey]);
   useEffect(() => { load(); }, [load]);
 
   const toggleSort = (key: string) => setSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' });

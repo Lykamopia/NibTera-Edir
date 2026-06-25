@@ -10,6 +10,7 @@ import { submitForApproval } from '@/lib/approval-engine';
 import '@/lib/approval-modules';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
+import { dateWhere, type DateRangeParam } from '@/lib/date-range';
 
 // ─── Edir settings ───────────────────────────────────────────────────────────
 
@@ -141,13 +142,14 @@ function computeOutstandingPenalty(balance: number, monthsBehind: number, settin
 }
 
 /** Tenant-wide payment KPIs for the Payments dashboard summary cards. */
-export async function getPaymentsSummary() {
+export async function getPaymentsSummary(range?: DateRangeParam) {
   const actor = await getActor();
   await assertPermission(actor, ['view_payments', 'record_payment']);
   const where = tenantWhere(actor);
   const memberWhere = where as { edirId?: string };
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const txDate = dateWhere('createdAt', range); // collection / pending KPIs respect the range
 
   const [settings, outstandingAgg, inArrears, activeMembers, collectedMonth, collectedTotal, pendingManual] = await Promise.all([
     actor.edirId || actor.isSuperAdmin ? prisma.edirSettings.findFirst({ where: actor.isSuperAdmin ? {} : { edirId: actor.edirId! } }) : Promise.resolve(null),
@@ -155,8 +157,8 @@ export async function getPaymentsSummary() {
     prisma.paymentStatus.count({ where: { member: memberWhere, balance: { gt: 0 } } }),
     prisma.member.count({ where: { ...where, status: 'ACTIVE' } }),
     prisma.paymentLog.aggregate({ _sum: { amount: true }, where: { ...where, status: { in: ['SUCCESS', 'PARTIAL'] }, createdAt: { gte: monthStart } } }),
-    prisma.paymentLog.aggregate({ _sum: { amount: true }, where: { ...where, status: { in: ['SUCCESS', 'PARTIAL'] } } }),
-    prisma.paymentLog.count({ where: { ...where, status: 'PENDING' } }),
+    prisma.paymentLog.aggregate({ _sum: { amount: true }, where: { ...where, ...txDate, status: { in: ['SUCCESS', 'PARTIAL'] } } }),
+    prisma.paymentLog.count({ where: { ...where, ...txDate, status: 'PENDING' } }),
   ]);
 
   return {
@@ -235,19 +237,21 @@ export async function recordManualPayment(memberId: string, breakdownInput: z.in
 
 // ─── Payment log (read) ──────────────────────────────────────────────────────
 
-function paymentLogWhere(actor: Awaited<ReturnType<typeof getActor>>, params: { status?: string; query?: string; from?: string; to?: string }): Prisma.PaymentLogWhereInput {
-  const createdAt: Prisma.DateTimeFilter = {};
-  if (params.from) createdAt.gte = new Date(params.from);
-  if (params.to) createdAt.lte = new Date(params.to);
+function paymentLogWhere(actor: Awaited<ReturnType<typeof getActor>>, params: { status?: string; query?: string; from?: string; to?: string; range?: DateRangeParam }): Prisma.PaymentLogWhereInput {
+  // Prefer the standardized range; fall back to legacy from/to for older callers.
+  const legacy: Prisma.DateTimeFilter = {};
+  if (params.from) legacy.gte = new Date(params.from);
+  if (params.to) legacy.lte = new Date(params.to);
+  const rangeWhere = params.range ? dateWhere('createdAt', params.range) : (params.from || params.to ? { createdAt: legacy } : {});
   return {
     ...tenantWhere(actor),
+    ...rangeWhere,
     ...(params.status && params.status !== 'all' ? { status: params.status as any } : {}),
-    ...(params.from || params.to ? { createdAt } : {}),
     ...(params.query ? { OR: [{ transactionId: { contains: params.query } }, { member: { name: { contains: params.query, mode: 'insensitive' } } }] } : {}),
   };
 }
 
-export async function getPaymentLogs(params: { status?: string; query?: string; page?: number; from?: string; to?: string } = {}) {
+export async function getPaymentLogs(params: { status?: string; query?: string; page?: number; from?: string; to?: string; range?: DateRangeParam } = {}) {
   const actor = await getActor();
   await assertPermission(actor, ['view_payment_log', 'view_payments']);
   const page = Math.max(1, params.page ?? 1);
@@ -281,7 +285,7 @@ export async function getPaymentLogs(params: { status?: string; query?: string; 
   };
 }
 
-export async function exportPaymentLogCsv(params: { status?: string; query?: string; from?: string; to?: string } = {}) {
+export async function exportPaymentLogCsv(params: { status?: string; query?: string; from?: string; to?: string; range?: DateRangeParam } = {}) {
   const actor = await getActor();
   await assertPermission(actor, ['export_payments', 'view_payment_log']);
   const logs = await prisma.paymentLog.findMany({ where: paymentLogWhere(actor, params), include: { member: true }, orderBy: { createdAt: 'desc' }, take: 5000 });

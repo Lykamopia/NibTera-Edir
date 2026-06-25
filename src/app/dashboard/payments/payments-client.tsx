@@ -15,6 +15,7 @@ import {
   ChevronUp, ChevronDown, ArrowUpDown, AlertTriangle, Sparkles,
 } from 'lucide-react';
 import { PageHeader, StatCard, LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
+import { DateRangeFilter, ALL_TIME, toParam, dateRangeLabel, type DateRangeValue } from '@/components/ui/date-range-filter';
 import { Pagination, usePagination } from '@/components/ui/pagination';
 import { ReceiptUpload, type ReceiptFile } from '@/components/ui/receipt-upload';
 import { getMembers } from '@/app/actions/members';
@@ -36,13 +37,14 @@ export default function PaymentsClient() {
   const [filter, setFilter] = useState<'all' | 'arrears' | 'settled'>('all');
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'balance', dir: 'desc' });
   const [target, setTarget] = useState<any | null>(null);
+  const [range, setRange] = useState<DateRangeValue>(ALL_TIME);
 
   const load = useCallback(() => {
     setLoading(true); setError(false);
-    Promise.all([getMembers({ query, status: 'ACTIVE', pageSize: 100 }), getPaymentsSummary()])
+    Promise.all([getMembers({ query, status: 'ACTIVE', pageSize: 100 }), getPaymentsSummary(toParam(range))])
       .then(([r, s]) => { setItems(r.items); setSummary(s); })
       .catch(() => setError(true)).finally(() => setLoading(false));
-  }, [query]);
+  }, [query, range]);
   useEffect(() => { load(); }, [load]);
 
   const cur = summary?.currency ?? 'ETB';
@@ -76,12 +78,13 @@ export default function PaymentsClient() {
 
   return (
     <div className="space-y-5">
-      <PageHeader title="Payments" description="Record contributions — each manual payment is auto-calculated and routed through Maker–Checker before settlement." icon={CreditCard} />
+      <PageHeader title="Payments" description="Record contributions — each manual payment is auto-calculated and routed through Maker–Checker before settlement." icon={CreditCard}
+        actions={<DateRangeFilter value={range} onChange={setRange} align="end" />} />
 
       {/* Summary cards */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard title="Total Outstanding" value={summary ? money(summary.totalOutstanding) : '—'} icon={Wallet} accent={summary?.totalOutstanding > 0 ? 'warning' : 'success'} hint={summary ? `${summary.membersInArrears} with a balance` : undefined} />
-        <StatCard title="Collected This Month" value={summary ? money(summary.collectedThisMonth) : '—'} icon={CalendarClock} accent="success" />
+        <StatCard title={range.preset === 'all' ? 'Collected (Total)' : 'Collected'} value={summary ? money(summary.collectedTotal) : '—'} icon={CalendarClock} accent="success" hint={range.preset === 'all' ? `${money(summary?.collectedThisMonth ?? 0)} this month` : dateRangeLabel(range)} />
         <StatCard title="Active Members" value={summary?.activeMembers ?? '—'} icon={Users} accent="info" />
         <StatCard title="Pending Approval" value={summary?.pendingManual ?? '—'} icon={ReceiptText} accent="primary" hint="Manual payments awaiting checker" />
       </div>

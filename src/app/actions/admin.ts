@@ -12,6 +12,7 @@ import { sendPasswordResetEmail, sendVerificationEmail } from '@/lib/email';
 import { ensureMembershipForUser } from '@/app/actions/members';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
+import { dateWhere, type DateRangeParam } from '@/lib/date-range';
 
 // ─── Users ───────────────────────────────────────────────────────────────────
 
@@ -317,14 +318,38 @@ export async function ensureDefaultEdirRoles(edirId: string, client: Prisma.Tran
   });
 }
 
-export async function getEdirs() {
+export async function getEdirs(range?: DateRangeParam) {
   const actor = await getActor();
   await assertPermission(actor, ['manage_edirs', 'create_edir', 'edit_edir', 'view_edir_reports', 'super_admin']);
   const edirs = await prisma.edir.findMany({
-    include: { _count: { select: { members: true, users: true } } },
+    where: { ...dateWhere('createdAt', range) },
+    include: {
+      _count: { select: { members: true, users: true } },
+      branch: { select: { id: true, name: true, code: true, district: { select: { name: true } } } },
+    },
     orderBy: { name: 'asc' },
   });
-  return edirs.map(e => ({ id: e.id, name: e.name, description: e.description, status: e.status, members: e._count.members, users: e._count.users }));
+  return edirs.map(e => ({
+    id: e.id,
+    name: e.name,
+    description: e.description,
+    status: e.status,
+    // Full registration profile — kept in sync with the Register Edir form.
+    accountNumber: e.accountNumber,
+    address: e.address,
+    branchId: e.branchId,
+    branchName: e.branch?.name ?? null,
+    branchCode: e.branch?.code ?? null,
+    districtName: e.branch?.district?.name ?? null,
+    contactPersonName: e.contactPersonName,
+    contactAddress: e.contactAddress,
+    contactMobile: e.contactMobile,
+    contactEmail: e.contactEmail,
+    agreementDocUrl: e.agreementDocUrl,
+    createdAt: e.createdAt,
+    members: e._count.members,
+    users: e._count.users,
+  }));
 }
 
 /** The current actor's Edir-management capabilities, for gating UI actions. */
@@ -338,17 +363,47 @@ export async function getEdirAdminCapabilities() {
   };
 }
 
-export async function saveEdir(input: { id?: string; name: string; description?: string }) {
+export interface SaveEdirInput {
+  id?: string;
+  name: string;
+  description?: string | null;
+  accountNumber?: string | null;
+  address?: string | null;
+  branchId?: string | null;
+  contactPersonName?: string | null;
+  contactAddress?: string | null;
+  contactMobile?: string | null;
+  contactEmail?: string | null;
+  agreementDocUrl?: string | null;
+}
+
+export async function saveEdir(input: SaveEdirInput) {
   try {
     const actor = await getActor();
     // Granular: editing requires edit_edir, creating requires create_edir (manage_edirs/super_admin are the umbrella).
     await assertPermission(actor, input.id ? ['edit_edir', 'manage_edirs', 'super_admin'] : ['create_edir', 'manage_edirs', 'super_admin']);
     const name = input.name?.trim();
     if (!name) return { success: false as const, error: 'Name is required.' };
+
+    // Full registration profile — mirrors the Register Edir form so the directory
+    // edit and the registration form stay in sync.
+    const norm = (v?: string | null) => (v?.trim() ? v.trim() : null);
+    const profile = {
+      description: norm(input.description),
+      accountNumber: norm(input.accountNumber),
+      address: norm(input.address),
+      branchId: norm(input.branchId),
+      contactPersonName: norm(input.contactPersonName),
+      contactAddress: norm(input.contactAddress),
+      contactMobile: norm(input.contactMobile),
+      contactEmail: norm(input.contactEmail),
+      agreementDocUrl: norm(input.agreementDocUrl),
+    };
+
     if (input.id) {
-      await prisma.edir.update({ where: { id: input.id }, data: { name, description: input.description ?? null } });
+      await prisma.edir.update({ where: { id: input.id }, data: { name, ...profile } });
     } else {
-      const edir = await prisma.edir.create({ data: { name, description: input.description ?? null } });
+      const edir = await prisma.edir.create({ data: { name, ...profile } });
       await prisma.edirSettings.create({ data: { edirId: edir.id } });
       await ensureDefaultEdirRoles(edir.id); // so the Edir can be staffed & configured immediately
     }
@@ -440,16 +495,17 @@ export async function getSecurityLogs(page = 1, limit = 20) {
   return { items, total, pages: Math.ceil(total / limit) };
 }
 
-function auditWhere(actor: Actor, params: { action?: string; query?: string; archived?: boolean }): Prisma.AuditLogWhereInput {
+function auditWhere(actor: Actor, params: { action?: string; query?: string; archived?: boolean; range?: DateRangeParam }): Prisma.AuditLogWhereInput {
   return {
     ...tenantWhere(actor),
+    ...dateWhere('createdAt', params.range),
     archived: params.archived ?? false,
     ...(params.action ? { action: { contains: params.action } } : {}),
     ...(params.query ? { details: { contains: params.query, mode: 'insensitive' } } : {}),
   };
 }
 
-export async function getAuditLogs(params: { page?: number; action?: string; query?: string; archived?: boolean } = {}) {
+export async function getAuditLogs(params: { page?: number; action?: string; query?: string; archived?: boolean; range?: DateRangeParam } = {}) {
   const actor = await getActor();
   await assertPermission(actor, ['view_audit_log', 'manage_audit_log']);
   const page = Math.max(1, params.page ?? 1);
@@ -477,7 +533,7 @@ export async function archiveAuditLog(id: string) {
   }
 }
 
-export async function exportAuditCsv(params: { action?: string; query?: string; archived?: boolean } = {}) {
+export async function exportAuditCsv(params: { action?: string; query?: string; archived?: boolean; range?: DateRangeParam } = {}) {
   const actor = await getActor();
   await assertPermission(actor, ['view_audit_log', 'manage_audit_log']);
   const logs = await prisma.auditLog.findMany({ where: auditWhere(actor, params), include: { user: true }, orderBy: { createdAt: 'desc' }, take: 5000 });

@@ -100,10 +100,13 @@ export async function getMyPortal() {
     return { hasMembership: false as const, account, notifications: notifications.map(serializeNotif), recentActivity: [] };
   }
 
-  const [settings, rules, activity] = await Promise.all([
+  const [settings, rules, activity, myUploads] = await Promise.all([
     prisma.edirSettings.findUnique({ where: { edirId: m.edirId } }),
     prisma.rulesVersion.findFirst({ where: { edirId: m.edirId, status: 'APPROVED' }, orderBy: { versionNumber: 'desc' }, select: { versionNumber: true, title: true, effectiveDate: true } }),
     prisma.auditLog.findMany({ where: { edirId: m.edirId, OR: [{ userId: user.id }, { targetId: m.id }] }, orderBy: { createdAt: 'desc' }, take: 20 }),
+    // Documents this member uploaded through self-service requests — mirrored into
+    // the DMS and shown back to them here with their live approval status.
+    prisma.dmsDocument.findMany({ where: { uploadedById: user.id }, orderBy: { createdAt: 'desc' }, take: 100 }),
   ]);
 
   const currency = settings?.currency ?? 'ETB';
@@ -149,7 +152,10 @@ export async function getMyPortal() {
       id: r.id, name: r.name, relationship: r.relationship, phone: r.phone, isBeneficiary: r.isBeneficiary, benefitShare: r.benefitShare,
       documents: r.documents.map(d => ({ id: d.id, fileName: d.fileName, fileUrl: d.fileUrl, status: d.status })),
     })),
-    documents: m.documents.map(d => ({ id: d.id, category: d.category, fileName: d.fileName, fileUrl: d.fileUrl, status: d.status, createdAt: d.createdAt })),
+    documents: [
+      ...m.documents.map(d => ({ id: d.id, category: d.category, fileName: d.fileName, fileUrl: d.fileUrl, status: d.status, createdAt: d.createdAt })),
+      ...myUploads.map(d => ({ id: d.id, category: d.category, fileName: d.fileName, fileUrl: d.fileUrl, status: d.status as string, createdAt: d.createdAt })),
+    ].sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt)),
     emergencyClaims: m.emergencyClaims.map(c => ({ id: c.id, typeName: c.type?.name ?? null, status: c.status, affectedPerson: c.affectedPerson, approvedAmount: num(c.approvedAmount), disbursedAmount: num(c.disbursedAmount), createdAt: c.createdAt })),
     eligibility: {
       tenureMonths, monthsBehind,

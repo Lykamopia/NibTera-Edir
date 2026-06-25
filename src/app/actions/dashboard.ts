@@ -4,6 +4,7 @@ import prisma from '@/lib/prisma';
 import { getActor, tenantWhere, actorHasPermission } from '@/lib/tenant-scope';
 import { AccessDeniedError } from '@/lib/errors';
 import { pendingApprovalCountForActor } from '@/lib/approval-engine';
+import { dateWhere, type DateRangeParam } from '@/lib/date-range';
 import '@/lib/approval-modules';
 
 export type DashboardData = {
@@ -20,18 +21,20 @@ export type DashboardData = {
   recentPayments: { id: string; amount: number; method: string; status: string; memberName: string | null; createdAt: Date }[];
 };
 
-/** Generic Edir oversight KPIs, scoped to the actor's tenant. */
-export async function getDashboardData(): Promise<DashboardData> {
+/** Generic Edir oversight KPIs, scoped to the actor's tenant and date range. */
+export async function getDashboardData(range?: DateRangeParam): Promise<DashboardData> {
   const actor = await getActor();
   const where = tenantWhere(actor);
+  const memDate = dateWhere('joinDate', range);     // members joined in range
+  const txDate = dateWhere('createdAt', range);     // payments / claims created in range
 
   const [totalMembers, activeMembers, paidAgg, disbursedAgg, activeEmergencies, recent, pendingApprovals] = await Promise.all([
-    prisma.member.count({ where }),
-    prisma.member.count({ where: { ...where, status: 'ACTIVE' } }),
-    prisma.paymentLog.aggregate({ _sum: { amount: true }, where: { ...where, status: 'SUCCESS' } }),
-    prisma.emergencyClaim.aggregate({ _sum: { disbursedAmount: true }, where: { ...where, status: 'RESOLVED' } }),
-    prisma.emergencyClaim.count({ where: { ...where, status: 'ACTIVE' } }),
-    prisma.paymentLog.findMany({ where, include: { member: true }, orderBy: { createdAt: 'desc' }, take: 8 }),
+    prisma.member.count({ where: { ...where, ...memDate } }),
+    prisma.member.count({ where: { ...where, ...memDate, status: 'ACTIVE' } }),
+    prisma.paymentLog.aggregate({ _sum: { amount: true }, where: { ...where, ...txDate, status: 'SUCCESS' } }),
+    prisma.emergencyClaim.aggregate({ _sum: { disbursedAmount: true }, where: { ...where, ...txDate, status: 'RESOLVED' } }),
+    prisma.emergencyClaim.count({ where: { ...where, ...txDate, status: 'ACTIVE' } }),
+    prisma.paymentLog.findMany({ where: { ...where, ...txDate }, include: { member: true }, orderBy: { createdAt: 'desc' }, take: 8 }),
     pendingApprovalCountForActor(actor),
   ]);
 
@@ -63,7 +66,7 @@ export async function getDashboardData(): Promise<DashboardData> {
  * grievances, payment success, growth trends, per-Edir analytics, approval
  * queue, recent activity, and operational alerts.
  */
-export async function getPlatformDashboard() {
+export async function getPlatformDashboard(range?: DateRangeParam) {
   const actor = await getActor();
   if (!actor.isSuperAdmin) throw new AccessDeniedError('Super Administrator access required.');
 
@@ -72,23 +75,29 @@ export async function getPlatformDashboard() {
   const windowStart = new Date(now.getFullYear(), now.getMonth() - 11, 1);
   const num = (v: any) => (v == null ? 0 : Number(v));
 
+  // Range-aware filters — applied to event/transaction-based KPIs. The rolling
+  // 12-month trend below intentionally stays a trailing-year window.
+  const memDate = dateWhere('joinDate', range);
+  const txDate = dateWhere('createdAt', range);
+  const hasRange = !!range && range.preset !== 'all';
+
   const [
     edirs, membersByEdir, newMembers, activeUsers, paymentsByStatus,
     outstandingRows, emergencyByStatus, emergencyAgg, assetAgg, grievanceOpen,
     pendingByEdir, collectedByEdir, windowPayments, membersJoined, recentActivity, rulesPublishedEdirIds,
   ] = await Promise.all([
     prisma.edir.findMany({ select: { id: true, name: true, logoUrl: true } }),
-    prisma.member.groupBy({ by: ['edirId'], _count: { _all: true } }),
-    prisma.member.count({ where: { joinDate: { gte: last30 } } }),
+    prisma.member.groupBy({ by: ['edirId'], where: { ...memDate }, _count: { _all: true } }),
+    prisma.member.count({ where: hasRange ? { ...memDate } : { joinDate: { gte: last30 } } }),
     prisma.user.count({ where: { status: 'ACTIVE', role: { is: { scope: 'EDIR' } } } }),
-    prisma.paymentLog.groupBy({ by: ['status'], _count: { _all: true }, _sum: { amount: true } }),
+    prisma.paymentLog.groupBy({ by: ['status'], where: { ...txDate }, _count: { _all: true }, _sum: { amount: true } }),
     prisma.paymentStatus.findMany({ select: { balance: true, member: { select: { edirId: true } } } }),
-    prisma.emergencyClaim.groupBy({ by: ['status'], _count: { _all: true } }),
-    prisma.emergencyClaim.aggregate({ _sum: { disbursedAmount: true, approvedAmount: true } }),
-    prisma.asset.aggregate({ _sum: { quantity: true, issuedQuantity: true, currentValue: true }, _count: { _all: true } }),
-    prisma.memberRequest.count({ where: { type: { in: ['GRIEVANCE', 'FEEDBACK'] }, status: { in: ['PENDING', 'IN_REVIEW'] } } }),
+    prisma.emergencyClaim.groupBy({ by: ['status'], where: { ...txDate }, _count: { _all: true } }),
+    prisma.emergencyClaim.aggregate({ where: { ...txDate }, _sum: { disbursedAmount: true, approvedAmount: true } }),
+    prisma.asset.aggregate({ where: { ...txDate }, _sum: { quantity: true, issuedQuantity: true, currentValue: true }, _count: { _all: true } }),
+    prisma.memberRequest.count({ where: { type: { in: ['GRIEVANCE', 'FEEDBACK'] }, status: { in: ['PENDING', 'IN_REVIEW'] }, ...txDate } }),
     prisma.approvalRequest.groupBy({ by: ['edirId'], where: { status: 'PENDING' }, _count: { _all: true } }),
-    prisma.paymentLog.groupBy({ by: ['edirId'], where: { status: { in: ['SUCCESS', 'PARTIAL'] } }, _sum: { amount: true } }),
+    prisma.paymentLog.groupBy({ by: ['edirId'], where: { status: { in: ['SUCCESS', 'PARTIAL'] }, ...txDate }, _sum: { amount: true } }),
     prisma.paymentLog.findMany({ where: { status: { in: ['SUCCESS', 'PARTIAL'] }, createdAt: { gte: windowStart } }, select: { amount: true, createdAt: true } }),
     prisma.member.findMany({ where: { joinDate: { gte: windowStart } }, select: { joinDate: true } }),
     prisma.auditLog.findMany({ orderBy: { createdAt: 'desc' }, take: 12, include: { user: { select: { name: true, email: true } }, edir: { select: { name: true } } } }),

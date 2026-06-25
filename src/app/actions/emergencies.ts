@@ -10,12 +10,13 @@ import { submitForApproval } from '@/lib/approval-engine';
 import '@/lib/approval-modules';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
+import { dateWhere, type DateRangeParam } from '@/lib/date-range';
 
 /** Tenant-wide emergency KPIs for the summary cards. */
-export async function getEmergencySummary() {
+export async function getEmergencySummary(range?: DateRangeParam) {
   const actor = await getActor();
   await assertPermission(actor, ['view_emergencies', 'manage_emergencies']);
-  const where = tenantWhere(actor);
+  const where = { ...tenantWhere(actor), ...dateWhere('createdAt', range) };
   const [byStatus, agg, settings] = await Promise.all([
     prisma.emergencyClaim.groupBy({ by: ['status'], where, _count: { _all: true } }),
     prisma.emergencyClaim.aggregate({ _sum: { approvedAmount: true, disbursedAmount: true }, where }),
@@ -131,11 +132,12 @@ function assertGoodStanding(member: { status: string; name: string }) {
 
 const OPEN_STATUSES: Prisma.ApprovalRequestWhereInput['status'] = { in: ['PENDING', 'RETURNED'] };
 
-export async function getEmergencyClaims(params: { status?: string; query?: string } = {}) {
+export async function getEmergencyClaims(params: { status?: string; query?: string; range?: DateRangeParam } = {}) {
   const actor = await getActor();
   await assertPermission(actor, ['view_emergencies', 'manage_emergencies']);
   const where: Prisma.EmergencyClaimWhereInput = {
     ...tenantWhere(actor),
+    ...dateWhere('createdAt', params.range),
     ...(params.status && params.status !== 'all' ? { status: params.status as any } : {}),
     ...(params.query ? { OR: [
       { member: { name: { contains: params.query, mode: 'insensitive' } } },

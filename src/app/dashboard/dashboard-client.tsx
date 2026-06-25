@@ -5,8 +5,9 @@ import Link from 'next/link';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Users, UserCheck, Wallet, HandCoins, Siren, CheckSquare, CreditCard, ArrowUpRight } from 'lucide-react';
+import { Users, UserCheck, Wallet, HandCoins, Siren, CreditCard, ArrowUpRight } from 'lucide-react';
 import { PageHeader, StatCard, LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
+import { DateRangeFilter, ALL_TIME, toParam, type DateRangeValue } from '@/components/ui/date-range-filter';
 import { getDashboardData, type DashboardData } from '../actions/dashboard';
 
 const money = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 2 });
@@ -23,14 +24,15 @@ export default function DashboardClient() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  const [range, setRange] = useState<DateRangeValue>(ALL_TIME);
 
   const load = useCallback(() => {
     setLoading(true); setError(false);
-    getDashboardData().then(setData).catch(() => setError(true)).finally(() => setLoading(false));
-  }, []);
+    getDashboardData(toParam(range)).then(setData).catch(() => setError(true)).finally(() => setLoading(false));
+  }, [range]);
   useEffect(() => { load(); }, [load]);
 
-  if (loading) return <LoadingState label="Loading your dashboard…" className="min-h-[60vh]" />;
+  if (loading && !data) return <LoadingState label="Loading your dashboard…" className="min-h-[60vh]" />;
   if (error || !data) return <ErrorState variant="page" onRetry={load} showContact />;
 
   const { user, kpis, recentPayments, edir } = data;
@@ -51,15 +53,15 @@ export default function DashboardClient() {
       <PageHeader
         title={`Welcome, ${user.name || 'there'}`}
         description={user.roleName ? `Signed in as ${user.roleName} · Edir overview` : 'Edir overview'}
+        actions={<DateRangeFilter value={range} onChange={setRange} align="end" />}
       />
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         <StatCard title="Total Members" value={kpis.totalMembers} icon={Users} href="/dashboard/people" accent="primary" />
         <StatCard title="Active Members" value={kpis.activeMembers} icon={UserCheck} href="/dashboard/people" accent="success" />
         <StatCard title="Total Balance" value={money(kpis.totalBalance)} icon={Wallet} accent="info" />
         <StatCard title="Total Disbursed" value={money(kpis.totalDisbursed)} icon={HandCoins} accent="warning" />
         <StatCard title="Active Emergencies" value={kpis.activeEmergencies} icon={Siren} href="/dashboard/emergencies" accent="destructive" />
-        <StatCard title="Pending Approvals" value={kpis.pendingApprovals} icon={CheckSquare} href="/dashboard/approvals" accent="primary" />
       </div>
 
       <Card>

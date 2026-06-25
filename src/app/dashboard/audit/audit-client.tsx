@@ -8,6 +8,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Loader2, Search, Download, ScrollText, Archive } from 'lucide-react';
 import { Pagination } from '@/components/ui/pagination';
+import { DateRangeFilter, ALL_TIME, toParam, type DateRangeValue } from '@/components/ui/date-range-filter';
 import { getAuditLogs, exportAuditCsv, archiveAuditLog } from '@/app/actions/admin';
 
 const downloadCsv = (csv: string, name: string) => {
@@ -25,21 +26,24 @@ export default function AuditClient() {
   const [query, setQuery] = useState('');
   const [action, setAction] = useState('');
   const [archived, setArchived] = useState(false);
+  const [dateRange, setDateRange] = useState<DateRangeValue>(ALL_TIME);
   const [page, setPage] = useState(1);
   const [pages, setPages] = useState(1);
   const [total, setTotal] = useState(0);
+  const rangeKey = `${dateRange.preset}:${dateRange.from?.toISOString() ?? ''}:${dateRange.to?.toISOString() ?? ''}`;
 
   const load = useCallback(() => {
     setLoading(true); setError(false);
-    getAuditLogs({ query, action, archived, page })
+    getAuditLogs({ query, action, archived, page, range: toParam(dateRange) })
       .then(r => { setItems(r.items); setPages(r.pages); setTotal(r.total); })
       .catch(() => setError(true)).finally(() => setLoading(false));
-  }, [query, action, archived, page]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, action, archived, page, rangeKey]);
   useEffect(() => { load(); }, [load]);
-  useEffect(() => { setPage(1); }, [query, action, archived]);
+  useEffect(() => { setPage(1); }, [query, action, archived, rangeKey]);
 
   const onExport = async () => {
-    try { downloadCsv(await exportAuditCsv({ query, action, archived }), 'audit-log.csv'); }
+    try { downloadCsv(await exportAuditCsv({ query, action, archived, range: toParam(dateRange) }), 'audit-log.csv'); }
     catch { toast.error('Export failed.'); }
   };
   const onArchive = async (id: string) => {
@@ -64,6 +68,7 @@ export default function AuditClient() {
           <Input className="pl-8" placeholder="Search details…" value={query} onChange={e => setQuery(e.target.value)} />
         </div>
         <Input className="w-48" placeholder="Filter by action…" value={action} onChange={e => setAction(e.target.value)} />
+        <DateRangeFilter value={dateRange} onChange={setDateRange} className="w-44" />
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={archived} onChange={e => setArchived(e.target.checked)} /> Archived</label>
       </div>
 

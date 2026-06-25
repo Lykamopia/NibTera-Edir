@@ -18,6 +18,7 @@ import {
   CheckCircle2, XCircle, Clock, Archive, Trash2, Share2, Tag, Shield, Download, History, FolderOpen, X,
 } from 'lucide-react';
 import { PageHeader, LoadingState, ErrorState, EmptyState, StatCard } from '@/components/ui/states';
+import { DateRangeFilter, ALL_TIME, toParam, type DateRangeValue } from '@/components/ui/date-range-filter';
 import { useConfirm, usePrompt } from '@/components/ui/confirm-provider';
 import { uploadFile } from '@/lib/upload';
 import {
@@ -60,14 +61,17 @@ export default function DocumentsClient() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [detailId, setDetailId] = useState<string | null>(null);
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [range, setRange] = useState<DateRangeValue>(ALL_TIME);
   const confirm = useConfirm();
+  const rangeKey = `${range.preset}:${range.from?.toISOString() ?? ''}:${range.to?.toISOString() ?? ''}`;
 
   const load = useCallback(() => {
     setLoading(true); setError(false);
-    listDmsDocuments({ query, category, status, tag: tag === 'all' ? undefined : tag, visibility })
+    listDmsDocuments({ query, category, status, tag: tag === 'all' ? undefined : tag, visibility, range: toParam(range) })
       .then((r: any) => { if (r?.success) setData(r); else setError(true); })
       .catch(() => setError(true)).finally(() => setLoading(false));
-  }, [query, category, status, tag, visibility]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, category, status, tag, visibility, rangeKey]);
   useEffect(() => { load(); }, [load]);
 
   const items: any[] = data?.items ?? [];
@@ -141,6 +145,7 @@ export default function DocumentsClient() {
                 {Object.entries(STATUS).map(([k, v]) => <SelectItem key={k} value={k}>{v.label}</SelectItem>)}
               </SelectContent>
             </Select>
+            <DateRangeFilter value={range} onChange={setRange} className="w-44" />
             {(data?.tags?.length ?? 0) > 0 && (
               <Select value={tag} onValueChange={setTag}>
                 <SelectTrigger className="w-36"><Tag className="mr-1 h-3.5 w-3.5 text-muted-foreground" /><SelectValue placeholder="Tag" /></SelectTrigger>

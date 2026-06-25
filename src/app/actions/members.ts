@@ -12,6 +12,7 @@ import { generateTempPassword } from '@/lib/temp-password';
 import bcrypt from 'bcrypt';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
+import { dateWhere, type DateRangeParam } from '@/lib/date-range';
 
 const memberSchema = z.object({
   name: z.string().min(2, 'Name is required'),
@@ -84,7 +85,7 @@ export async function ensureMembershipForUser(userId: string): Promise<{ created
   });
 }
 
-export async function getMembers(params: { query?: string; status?: string; page?: number; pageSize?: number } = {}) {
+export async function getMembers(params: { query?: string; status?: string; page?: number; pageSize?: number; range?: DateRangeParam } = {}) {
   const actor = await getActor();
   await assertPermission(actor, ['view_members', 'manage_members']);
   const page = Math.max(1, params.page ?? 1);
@@ -92,6 +93,7 @@ export async function getMembers(params: { query?: string; status?: string; page
 
   const where: Prisma.MemberWhereInput = {
     ...tenantWhere(actor),
+    ...dateWhere('joinDate', params.range),
     ...(params.status && params.status !== 'all' ? { status: params.status as any } : {}),
     ...(params.query
       ? {

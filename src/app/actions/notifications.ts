@@ -2,13 +2,14 @@
 
 import prisma from "@/lib/prisma";
 import { getLoggedInUser } from "@/app/actions/auth";
+import { dateWhere, type DateRangeParam } from "@/lib/date-range";
 
-export async function getNotifications(limit = 30) {
+export async function getNotifications(limit = 30, range?: DateRangeParam) {
   const user = await getLoggedInUser();
   if (!user) return [];
 
   return prisma.notification.findMany({
-    where: { userId: user.id },
+    where: { userId: user.id, ...dateWhere('createdAt', range) },
     orderBy: { createdAt: "desc" },
     take: limit,
     select: {

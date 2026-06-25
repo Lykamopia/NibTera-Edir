@@ -25,6 +25,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { PageHeader, LoadingState, EmptyState, StatCard } from '@/components/ui/states';
+import { DateRangeFilter, ALL_TIME, toParam, type DateRangeValue } from '@/components/ui/date-range-filter';
 import { Pagination, usePagination } from '@/components/ui/pagination';
 import { submitEdirRegistration, getEdirRegistrations, type EdirRegistrationInput } from '@/app/actions/edir-registration';
 import { getBranches } from '@/app/actions/branches';
@@ -33,7 +34,7 @@ import { useConfirm } from '@/components/ui/confirm-provider';
 import { type Actor } from '@/lib/tenant-scope';
 import {
   Building2, Check, Clock, X, RotateCcw, Upload, FileText, ChevronLeft, ChevronRight,
-  Users, UserCircle, ListChecks, Ban, Trash2, Pencil, Loader2,
+  Users, UserCircle, ListChecks, Ban, Trash2, Pencil, Loader2, Eye,
 } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 
@@ -61,6 +62,18 @@ interface EdirItem {
   name: string;
   description: string | null;
   status: 'PENDING' | 'ACTIVE' | 'SUSPENDED' | 'CLOSED';
+  accountNumber: string | null;
+  address: string | null;
+  branchId: string | null;
+  branchName: string | null;
+  branchCode: string | null;
+  districtName: string | null;
+  contactPersonName: string | null;
+  contactAddress: string | null;
+  contactMobile: string | null;
+  contactEmail: string | null;
+  agreementDocUrl: string | null;
+  createdAt: Date;
   members: number;
   users: number;
 }
@@ -104,6 +117,8 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
   const [activeTab, setActiveTab] = useState('all-edirs');
   const [edirCaps, setEdirCaps] = useState<EdirCaps>({ canCreate: false, canEdit: false, canRevoke: false, canDelete: false });
   const [editEdir, setEditEdir] = useState<EdirItem | null>(null);
+  const [viewEdir, setViewEdir] = useState<EdirItem | null>(null);
+  const [edirsRange, setEdirsRange] = useState<DateRangeValue>(ALL_TIME);
   const confirm = useConfirm();
 
   const [formData, setFormData] = useState<EdirRegistrationInput>({
@@ -156,7 +171,7 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
   const loadEdirs = async () => {
     try {
       setEdirsLoading(true);
-      const result = await getEdirs();
+      const result = await getEdirs(toParam(edirsRange));
       if (result) setEdirs(result as EdirItem[]);
     } catch (err) {
       console.error('Failed to load edirs:', err);
@@ -165,8 +180,13 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
     }
   };
 
+  const edirsRangeKey = `${edirsRange.preset}:${edirsRange.from?.toISOString() ?? ''}:${edirsRange.to?.toISOString() ?? ''}`;
   useEffect(() => {
     loadEdirs();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [edirsRangeKey]);
+
+  useEffect(() => {
     getEdirAdminCapabilities().then(setEdirCaps).catch(() => {});
   }, []);
 
@@ -281,9 +301,12 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
           </div>
 
           <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Edir Directory</CardTitle>
-              <CardDescription>All Edirs visible within your scope.</CardDescription>
+            <CardHeader className="flex flex-row items-start justify-between gap-2 space-y-0">
+              <div>
+                <CardTitle className="text-base">Edir Directory</CardTitle>
+                <CardDescription>All Edirs visible within your scope.</CardDescription>
+              </div>
+              <DateRangeFilter value={edirsRange} onChange={setEdirsRange} align="end" />
             </CardHeader>
             <CardContent className="p-0">
               {edirsLoading ? (
@@ -302,40 +325,43 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
                       <TableHead>Name</TableHead>
                       <TableHead>Description</TableHead>
                       <TableHead>Status</TableHead>
+                      <TableHead>Branch</TableHead>
                       <TableHead className="text-right">Members</TableHead>
                       <TableHead className="text-right">Users</TableHead>
-                      {(edirCaps.canEdit || edirCaps.canRevoke || edirCaps.canDelete) && <TableHead className="text-right">Actions</TableHead>}
+                      <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {edirsPage.pageItems.map(edir => (
-                      <TableRow key={edir.id}>
+                      <TableRow key={edir.id} className="cursor-pointer" onClick={() => setViewEdir(edir)}>
                         <TableCell className="font-medium">{edir.name}</TableCell>
                         <TableCell className="max-w-md truncate text-muted-foreground">{edir.description || '—'}</TableCell>
                         <TableCell><StatusBadge status={edir.status} /></TableCell>
+                        <TableCell className="text-muted-foreground">{edir.branchName || '—'}</TableCell>
                         <TableCell className="text-right tabular-nums">{edir.members}</TableCell>
                         <TableCell className="text-right tabular-nums">{edir.users}</TableCell>
-                        {(edirCaps.canEdit || edirCaps.canRevoke || edirCaps.canDelete) && (
-                          <TableCell className="text-right">
-                            <div className="flex justify-end gap-1">
-                              {edirCaps.canEdit && (
-                                <Button size="sm" variant="ghost" className="text-muted-foreground hover:text-primary" onClick={() => setEditEdir(edir)} title="Edit">
-                                  <Pencil className="h-4 w-4" />
-                                </Button>
-                              )}
-                              {edirCaps.canRevoke && (
-                                <Button size="sm" variant="ghost" className={edir.status === 'SUSPENDED' || edir.status === 'CLOSED' ? 'text-success' : 'text-warning'} onClick={() => onRevoke(edir)} title={edir.status === 'SUSPENDED' || edir.status === 'CLOSED' ? 'Reactivate' : 'Revoke'}>
-                                  {edir.status === 'SUSPENDED' || edir.status === 'CLOSED' ? <RotateCcw className="h-4 w-4" /> : <Ban className="h-4 w-4" />}
-                                </Button>
-                              )}
-                              {edirCaps.canDelete && (
-                                <Button size="sm" variant="ghost" className="text-muted-foreground hover:text-destructive" onClick={() => onDelete(edir)} title="Delete">
-                                  <Trash2 className="h-4 w-4" />
-                                </Button>
-                              )}
-                            </div>
-                          </TableCell>
-                        )}
+                        <TableCell className="text-right" onClick={e => e.stopPropagation()}>
+                          <div className="flex justify-end gap-1">
+                            <Button size="sm" variant="ghost" className="text-muted-foreground hover:text-primary" onClick={() => setViewEdir(edir)} title="View details">
+                              <Eye className="h-4 w-4" />
+                            </Button>
+                            {edirCaps.canEdit && (
+                              <Button size="sm" variant="ghost" className="text-muted-foreground hover:text-primary" onClick={() => setEditEdir(edir)} title="Edit">
+                                <Pencil className="h-4 w-4" />
+                              </Button>
+                            )}
+                            {edirCaps.canRevoke && (
+                              <Button size="sm" variant="ghost" className={edir.status === 'SUSPENDED' || edir.status === 'CLOSED' ? 'text-success' : 'text-warning'} onClick={() => onRevoke(edir)} title={edir.status === 'SUSPENDED' || edir.status === 'CLOSED' ? 'Reactivate' : 'Revoke'}>
+                                {edir.status === 'SUSPENDED' || edir.status === 'CLOSED' ? <RotateCcw className="h-4 w-4" /> : <Ban className="h-4 w-4" />}
+                              </Button>
+                            )}
+                            {edirCaps.canDelete && (
+                              <Button size="sm" variant="ghost" className="text-muted-foreground hover:text-destructive" onClick={() => onDelete(edir)} title="Delete">
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            )}
+                          </div>
+                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -628,9 +654,19 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
         </TabsContent>
       </Tabs>
 
+      {viewEdir && (
+        <ViewEdirDialog
+          edir={viewEdir}
+          onClose={() => setViewEdir(null)}
+          canEdit={edirCaps.canEdit}
+          onEdit={() => { const e = viewEdir; setViewEdir(null); setEditEdir(e); }}
+        />
+      )}
+
       {editEdir && (
         <EditEdirDialog
           edir={editEdir}
+          branches={branches}
           onClose={() => setEditEdir(null)}
           onDone={() => { setEditEdir(null); loadEdirs(); }}
         />
@@ -639,24 +675,132 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
   );
 }
 
-function EditEdirDialog({ edir, onClose, onDone }: { edir: EdirItem; onClose: () => void; onDone: () => void }) {
-  const [form, setForm] = useState({ name: edir.name, description: edir.description ?? '' });
+function ViewEdirDialog({ edir, onClose, canEdit, onEdit }: { edir: EdirItem; onClose: () => void; canEdit: boolean; onEdit: () => void }) {
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-h-[88vh] max-w-2xl overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex flex-wrap items-center gap-2">{edir.name} <StatusBadge status={edir.status} /></DialogTitle>
+        </DialogHeader>
+        <div className="space-y-5">
+          <ReviewSection title="Edir Information" rows={[
+            ['Edir Name', edir.name],
+            ['Branch', edir.branchName ? `${edir.branchName}${edir.branchCode ? ` (${edir.branchCode})` : ''}` : '—'],
+            ['District', edir.districtName || '—'],
+            ['Account Number', edir.accountNumber || '—'],
+            ['Description', edir.description || '—'],
+          ]} />
+          <ReviewSection title="Chairperson / Contact" rows={[
+            ['Name', edir.contactPersonName || '—'],
+            ['Mobile', edir.contactMobile || '—'],
+            ['Email', edir.contactEmail || '—'],
+            ['Contact Address', edir.contactAddress || '—'],
+          ]} />
+          <ReviewSection title="Address & Document" rows={[
+            ['Edir Address', edir.address || '—'],
+            ['Agreement', edir.agreementDocUrl || 'No document uploaded'],
+          ]} />
+          <ReviewSection title="Statistics" rows={[
+            ['Members', String(edir.members)],
+            ['Linked Users', String(edir.users)],
+            ['Registered', new Date(edir.createdAt).toLocaleDateString()],
+          ]} />
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Close</Button>
+          {canEdit && <Button onClick={onEdit} className="gap-1"><Pencil className="h-4 w-4" /> Edit</Button>}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function EditEdirDialog({ edir, branches, onClose, onDone }: { edir: EdirItem; branches: Branch[]; onClose: () => void; onDone: () => void }) {
+  const [form, setForm] = useState({
+    name: edir.name,
+    description: edir.description ?? '',
+    accountNumber: edir.accountNumber ?? '',
+    branchId: edir.branchId ?? '',
+    address: edir.address ?? '',
+    contactPersonName: edir.contactPersonName ?? '',
+    contactMobile: edir.contactMobile ?? '',
+    contactEmail: edir.contactEmail ?? '',
+    contactAddress: edir.contactAddress ?? '',
+    agreementDocUrl: edir.agreementDocUrl ?? '',
+  });
   const [saving, setSaving] = useState(false);
+  const set = (k: keyof typeof form, v: string) => setForm(f => ({ ...f, [k]: v }));
+
   const submit = async () => {
     if (!form.name.trim()) { toast.error('Name is required.'); return; }
     setSaving(true);
-    const res = await saveEdir({ id: edir.id, name: form.name.trim(), description: form.description.trim() || undefined });
+    const res = await saveEdir({
+      id: edir.id,
+      name: form.name.trim(),
+      description: form.description,
+      accountNumber: form.accountNumber,
+      branchId: form.branchId || null,
+      address: form.address,
+      contactPersonName: form.contactPersonName,
+      contactMobile: form.contactMobile,
+      contactEmail: form.contactEmail,
+      contactAddress: form.contactAddress,
+      agreementDocUrl: form.agreementDocUrl,
+    });
     setSaving(false);
     if (res?.success) { toast.success('Edir updated.'); onDone(); }
     else toast.error(res?.error || 'Failed to save.');
   };
+
   return (
     <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent>
+      <DialogContent className="max-h-[88vh] max-w-2xl overflow-y-auto">
         <DialogHeader><DialogTitle>Edit Edir</DialogTitle></DialogHeader>
-        <div className="space-y-3">
-          <div className="space-y-1.5"><Label className="text-xs">Name</Label><Input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} /></div>
-          <div className="space-y-1.5"><Label className="text-xs">Description</Label><Textarea rows={3} value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} /></div>
+        <div className="space-y-5">
+          {/* Edir details */}
+          <div className="space-y-3">
+            <h4 className="text-sm font-semibold text-muted-foreground">Edir Details</h4>
+            <div className="space-y-1.5"><Label className="text-xs">Edir Name <span className="text-destructive">*</span></Label><Input value={form.name} onChange={e => set('name', e.target.value)} /></div>
+            <div className="space-y-1.5"><Label className="text-xs">Description</Label><Textarea rows={2} value={form.description} onChange={e => set('description', e.target.value)} /></div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1.5"><Label className="text-xs">Account Number</Label><Input value={form.accountNumber} onChange={e => set('accountNumber', e.target.value)} /></div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Branch</Label>
+                <Select value={form.branchId} onValueChange={v => set('branchId', v)}>
+                  <SelectTrigger><SelectValue placeholder="Select a branch…" /></SelectTrigger>
+                  <SelectContent>
+                    {branches.map(b => (
+                      <SelectItem key={b.id} value={b.id}>{b.name}{b.code ? ` (${b.code})` : ''} — {b.districtName}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          </div>
+
+          {/* Chairperson / contact */}
+          <div className="space-y-3">
+            <h4 className="text-sm font-semibold text-muted-foreground">Chairperson / Contact</h4>
+            <div className="space-y-1.5"><Label className="text-xs">Contact Person Name</Label><Input value={form.contactPersonName} onChange={e => set('contactPersonName', e.target.value)} /></div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1.5"><Label className="text-xs">Mobile Number</Label><Input value={form.contactMobile} onChange={e => set('contactMobile', e.target.value)} /></div>
+              <div className="space-y-1.5"><Label className="text-xs">Email Address</Label><Input type="email" value={form.contactEmail} onChange={e => set('contactEmail', e.target.value)} /></div>
+            </div>
+            <div className="space-y-1.5"><Label className="text-xs">Contact Address</Label><Textarea rows={2} value={form.contactAddress} onChange={e => set('contactAddress', e.target.value)} /></div>
+          </div>
+
+          {/* Address & document */}
+          <div className="space-y-3">
+            <h4 className="text-sm font-semibold text-muted-foreground">Address & Document</h4>
+            <div className="space-y-1.5"><Label className="text-xs">Edir Address / Location</Label><Textarea rows={2} value={form.address} onChange={e => set('address', e.target.value)} /></div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Agreement Document</Label>
+              <label className="flex cursor-pointer items-center gap-2 rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground hover:border-primary/50 hover:bg-primary/5">
+                <input type="file" accept=".pdf" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) set('agreementDocUrl', f.name); }} />
+                <FileText className="h-4 w-4" /> {form.agreementDocUrl || 'Attach a PDF'}
+              </label>
+            </div>
+          </div>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>

@@ -47,6 +47,9 @@ export function DashboardContentWrapper({ user, children }: { user: LoggedInUser
   const pathname = usePathname();
   const [isMounted, setIsMounted] = useState(false);
   const [pending, setPending] = useState(0);
+  // Bumped whenever the Super-Admin switches the active Edir, so the active page
+  // remounts and its client-side data reloads under the new scope.
+  const [edirNonce, setEdirNonce] = useState(0);
 
   const permissions = useMemo(() => (user?.role?.permissions?.split(',').filter(Boolean) || []) as Permission[], [user?.role?.permissions]);
   // Full access is the `super_admin` master switch only — a limited platform role
@@ -59,7 +62,7 @@ export function DashboardContentWrapper({ user, children }: { user: LoggedInUser
     let active = true;
     getPendingApprovalCount().then(c => { if (active) setPending(c); }).catch(() => {});
     return () => { active = false; };
-  }, [pathname]);
+  }, [pathname, edirNonce]);
 
   if (!isMounted || !user) {
     return <div className="h-screen w-full flex items-center justify-center bg-background"><HoneycombLoader /></div>;
@@ -128,7 +131,7 @@ export function DashboardContentWrapper({ user, children }: { user: LoggedInUser
               <SidebarTrigger className="hidden md:flex" />
               <div className="hidden md:flex items-center"><Breadcrumb /></div>
               <div className="w-full flex-1" />
-              <EdirSwitcher />
+              <EdirSwitcher onChanged={() => setEdirNonce(n => n + 1)} />
               <EdirBadge edir={(user as any)?.edir} />
               <ThemeToggle />
               <NotificationBell />
@@ -139,7 +142,7 @@ export function DashboardContentWrapper({ user, children }: { user: LoggedInUser
             {/* Global content container: fills the available width next to the sidebar
                with a consistent responsive gutter, capping only on ultra-wide screens
                so content stays readable. Equal padding on all sides. */}
-            <div key={pathname} className="page-enter mx-auto w-full max-w-[1920px] flex-1 p-4 min-h-0 min-w-0 sm:p-5 lg:p-6">{children}</div>
+            <div key={`${pathname}:${edirNonce}`} className="page-enter mx-auto w-full max-w-[1920px] flex-1 p-4 min-h-0 min-w-0 sm:p-5 lg:p-6">{children}</div>
           </main>
         </div>
       </div>

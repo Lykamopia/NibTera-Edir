@@ -36,9 +36,14 @@ export async function getApprovals(tab: ApprovalTab, filters: { module?: string;
   const eligibleModules = (Object.keys(MODULE_CHECKER_PERMISSION) as ApprovalModule[])
     .filter(m => actorHasPermission(actor, MODULE_CHECKER_PERMISSION[m]));
 
+  // An actor who can check no modules sees an empty pending queue. Use an empty
+  // `in` (matches nothing) — never a sentinel string, which is an invalid value
+  // for the ApprovalModule enum and makes Prisma throw.
+  if (tab === 'pending' && eligibleModules.length === 0) return [];
+
   let where: Prisma.ApprovalRequestWhereInput = { ...tenantWhere(actor) };
   if (tab === 'pending') {
-    where = { ...where, status: 'PENDING', makerId: { not: actor.id }, module: { in: eligibleModules.length ? eligibleModules : ['__none__' as any] } };
+    where = { ...where, status: 'PENDING', makerId: { not: actor.id }, module: { in: eligibleModules } };
   } else if (tab === 'mine') {
     where = { ...where, makerId: actor.id };
   } else {

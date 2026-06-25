@@ -3,11 +3,15 @@
 /**
  * Standardized date-range filter used across data-driven pages. It owns the
  * preset selection and emits a resolved { preset, from, to } range so every
- * consumer filters statistics, tables, and exports consistently.
+ * consumer filters statistics, tables, charts, and exports consistently.
  *
  *   const [range, setRange] = useState<DateRangeValue>(ALL_TIME);
  *   <DateRangeFilter value={range} onChange={setRange} />
- *   const rows = items.filter(i => inDateRange(i.createdAt, range));
+ *   // client-side:  rows.filter(i => inDateRange(i.createdAt, range))
+ *   // server-side:  action({ ...filters, range: toParam(range) })
+ *
+ * All range math lives in `@/lib/date-range` so the server resolves identical
+ * bounds. The pure helpers are re-exported here for backwards compatibility.
  */
 
 import * as React from 'react';
@@ -17,95 +21,41 @@ import { Label } from '@/components/ui/label';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { CalendarDays, Check, ChevronDown } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import {
+  type DatePreset,
+  type DateRangeValue,
+  type DateRangeParam,
+  ALL_TIME,
+  DATE_PRESETS,
+  computeRange,
+  inDateRange,
+  resolveBounds,
+  dateWhere,
+  toParam,
+  dateRangeLabel,
+} from '@/lib/date-range';
 
-export type DatePreset =
-  | 'all' | 'today' | 'yesterday' | 'this_week' | 'this_month' | 'this_year' | 'last_30' | 'custom';
+export {
+  type DatePreset,
+  type DateRangeValue,
+  type DateRangeParam,
+  ALL_TIME,
+  computeRange,
+  inDateRange,
+  resolveBounds,
+  dateWhere,
+  toParam,
+  dateRangeLabel,
+};
 
-export interface DateRangeValue {
-  preset: DatePreset;
-  from: Date | null; // inclusive start (00:00:00)
-  to: Date | null;   // inclusive end (23:59:59.999)
-}
-
-export const ALL_TIME: DateRangeValue = { preset: 'all', from: null, to: null };
-
-const PRESETS: { id: DatePreset; label: string }[] = [
-  { id: 'all', label: 'All time' },
-  { id: 'today', label: 'Today' },
-  { id: 'yesterday', label: 'Yesterday' },
-  { id: 'this_week', label: 'This Week' },
-  { id: 'this_month', label: 'This Month' },
-  { id: 'this_year', label: 'This Year' },
-  { id: 'last_30', label: 'Last 30 Days' },
-  { id: 'custom', label: 'Custom Range' },
-];
-
-const startOfDay = (d: Date) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
-const endOfDay = (d: Date) => { const x = new Date(d); x.setHours(23, 59, 59, 999); return x; };
-const addDays = (d: Date, n: number) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
-
-/** Resolve a preset (and optional custom dates) into a concrete from/to range. */
-export function computeRange(preset: DatePreset, customFrom?: Date | null, customTo?: Date | null): DateRangeValue {
-  const now = new Date();
-  switch (preset) {
-    case 'today':
-      return { preset, from: startOfDay(now), to: endOfDay(now) };
-    case 'yesterday': {
-      const y = addDays(now, -1);
-      return { preset, from: startOfDay(y), to: endOfDay(y) };
-    }
-    case 'this_week': {
-      const day = (now.getDay() + 6) % 7; // 0 = Monday
-      return { preset, from: startOfDay(addDays(now, -day)), to: endOfDay(now) };
-    }
-    case 'this_month':
-      return { preset, from: startOfDay(new Date(now.getFullYear(), now.getMonth(), 1)), to: endOfDay(now) };
-    case 'this_year':
-      return { preset, from: startOfDay(new Date(now.getFullYear(), 0, 1)), to: endOfDay(now) };
-    case 'last_30':
-      return { preset, from: startOfDay(addDays(now, -29)), to: endOfDay(now) };
-    case 'custom':
-      return {
-        preset,
-        from: customFrom ? startOfDay(customFrom) : null,
-        to: customTo ? endOfDay(customTo) : null,
-      };
-    case 'all':
-    default:
-      return ALL_TIME;
-  }
-}
-
-/** True if `date` falls within the (inclusive) range. A null bound means "open". */
-export function inDateRange(date: Date | string | null | undefined, range: DateRangeValue): boolean {
-  if (!range || range.preset === 'all' || (!range.from && !range.to)) return true;
-  if (!date) return false;
-  const t = new Date(date).getTime();
-  if (range.from && t < range.from.getTime()) return false;
-  if (range.to && t > range.to.getTime()) return false;
-  return true;
-}
-
-const fmt = (d: Date | null) => (d ? d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '');
 const toInputValue = (d: Date | null) => {
   if (!d) return '';
   const x = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
   return x.toISOString().slice(0, 10);
 };
 
-/** A short human label for the current selection (for chips / summaries). */
-export function dateRangeLabel(v: DateRangeValue): string {
-  if (v.preset === 'all') return 'All time';
-  const preset = PRESETS.find(p => p.id === v.preset);
-  if (v.preset !== 'custom' && preset) return preset.label;
-  if (v.from && v.to) return `${fmt(v.from)} – ${fmt(v.to)}`;
-  if (v.from) return `From ${fmt(v.from)}`;
-  if (v.to) return `Until ${fmt(v.to)}`;
-  return 'Custom Range';
-}
-
 export function DateRangeFilter({
-  value, onChange, className, align = 'start', presets = PRESETS.map(p => p.id),
+  value, onChange, className, align = 'start', presets = DATE_PRESETS.map(p => p.id),
 }: {
   value: DateRangeValue;
   onChange: (v: DateRangeValue) => void;
@@ -135,7 +85,7 @@ export function DateRangeFilter({
     setOpen(false);
   };
 
-  const shown = PRESETS.filter(p => presets.includes(p.id));
+  const shown = DATE_PRESETS.filter(p => presets.includes(p.id));
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -146,8 +96,8 @@ export function DateRangeFilter({
           <ChevronDown className="ml-auto h-4 w-4 shrink-0 text-muted-foreground" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent align={align} className="w-64 p-0">
-        <div className="flex flex-col p-1">
+      <PopoverContent align={align} className="w-60 p-0">
+        <div className="grid max-h-80 grid-cols-1 gap-0.5 overflow-y-auto p-1">
           {shown.map(p => {
             const active = value.preset === p.id;
             return (

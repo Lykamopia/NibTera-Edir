@@ -317,7 +317,7 @@ export default function AccountClient() {
           {/* Documents */}
           <TabsContent value="documents" className="mt-4">
             <Card>
-              <CardHeader><CardTitle className="text-base">My Documents</CardTitle><CardDescription>Identification and supporting documents on your record.</CardDescription></CardHeader>
+              <CardHeader><CardTitle className="text-base">My Documents</CardTitle><CardDescription>Documents on your record and files you’ve uploaded — each upload is stored centrally and shown with its live approval status.</CardDescription></CardHeader>
               <CardContent className="p-0">
                 {p.documents.length === 0 ? <EmptyState icon={FolderOpen} title="No documents" description="Documents added to your profile appear here." className="min-h-28" /> : (
                   <div className="divide-y">

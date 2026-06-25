@@ -10,15 +10,16 @@ import { submitForApproval } from '@/lib/approval-engine';
 import '@/lib/approval-modules';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
+import { dateWhere, type DateRangeParam } from '@/lib/date-range';
 
-/** Tenant-wide asset KPIs for the summary cards. */
-export async function getAssetSummary() {
+/** Tenant-wide asset KPIs for the summary cards (filtered by registration date). */
+export async function getAssetSummary(range?: DateRangeParam) {
   const actor = await getActor();
   await assertPermission(actor, ['view_assets', 'manage_assets']);
-  const where = tenantWhere(actor);
+  const where = { ...tenantWhere(actor), ...dateWhere('createdAt', range) };
   const [agg, categories, openIssuances, settings] = await Promise.all([
     prisma.asset.aggregate({ _sum: { currentValue: true, purchaseValue: true, quantity: true, issuedQuantity: true }, _count: { _all: true }, where }),
-    prisma.assetCategory.count({ where }),
+    prisma.assetCategory.count({ where: tenantWhere(actor) }),
     prisma.assetIssuance.count({ where: { asset: where, status: { in: ['ISSUED', 'COMPENSATION_PENDING'] } } }),
     actor.edirId || actor.isSuperAdmin ? prisma.edirSettings.findFirst({ where: actor.isSuperAdmin ? {} : { edirId: actor.edirId! } }) : Promise.resolve(null),
   ]);
@@ -85,11 +86,12 @@ export async function deleteAssetCategory(id: string) {
 
 // ─── Assets (inventory) ──────────────────────────────────────────────────────
 
-export async function getAssets(params: { status?: string; query?: string; categoryId?: string } = {}) {
+export async function getAssets(params: { status?: string; query?: string; categoryId?: string; range?: DateRangeParam } = {}) {
   const actor = await getActor();
   await assertPermission(actor, ['view_assets', 'manage_assets']);
   const where: Prisma.AssetWhereInput = {
     ...tenantWhere(actor),
+    ...dateWhere('createdAt', params.range),
     ...(params.status && params.status !== 'all' ? { status: params.status } : {}),
     ...(params.categoryId && params.categoryId !== 'all' ? { categoryId: params.categoryId } : {}),
     ...(params.query ? { name: { contains: params.query, mode: 'insensitive' } } : {}),
@@ -181,11 +183,12 @@ export async function deleteAsset(id: string) {
 
 const OPEN_STATUSES: Prisma.ApprovalRequestWhereInput['status'] = { in: ['PENDING', 'RETURNED'] };
 
-export async function getIssuances(params: { status?: string } = {}) {
+export async function getIssuances(params: { status?: string; range?: DateRangeParam } = {}) {
   const actor = await getActor();
   await assertPermission(actor, ['view_assets', 'manage_assets']);
   const where: Prisma.AssetIssuanceWhereInput = {
     asset: tenantWhere(actor),
+    ...dateWhere('createdAt', params.range),
     ...(params.status && params.status !== 'all' ? { status: params.status as any } : {}),
   };
   const issuances = await prisma.assetIssuance.findMany({

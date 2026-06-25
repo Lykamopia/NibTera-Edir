@@ -12,6 +12,7 @@ import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Loader2, Users, UserCheck, Wallet, Siren, CheckSquare, CalendarDays, Package, Gauge, TrendingUp, TrendingDown, MessageSquareWarning, Activity, ArrowUpRight, CreditCard } from 'lucide-react';
 import { PageHeader, LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
+import { DateRangeFilter, ALL_TIME, toParam, type DateRangeValue } from '@/components/ui/date-range-filter';
 import { getOversightReport } from '@/app/actions/oversight';
 
 const money = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 0 });
@@ -65,11 +66,12 @@ export default function OversightClient() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [range, setRange] = useState(6);
+  const [dateRange, setDateRange] = useState<DateRangeValue>(ALL_TIME);
 
   const load = useCallback(() => {
     setLoading(true); setError(false);
-    getOversightReport().then(setData).catch(() => setError(true)).finally(() => setLoading(false));
-  }, []);
+    getOversightReport(toParam(dateRange)).then(setData).catch(() => setError(true)).finally(() => setLoading(false));
+  }, [dateRange]);
   useEffect(() => { load(); }, [load]);
 
   const trend = useMemo(() => (data ? data.trend.slice(-range) : []), [data, range]);
@@ -80,7 +82,7 @@ export default function OversightClient() {
     return Math.round(((cur - prev) / prev) * 100);
   }, [trend]);
 
-  if (loading) return <LoadingState label="Building executive report…" className="min-h-[60vh]" />;
+  if (loading && !data) return <LoadingState label="Building executive report…" className="min-h-[60vh]" />;
   if (error || !data) return <ErrorState variant="page" onRetry={load} showContact />;
 
   const cur = data.finance.currency;
@@ -101,10 +103,13 @@ export default function OversightClient() {
         description="Executive snapshot of the association’s health across every module."
         icon={Gauge}
         actions={
-          <div className="flex items-center gap-1 rounded-lg border p-0.5">
-            {RANGES.map(r => (
-              <button key={r.n} onClick={() => setRange(r.n)} className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${range === r.n ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}`}>{r.label}</button>
-            ))}
+          <div className="flex flex-wrap items-center gap-2">
+            <DateRangeFilter value={dateRange} onChange={setDateRange} align="end" />
+            <div className="flex items-center gap-1 rounded-lg border p-0.5" title="Trend chart window">
+              {RANGES.map(r => (
+                <button key={r.n} onClick={() => setRange(r.n)} className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${range === r.n ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}`}>{r.label}</button>
+              ))}
+            </div>
           </div>
         }
       />

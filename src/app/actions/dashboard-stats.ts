@@ -2,15 +2,18 @@
 
 import { getActor, assertPermission } from '@/lib/tenant-scope';
 import prisma from '@/lib/prisma';
+import { dateWhere, type DateRangeParam } from '@/lib/date-range';
 
 function failure(error: unknown) {
   console.error('Dashboard stats error:', error);
   return { success: false as const, error: error instanceof Error ? error.message : 'Failed to load stats' };
 }
 
-export async function getBranchStats(branchId: string) {
+export async function getBranchStats(branchId: string, range?: DateRangeParam) {
   try {
     const actor = await getActor();
+    const memDate = dateWhere('joinDate', range);
+    const txDate = dateWhere('createdAt', range);
 
     // Only branch users, district users, or super-admin can view
     if (actor.orgScope === 'BRANCH' && actor.branchId && actor.branchId !== branchId) {
@@ -34,10 +37,10 @@ export async function getBranchStats(branchId: string) {
         prisma.edir.count({ where: { branchId, status: 'ACTIVE' } }),
         prisma.edir.count({ where: { branchId, status: 'PENDING' } }),
         prisma.member.count({
-          where: { edir: { branchId } },
+          where: { edir: { branchId }, ...memDate },
         }),
         prisma.paymentLog.aggregate({
-          where: { edir: { branchId }, status: 'PAID' },
+          where: { edir: { branchId }, status: 'PAID', ...txDate },
           _sum: { amount: true },
         }),
         prisma.approvalRequest.count({
@@ -61,9 +64,11 @@ export async function getBranchStats(branchId: string) {
   }
 }
 
-export async function getDistrictStats(districtId: string) {
+export async function getDistrictStats(districtId: string, range?: DateRangeParam) {
   try {
     const actor = await getActor();
+    const memDate = dateWhere('joinDate', range);
+    const txDate = dateWhere('createdAt', range);
 
     // Only district users or super-admin can view
     if (actor.orgScope === 'DISTRICT' && actor.districtId && actor.districtId !== districtId) {
@@ -84,10 +89,10 @@ export async function getDistrictStats(districtId: string) {
         where: { branch: { districtId }, status: 'ACTIVE' },
       }),
       prisma.member.count({
-        where: { edir: { branch: { districtId } } },
+        where: { edir: { branch: { districtId } }, ...memDate },
       }),
       prisma.paymentLog.aggregate({
-        where: { edir: { branch: { districtId } }, status: 'PAID' },
+        where: { edir: { branch: { districtId } }, status: 'PAID', ...txDate },
         _sum: { amount: true },
       }),
     ]);
@@ -98,9 +103,9 @@ export async function getDistrictStats(districtId: string) {
         const [edirs, activeCount, members, collected] = await Promise.all([
           prisma.edir.count({ where: { branchId: branch.id } }),
           prisma.edir.count({ where: { branchId: branch.id, status: 'ACTIVE' } }),
-          prisma.member.count({ where: { edir: { branchId: branch.id } } }),
+          prisma.member.count({ where: { edir: { branchId: branch.id }, ...memDate } }),
           prisma.paymentLog.aggregate({
-            where: { edir: { branchId: branch.id }, status: 'PAID' },
+            where: { edir: { branchId: branch.id }, status: 'PAID', ...txDate },
             _sum: { amount: true },
           }),
         ]);

@@ -8,14 +8,15 @@ import { writeAudit } from '@/lib/audit';
 import { createNotifications } from '@/lib/notification-helpers';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
+import { dateWhere, type DateRangeParam } from '@/lib/date-range';
 
 // ─── Events (read) ───────────────────────────────────────────────────────────
 
-/** Tenant-wide event KPIs for the summary cards. */
-export async function getEventsSummary() {
+/** Tenant-wide event KPIs for the summary cards (filtered by event date). */
+export async function getEventsSummary(range?: DateRangeParam) {
   const actor = await getActor();
   await assertPermission(actor, ['view_events', 'manage_events']);
-  const where = tenantWhere(actor);
+  const where = { ...tenantWhere(actor), ...dateWhere('datetime', range) };
   const now = new Date();
   const [byStatus, upcoming, penalized, participants] = await Promise.all([
     prisma.event.groupBy({ by: ['status'], where, _count: { _all: true } }),
@@ -35,11 +36,12 @@ export async function getEventsSummary() {
   };
 }
 
-export async function getEvents(params: { status?: string; query?: string } = {}) {
+export async function getEvents(params: { status?: string; query?: string; range?: DateRangeParam } = {}) {
   const actor = await getActor();
   await assertPermission(actor, ['view_events', 'manage_events']);
   const where: Prisma.EventWhereInput = {
     ...tenantWhere(actor),
+    ...dateWhere('datetime', params.range),
     ...(params.status && params.status !== 'all' ? { status: params.status as any } : {}),
     ...(params.query ? { OR: [
       { title: { contains: params.query, mode: 'insensitive' } },

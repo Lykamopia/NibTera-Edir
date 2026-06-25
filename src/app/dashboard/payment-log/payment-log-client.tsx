@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Loader2, Search, Download, ReceiptText, Ban, Receipt, Building2, CheckCircle2, XCircle, Clock, CalendarCheck } from 'lucide-react';
 import { Pagination } from '@/components/ui/pagination';
-import { DateRangeFilter, ALL_TIME, type DateRangeValue } from '@/components/ui/date-range-filter';
+import { DateRangeFilter, ALL_TIME, toParam, type DateRangeValue } from '@/components/ui/date-range-filter';
 import { getPaymentLogs, exportPaymentLogCsv, voidPayment } from '@/app/actions/payments';
 import { usePrompt } from '@/components/ui/confirm-provider';
 
@@ -51,20 +51,20 @@ export default function PaymentLogClient() {
   const [receipt, setReceipt] = useState<any | null>(null);
   const prompt = usePrompt();
 
-  const from = dateRange.from?.toISOString();
-  const to = dateRange.to?.toISOString();
+  const rangeKey = `${dateRange.preset}:${dateRange.from?.toISOString() ?? ''}:${dateRange.to?.toISOString() ?? ''}`;
 
   const load = useCallback(() => {
     setLoading(true); setError(false);
-    getPaymentLogs({ query, status, page, from, to })
+    getPaymentLogs({ query, status, page, range: toParam(dateRange) })
       .then(r => { setItems(r.items); setPages(r.pages); setTotal(r.total); })
       .catch(() => setError(true)).finally(() => setLoading(false));
-  }, [query, status, page, from, to]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, status, page, rangeKey]);
   useEffect(() => { load(); }, [load]);
-  useEffect(() => { setPage(1); }, [query, status, from, to]);
+  useEffect(() => { setPage(1); }, [query, status, rangeKey]);
 
   const onExport = async () => {
-    try { downloadCsv(await exportPaymentLogCsv({ query, status, from, to }), 'payment-log.csv'); }
+    try { downloadCsv(await exportPaymentLogCsv({ query, status, range: toParam(dateRange) }), 'payment-log.csv'); }
     catch { toast.error('Export failed.'); }
   };
   const onVoid = async (l: any) => {

@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { Loader2, Inbox, FileText, ExternalLink, Search } from 'lucide-react';
 import { PageHeader, LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
-import { DateRangeFilter, ALL_TIME, inDateRange, type DateRangeValue } from '@/components/ui/date-range-filter';
+import { DateRangeFilter, ALL_TIME, toParam, type DateRangeValue } from '@/components/ui/date-range-filter';
 import { getMemberRequests, respondMemberRequest } from '@/app/actions/member-requests';
 
 const STATUS: Record<string, string> = {
@@ -30,13 +30,15 @@ export default function RequestsClient() {
   const [dateRange, setDateRange] = useState<DateRangeValue>(ALL_TIME);
   const [target, setTarget] = useState<any | null>(null);
 
+  const rangeKey = `${dateRange.preset}:${dateRange.from?.toISOString() ?? ''}:${dateRange.to?.toISOString() ?? ''}`;
   const load = useCallback(() => {
     setLoading(true); setError(false);
-    getMemberRequests({ status, type }).then(setItems).catch(() => setError(true)).finally(() => setLoading(false));
-  }, [status, type]);
+    getMemberRequests({ status, type, range: toParam(dateRange) }).then(setItems).catch(() => setError(true)).finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, type, rangeKey]);
   useEffect(() => { load(); }, [load]);
 
-  const visibleItems = items.filter(r => inDateRange(r.createdAt, dateRange));
+  const visibleItems = items;
 
   return (
     <div className="space-y-4">

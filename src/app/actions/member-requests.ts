@@ -6,13 +6,29 @@ import { Prisma } from '@prisma/client';
 import { getActor, requireActor, assertPermission, assertSameTenant, tenantWhere, usersWithPermission } from '@/lib/tenant-scope';
 import { writeAudit } from '@/lib/audit';
 import { createNotification, createNotifications } from '@/lib/notification-helpers';
+import { submitForApproval } from '@/lib/approval-engine';
+import '@/lib/approval-modules';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
+import { dateWhere, type DateRangeParam } from '@/lib/date-range';
 
 const TYPE_LABEL: Record<string, string> = {
   RELATIVE: 'Relative Request', EMERGENCY: 'Emergency Request', ASSET: 'Asset Request',
   GRIEVANCE: 'Grievance', FEEDBACK: 'Feedback',
 };
+
+/** DMS folder a member-uploaded document lands in, by request type. */
+const DOC_CATEGORY: Record<string, string> = {
+  RELATIVE: 'Relative Documents', EMERGENCY: 'Emergency Documents', ASSET: 'Asset Documents',
+  GRIEVANCE: 'Grievance Documents', FEEDBACK: 'Member Uploads',
+};
+
+function fileTypeOf(name: string): string {
+  const ext = (name.split('.').pop() || '').toLowerCase();
+  if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(ext)) return 'image';
+  if (ext === 'pdf') return 'pdf';
+  return 'file';
+}
 
 /** Resolve the signed-in user's own member record (self-service scope). */
 async function getActorMember() {
@@ -55,6 +71,40 @@ export async function submitMemberRequest(input: z.infer<typeof submitSchema>) {
 
     await writeAudit({ edirId, userId: actor.id, action: 'MEMBER_REQUEST_SUBMITTED', targetType: 'MemberRequest', targetId: request.id, details: `${TYPE_LABEL[data.type]}: ${data.subject}` });
 
+    // Mirror every uploaded file into the central Document repository and route it
+    // through the Document maker–checker workflow. The file therefore lands in:
+    //  • the Documents page (DMS storage),
+    //  • the Approvals center (DOCUMENT_ACTION request awaiting a checker), and
+    //  • the member's own "My Documents" tab (uploadedById = the member's user).
+    for (const url of data.attachments ?? []) {
+      const fileName = url.split('/').pop() || 'Document';
+      const doc = await prisma.dmsDocument.create({
+        data: {
+          edirId,
+          title: fileName,
+          category: DOC_CATEGORY[data.type] ?? 'Member Uploads',
+          tags: data.type,
+          purpose: `${TYPE_LABEL[data.type]}: ${data.subject}`,
+          fileUrl: url,
+          fileName,
+          fileType: fileTypeOf(fileName),
+          status: 'PENDING',
+          visibility: 'staff',
+          pendingAction: 'upload',
+          uploadedById: actor.id,
+        },
+      });
+      await submitForApproval(actor, {
+        edirId,
+        module: 'DOCUMENT_ACTION',
+        title: `Member document: ${fileName}`,
+        summary: `${TYPE_LABEL[data.type]} from ${member.name}`,
+        payload: { documentId: doc.id, action: 'upload' },
+        targetType: 'DmsDocument',
+        targetId: doc.id,
+      });
+    }
+
     // Notify staff who handle member requests.
     const staff = (await usersWithPermission(edirId, 'handle_member_requests')).filter(u => u.id !== actor.id);
     if (staff.length > 0) {
@@ -67,6 +117,8 @@ export async function submitMemberRequest(input: z.infer<typeof submitSchema>) {
 
     revalidatePath('/dashboard/account');
     revalidatePath('/dashboard/requests');
+    revalidatePath('/dashboard/documents');
+    revalidatePath('/dashboard/approvals');
     return { success: true as const, id: request.id };
   } catch (error) {
     return failure(error);
@@ -94,11 +146,12 @@ function serialize(r: any) {
 
 // ─── Staff handling ──────────────────────────────────────────────────────────
 
-export async function getMemberRequests(params: { status?: string; type?: string } = {}) {
+export async function getMemberRequests(params: { status?: string; type?: string; range?: DateRangeParam } = {}) {
   const actor = await getActor();
   await assertPermission(actor, 'handle_member_requests');
   const where: Prisma.MemberRequestWhereInput = {
     ...tenantWhere(actor),
+    ...dateWhere('createdAt', params.range),
     ...(params.status && params.status !== 'all' ? { status: params.status as any } : {}),
     ...(params.type && params.type !== 'all' ? { type: params.type as any } : {}),
   };
