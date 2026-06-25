@@ -6,6 +6,8 @@ import prisma from '@/lib/prisma';
 import { Prisma } from '@prisma/client';
 import { getActor, requireActor, assertPermission, assertSameTenant, tenantWhere, resolveEdirId, actorHasPermission, type Actor } from '@/lib/tenant-scope';
 import { writeAudit } from '@/lib/audit';
+import { logSecurityEvent, SecurityEvent } from '@/lib/security-logger';
+import { LogSeverity } from '@/lib/types';
 import { ALL_PERMISSION_IDS, PLATFORM_PERMISSION_IDS, filterPermissionsForScope, type RoleScopeKind } from '@/lib/permissions';
 import { normalizeEthiopianPhone, isValidEthiopianPhone } from '@/lib/utils';
 import { sendPasswordResetEmail, sendVerificationEmail } from '@/lib/email';
@@ -142,8 +144,18 @@ export async function setUserRole(userId: string, roleId: string | null) {
       if (role.scope === 'SUPER_ADMIN') return { success: false as const, error: 'The platform Super-Admin role cannot be assigned here.' };
       if (role.edirId && role.edirId !== user.edirId) return { success: false as const, error: 'That role belongs to a different Edir.' };
     }
-    await prisma.user.update({ where: { id: userId }, data: { roleId } });
+    // Rotate the affected user's session on privilege change: bumping tokenVersion
+    // invalidates their existing JWT so the new role/permissions take effect on a
+    // fresh authenticated session (no stale elevated/!reduced access lingers).
+    await prisma.user.update({ where: { id: userId }, data: { roleId, tokenVersion: { increment: 1 } } });
     await writeAudit({ edirId: user.edirId, userId: actor.id, action: 'USER_ROLE_CHANGED', targetType: 'User', targetId: userId });
+    await logSecurityEvent({
+      event: SecurityEvent.USER_ROLE_CHANGED,
+      severity: LogSeverity.WARN,
+      actor,
+      details: `User '${actor.name}' changed the role of user ${userId} to ${roleId ?? '(none)'}.`,
+      targetId: userId, targetType: 'User',
+    });
     revalidatePath('/dashboard/admin/users');
     return { success: true as const };
   } catch (error) {
@@ -241,6 +253,13 @@ export async function saveRole(input: z.infer<typeof roleSchema>) {
       const permissions = filterPermissionsForScope(data.permissions, scopeKind).join(',');
       await prisma.role.update({ where: { id: data.id }, data: { name: data.name, permissions } });
       await writeAudit({ edirId: existing.edirId, userId: actor.id, action: 'ROLE_SAVED', targetType: 'Role', targetId: data.id, details: data.name });
+      await logSecurityEvent({
+        event: SecurityEvent.ROLE_UPDATED,
+        severity: LogSeverity.WARN,
+        actor,
+        details: `User '${actor.name}' updated role '${data.name}' (${data.id}). Permissions: ${permissions || '(none)'}.`,
+        targetId: data.id, targetType: 'Role',
+      });
       revalidatePath('/dashboard/admin/roles');
       return { success: true as const };
     }
@@ -271,8 +290,15 @@ export async function saveRole(input: z.infer<typeof roleSchema>) {
     }
 
     const permissions = filterPermissionsForScope(data.permissions, scopeKind).join(',');
-    await prisma.role.create({ data: { name: data.name, permissions, scope, edirId } });
+    const created = await prisma.role.create({ data: { name: data.name, permissions, scope, edirId } });
     await writeAudit({ edirId, userId: actor.id, action: 'ROLE_SAVED', targetType: 'Role', targetId: null, details: data.name });
+    await logSecurityEvent({
+      event: SecurityEvent.ROLE_CREATED,
+      severity: LogSeverity.WARN,
+      actor,
+      details: `User '${actor.name}' created ${scope} role '${data.name}' (${created.id}). Permissions: ${permissions || '(none)'}.`,
+      targetId: created.id, targetType: 'Role',
+    });
     revalidatePath('/dashboard/admin/roles');
     return { success: true as const };
   } catch (error) {
@@ -290,6 +316,13 @@ export async function deleteRole(id: string) {
     if (role._count.users > 0) return { success: false as const, error: 'Cannot delete a role still assigned to users.' };
     await prisma.role.delete({ where: { id } });
     await writeAudit({ edirId: role.edirId, userId: actor.id, action: 'ROLE_DELETED', targetType: 'Role', targetId: id, details: role.name });
+    await logSecurityEvent({
+      event: SecurityEvent.ROLE_DELETED,
+      severity: LogSeverity.WARN,
+      actor,
+      details: `User '${actor.name}' deleted role '${role.name}' (${id}).`,
+      targetId: id, targetType: 'Role',
+    });
     revalidatePath('/dashboard/admin/roles');
     return { success: true as const };
   } catch (error) {

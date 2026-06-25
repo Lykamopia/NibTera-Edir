@@ -1,7 +1,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { readFile } from 'fs/promises';
-import { join } from 'path';
+import { join, sep } from 'path';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import prisma from '@/lib/prisma';
@@ -23,8 +23,13 @@ export async function GET(req: NextRequest, { params }: { params: { path: string
     return new NextResponse('Forbidden', { status: 403 });
   }
 
-  const basePath = process.cwd();
-  const absolutePath = join(basePath, 'uploads', 'signatures', params.path);
+  const signaturesDir = join(process.cwd(), 'uploads', 'signatures');
+  const absolutePath = join(signaturesDir, params.path);
+
+  // Defence-in-depth: never let a crafted path escape the signatures directory.
+  if (absolutePath !== signaturesDir && !absolutePath.startsWith(signaturesDir + sep)) {
+    return new NextResponse('Forbidden', { status: 403 });
+  }
 
   try {
     const encryptedBuffer = await readFile(absolutePath);

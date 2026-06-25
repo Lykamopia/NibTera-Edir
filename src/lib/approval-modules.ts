@@ -12,6 +12,7 @@ import { registerModule } from '@/lib/approval-engine';
 import { settlePaymentTx, type ManualPaymentPayload } from '@/lib/payment-settlement';
 import { Prisma } from '@prisma/client';
 import bcrypt from 'bcrypt';
+import { generateTempPassword } from '@/lib/secure-random';
 
 let registered = false;
 
@@ -280,7 +281,7 @@ export function ensureApprovalModules() {
   // ── User Creation (create User + hashed password + membership) ────────────────
   registerModule('USER_CREATION', {
     async execute(payload: { edirId: string; email: string; phone: string; name: string; roleId: string }, { tx, actor }) {
-      const hashedPassword = await bcrypt.hash(Math.random().toString(36).slice(-8), 10);
+      const hashedPassword = await bcrypt.hash(generateTempPassword(), 12);
       const user = await tx.user.create({
         data: {
           email: payload.email,

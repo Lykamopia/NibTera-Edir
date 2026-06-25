@@ -1,7 +1,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { readFile } from 'fs/promises';
-import { join } from 'path';
+import { join, sep } from 'path';
 import mime from 'mime-types';
 import { getLoggedInUser } from '@/app/actions/auth';
 import prisma from '@/lib/prisma';
@@ -18,13 +18,21 @@ export async function GET(req: NextRequest, { params }: { params: { path: string
 
     const [fileType, ...fileNameParts] = filePathParts;
 
+    const uploadsRoot = join(process.cwd(), 'uploads');
+    // Resolve a request path strictly inside the uploads directory. Rejects any
+    // path-traversal attempt (`..`, absolute segments, encoded separators) by
+    // requiring the normalized result to sit under uploadsRoot + separator.
+    const safeResolve = (parts: string[]): string | null => {
+        const abs = join(uploadsRoot, ...parts);
+        if (abs !== uploadsRoot && !abs.startsWith(uploadsRoot + sep)) return null;
+        return abs;
+    };
+
     // Allow public access to background images and Edir logos (non-sensitive
     // branding shown on public pages such as the payment mini-app).
     if (fileType === 'bg' || fileType === 'logos') {
-        const uploadsDir = join(process.cwd(), 'uploads');
-        const absolutePath = join(uploadsDir, ...filePathParts);
-        
-        if (!absolutePath.startsWith(uploadsDir)) {
+        const absolutePath = safeResolve(filePathParts);
+        if (!absolutePath) {
             return new NextResponse('Invalid file path', { status: 403 });
         }
 
@@ -87,21 +95,37 @@ export async function GET(req: NextRequest, { params }: { params: { path: string
 
         isAuthorized = true;
     }
-    // Member relative documents: viewable by same-tenant users who manage or review members.
+    // Member relative documents AND enterprise (DMS) documents: viewable only by
+    // same-tenant users holding a document/member permission, or the uploader/owner.
     else if (fileType === 'documents') {
         eventTarget = { id: dbPath, type: 'Document' };
-        const [relDoc, memberDoc, reqDoc] = await Promise.all([
+        const [relDoc, memberDoc, reqDoc, dmsDoc] = await Promise.all([
             prisma.relativeDocument.findFirst({ where: { fileUrl: dbPath }, include: { relative: { include: { member: { select: { edirId: true } } } } } }),
             prisma.memberDocument.findFirst({ where: { fileUrl: dbPath }, include: { member: { select: { edirId: true } } } }),
             prisma.memberRequest.findFirst({ where: { attachments: { array_contains: dbPath } }, include: { member: { select: { edirId: true, userId: true } } } }),
+            prisma.dmsDocument.findFirst({ where: { fileUrl: dbPath }, select: { edirId: true, uploadedById: true, visibility: true } }),
         ]);
         const perms = (user.role?.permissions?.split(',') ?? []).map(p => p.trim());
         const isSuper = user.role?.scope === 'SUPER_ADMIN' || perms.includes('super_admin');
-        const canView = perms.includes('view_members') || perms.includes('manage_members') || perms.includes('review_member_documents') || perms.includes('handle_member_requests') || perms.includes('view_documents');
-        const docEdirId = relDoc?.relative.member?.edirId ?? memberDoc?.member?.edirId ?? reqDoc?.member?.edirId ?? null;
-        const sameTenant = !!docEdirId && docEdirId === (user as any).edirId;
+        const userEdirId = (user as any).edirId;
+
+        // Member / relative / request attachments (existing behaviour).
+        const canViewMember = perms.includes('view_members') || perms.includes('manage_members') || perms.includes('review_member_documents') || perms.includes('handle_member_requests') || perms.includes('view_documents');
+        const memberEdirId = relDoc?.relative.member?.edirId ?? memberDoc?.member?.edirId ?? reqDoc?.member?.edirId ?? null;
+        const memberSameTenant = !!memberEdirId && memberEdirId === userEdirId;
         const isOwnRequestDoc = !!reqDoc && reqDoc.member?.userId === user.id; // member viewing their own attachment
-        if (isSuper || isOwnRequestDoc || (canView && sameTenant)) isAuthorized = true;
+
+        // Enterprise DMS document: must belong to the viewer's Edir AND the viewer
+        // must hold a document permission — OR the viewer is the original uploader
+        // (so they can see their own document on the My Account page). Committee-only
+        // documents additionally require committee visibility.
+        const isOwnDms = !!dmsDoc && !!dmsDoc.uploadedById && dmsDoc.uploadedById === user.id;
+        const dmsSameTenant = !!dmsDoc?.edirId && dmsDoc.edirId === userEdirId;
+        const canViewDms = perms.includes('view_documents') || perms.includes('review_document') || perms.includes('approve_document');
+        const dmsVisibilityOk = dmsDoc?.visibility !== 'committee' || perms.includes('view_committee_oversight') || perms.includes('view_documents');
+        const dmsAllowed = isOwnDms || (canViewDms && dmsSameTenant && dmsVisibilityOk);
+
+        if (isSuper || isOwnRequestDoc || (canViewMember && memberSameTenant) || dmsAllowed) isAuthorized = true;
     }
     // Rules & bylaws attachments: viewable by same-tenant users who can read rules.
     else if (fileType === 'rules') {
@@ -127,10 +151,8 @@ export async function GET(req: NextRequest, { params }: { params: { path: string
         return new NextResponse('Forbidden: You do not have permission to access this file.', { status: 403 });
     }
 
-    const uploadsDir = join(process.cwd(), 'uploads');
-    const absolutePath = join(uploadsDir, ...filePathParts);
-
-    if (!absolutePath.startsWith(uploadsDir)) {
+    const absolutePath = safeResolve(filePathParts);
+    if (!absolutePath) {
         return new NextResponse('Invalid file path', { status: 403 });
     }
 

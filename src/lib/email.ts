@@ -9,7 +9,11 @@ const logoUrl = 'https://cdn.brandfetch.io/id3xwknDM-/w/2048/h/2048/theme/dark/i
 const transporter = nodemailer.createTransport({
   host: process.env.EMAIL_HOST,
   port: Number(process.env.EMAIL_PORT) || 465,
-  secure: Number(process.env.EMAIL_PORT) === 465, // true for 465, false for other ports
+  // Implicit TLS on 465; on other ports (e.g. 587) `secure: false` lets STARTTLS
+  // upgrade the connection — `requireTLS` below makes that upgrade MANDATORY, so
+  // mail is never transmitted in cleartext regardless of the port.
+  secure: Number(process.env.EMAIL_PORT) === 465,
+  requireTLS: true,
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS,
@@ -20,8 +24,11 @@ const transporter = nodemailer.createTransport({
   connectionTimeout: Number(process.env.EMAIL_CONNECTION_TIMEOUT_MS) || 10000,
   greetingTimeout: Number(process.env.EMAIL_GREETING_TIMEOUT_MS) || 10000,
   socketTimeout: Number(process.env.EMAIL_SOCKET_TIMEOUT_MS) || 10000,
-tls: {
-    rejectUnauthorized: process.env.EMAIL_ALLOW_SELF_SIGNED !== 'true', // only reject if not allowed
+  tls: {
+    // Reject self-signed/invalid certs unless explicitly opted-in (dev only), and
+    // never negotiate down to legacy, broken TLS versions.
+    rejectUnauthorized: process.env.EMAIL_ALLOW_SELF_SIGNED !== 'true',
+    minVersion: 'TLSv1.2',
   },
 });
 

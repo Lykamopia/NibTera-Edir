@@ -6,6 +6,8 @@ import bcrypt from 'bcrypt';
 import { revalidatePath } from 'next/cache';
 import { writeAudit } from '@/lib/audit';
 import { isValidEthiopianPhone, normalizeEthiopianPhone, normalizeNibEmail } from '@/lib/utils';
+import { generateTempPassword } from '@/lib/secure-random';
+import { z } from 'zod';
 
 function failure(error: unknown): { success: false; error: string } {
   console.error('User management error:', error);
@@ -13,9 +15,17 @@ function failure(error: unknown): { success: false; error: string } {
   return { success: false, error: message };
 }
 
-function generateTempPassword(): string {
-  return Math.random().toString(36).slice(-8) + Math.random().toString(36).slice(-8).toUpperCase();
-}
+// Strict server-side input contracts (length-bounded, required fields explicit).
+const branchUserSchema = z.object({
+  email: z.string().trim().min(3, 'Email is required.').max(254, 'Email is too long.'),
+  phone: z.string().trim().min(7, 'Phone is required.').max(20, 'Phone is too long.'),
+  name: z.string().trim().min(2, 'Name is required.').max(120, 'Name is too long.'),
+  branchId: z.string().trim().min(1, 'Branch is required.'),
+  roleId: z.string().trim().min(1).optional(),
+});
+const districtUserSchema = branchUserSchema.omit({ branchId: true }).extend({
+  districtId: z.string().trim().min(1, 'District is required.'),
+});
 
 export async function createBranchUser(input: {
   email: string;
@@ -31,6 +41,10 @@ export async function createBranchUser(input: {
     if (!actor.isSuperAdmin && actor.orgScope !== 'DISTRICT') {
       return { success: false as const, error: 'Permission denied.' };
     }
+
+    const parsed = branchUserSchema.safeParse(input);
+    if (!parsed.success) return { success: false as const, error: parsed.error.issues[0]?.message || 'Invalid input.' };
+    input = parsed.data;
 
     // District users can only create users in their district's branches
     if (actor.orgScope === 'DISTRICT' && actor.districtId) {
@@ -125,6 +139,10 @@ export async function createDistrictUser(input: {
     if (!actor.isSuperAdmin) {
       return { success: false as const, error: 'Permission denied.' };
     }
+
+    const parsed = districtUserSchema.safeParse(input);
+    if (!parsed.success) return { success: false as const, error: parsed.error.issues[0]?.message || 'Invalid input.' };
+    input = parsed.data;
 
     // Verify district exists
     const district = await prisma.district.findUnique({

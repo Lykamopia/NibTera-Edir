@@ -68,6 +68,11 @@ export async function getLoggedInUser(): Promise<User | null> {
 
     if (!user) return null;
 
+    // Never let the password hash leave the server boundary. This object is
+    // returned from a 'use server' action and may be serialized to client
+    // components; the hash is verified only via dedicated server-side lookups.
+    (user as any).hashedPassword = null;
+
     return user as User;
 }
 
@@ -204,7 +209,9 @@ export async function completeFirstLoginPasswordChange(newPassword: string) {
   if (!validation.success) {
     return { success: false, error: validation.error.issues[0]?.message || 'Password does not meet the security requirements.' };
   }
-  if (user.hashedPassword && await bcrypt.compare(newPassword, user.hashedPassword)) {
+  // Fetch the hash directly (getLoggedInUser strips it from its response).
+  const cred = await prisma.user.findUnique({ where: { id: user.id }, select: { hashedPassword: true } });
+  if (cred?.hashedPassword && await bcrypt.compare(newPassword, cred.hashedPassword)) {
     return { success: false, error: 'Please choose a password different from your temporary one.' };
   }
 
@@ -233,11 +240,13 @@ export async function changePassword(currentPassword: string, newPassword: strin
         throw new NotAuthenticatedError();
     }
 
-    if (!user.hashedPassword) {
+    // Fetch the hash directly (getLoggedInUser strips it from its response).
+    const cred = await prisma.user.findUnique({ where: { id: user.id }, select: { hashedPassword: true } });
+    if (!cred?.hashedPassword) {
         return { success: false, error: 'No password is set for this account.' };
     }
 
-    const isCurrentPasswordValid = await bcrypt.compare(currentPassword, user.hashedPassword);
+    const isCurrentPasswordValid = await bcrypt.compare(currentPassword, cred.hashedPassword);
     if (!isCurrentPasswordValid) {
         await logSecurityEvent({
             event: SecurityEvent.PASSWORD_CHANGE_FAILURE,

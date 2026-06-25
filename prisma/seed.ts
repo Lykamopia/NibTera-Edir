@@ -1,10 +1,29 @@
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcrypt';
+import crypto from 'crypto';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
 const prisma = new PrismaClient();
+
+// Crypto-secure temp password generator (inlined — ts-node seed has no path
+// alias). Mirrors src/lib/secure-random.ts. Never uses Math.random.
+function generateSeedPassword(length = 16): string {
+  const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  const lower = 'abcdefghijkmnpqrstuvwxyz';
+  const digits = '23456789';
+  const special = '!@#$%^&*';
+  const all = upper + lower + digits + special;
+  const pick = (s: string) => s[crypto.randomInt(s.length)];
+  const chars = [pick(upper), pick(lower), pick(digits), pick(special)];
+  for (let i = chars.length; i < length; i++) chars.push(pick(all));
+  for (let i = chars.length - 1; i > 0; i--) {
+    const j = crypto.randomInt(i + 1);
+    [chars[i], chars[j]] = [chars[j], chars[i]];
+  }
+  return chars.join('');
+}
 
 // Full Edir permission catalog (mirrors src/lib/permissions.ts). Inlined so the
 // seed has no path-alias dependency under ts-node.
@@ -52,8 +71,12 @@ async function main() {
   await prisma.edirSettings.deleteMany();
   await prisma.edir.deleteMany();
 
-  const password = process.env.ADMIN_PASSWORD || 'Password123';
-  const hashed = await bcrypt.hash(password, 10);
+  // No hard-coded credential in source. Use ADMIN_PASSWORD from the environment;
+  // if absent, mint a one-time cryptographically-secure password and print it.
+  // Either way every seeded staff account must change it on first login.
+  const generated = !process.env.ADMIN_PASSWORD;
+  const password = process.env.ADMIN_PASSWORD || generateSeedPassword();
+  const hashed = await bcrypt.hash(password, 12);
 
   // ── Tenant ──────────────────────────────────────────────────────────────
   const edir = await prisma.edir.create({ data: { name: 'Demo Edir', description: 'Seeded demonstration association.' } });
@@ -87,10 +110,12 @@ async function main() {
 
   // ── Users (maker + checker share the admin role) ──────────────────────────
   const superEmail = process.env.ADMIN_EMAIL || 'superadmin@edir.local';
-  await prisma.user.create({ data: { name: 'Super Admin', email: superEmail.toLowerCase(), phone: '251900000000', edirId: null, roleId: superRole.id, status: 'ACTIVE', hashedPassword: hashed, onboardingCompleted: true } });
-  const abel = await prisma.user.create({ data: { name: 'Abel (Maker)', email: 'abel@edir.local', phone: '251911111111', edirId: edir.id, roleId: adminRole.id, status: 'ACTIVE', hashedPassword: hashed, onboardingCompleted: true } });
-  const bru = await prisma.user.create({ data: { name: 'Bru (Checker)', email: 'bru@edir.local', phone: '251922222222', edirId: edir.id, roleId: adminRole.id, status: 'ACTIVE', hashedPassword: hashed, onboardingCompleted: true } });
-  await prisma.user.create({ data: { name: 'Hana (Committee)', email: 'hana@edir.local', phone: '251933333333', edirId: edir.id, roleId: committeeRole.id, status: 'ACTIVE', hashedPassword: hashed, onboardingCompleted: true } });
+  // mustChangePassword: every seeded administrative account is forced through the
+  // first-login password change before it can reach any feature (see middleware).
+  await prisma.user.create({ data: { name: 'Super Admin', email: superEmail.toLowerCase(), phone: '251900000000', edirId: null, roleId: superRole.id, status: 'ACTIVE', hashedPassword: hashed, onboardingCompleted: true, mustChangePassword: true } });
+  const abel = await prisma.user.create({ data: { name: 'Abel (Maker)', email: 'abel@edir.local', phone: '251911111111', edirId: edir.id, roleId: adminRole.id, status: 'ACTIVE', hashedPassword: hashed, onboardingCompleted: true, mustChangePassword: true } });
+  const bru = await prisma.user.create({ data: { name: 'Bru (Checker)', email: 'bru@edir.local', phone: '251922222222', edirId: edir.id, roleId: adminRole.id, status: 'ACTIVE', hashedPassword: hashed, onboardingCompleted: true, mustChangePassword: true } });
+  await prisma.user.create({ data: { name: 'Hana (Committee)', email: 'hana@edir.local', phone: '251933333333', edirId: edir.id, roleId: committeeRole.id, status: 'ACTIVE', hashedPassword: hashed, onboardingCompleted: true, mustChangePassword: true } });
 
   // ── Rules & Bylaws (approved v1) ───────────────────────────────────────────
   await prisma.rulesVersion.create({
@@ -169,7 +194,13 @@ async function main() {
   console.log('  Maker: abel@edir.local (phone 251911111111)');
   console.log('  Checker: bru@edir.local (phone 251922222222)');
   console.log('  Committee: hana@edir.local (phone 251933333333)');
-  console.log(`  Password: ${password}`);
+  if (generated) {
+    console.log(`  One-time password (set ADMIN_PASSWORD to override): ${password}`);
+    console.log('  ⚠ This password was generated for this seed run only and is NOT stored in source.');
+  } else {
+    console.log('  Password: (from ADMIN_PASSWORD environment variable)');
+  }
+  console.log('  All seeded accounts must change their password on first login.');
   void memberRole;
 }
 

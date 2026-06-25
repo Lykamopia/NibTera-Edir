@@ -168,7 +168,11 @@ export const authOptions: NextAuthOptions = {
       },
     };
   })(),
-  session: { strategy: "jwt", maxAge: 24 * 60 * 60, updateAge: 20 * 60 },
+  // maxAge = idle timeout: the JWT expires 30 min after the last roll, so an
+  // inactive session is invalidated. updateAge rolls the token on activity, so
+  // active users stay signed in. An 8-hour absolute cap is enforced separately in
+  // the jwt callback via token.absoluteExpiry.
+  session: { strategy: "jwt", maxAge: 30 * 60, updateAge: 5 * 60 },
   pages: { signIn: "/login" },
   secret: process.env.NEXTAUTH_SECRET,
   callbacks: {
@@ -177,6 +181,12 @@ export const authOptions: NextAuthOptions = {
       const rawIp = headerList.get('x-forwarded-for') || headerList.get('cf-connecting-ip') || 'unknown';
       const ipAddress = getCleanIp(rawIp);
       const userAgent = headerList.get('user-agent');
+
+      // Absolute session lifetime cap (8h): regardless of activity, a session
+      // cannot live past this. Returning {} invalidates the JWT and forces re-login.
+      if (token.absoluteExpiry && Date.now() > Number(token.absoluteExpiry)) {
+        return {};
+      }
 
       if (trigger === "update" && session?.onboardingCompleted === true) {
         token.onboardingCompleted = true;
@@ -203,6 +213,8 @@ export const authOptions: NextAuthOptions = {
         token.id = user.id;
         token.ip = ipAddress;
         token.userAgent = userAgent;
+        // Stamp the absolute (activity-independent) expiry at sign-in.
+        token.absoluteExpiry = Date.now() + 8 * 60 * 60 * 1000;
         if ((user as any).isConcurrentLogin) {
           token.showConcurrentAlert = true;
           token.concurrentDetails = (user as any).concurrentDetails;

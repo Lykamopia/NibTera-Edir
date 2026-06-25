@@ -1,5 +1,6 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
+import { randomUUID } from 'crypto';
 import { resolvePayResumePath } from '@/lib/nib-pay-session';
 import { NIB_CONFIG } from '@/lib/nib-config';
 import { debugLog } from '@/lib/debug';
@@ -10,7 +11,7 @@ export async function GET(request: Request) { return handleRequest(request); }
 export async function POST(request: Request) { return handleRequest(request); }
 
 async function handleRequest(request: Request) {
-  const requestId = `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+  const requestId = `${Date.now()}-${randomUUID().slice(0, 8)}`;
   try {
     let authHeader = request.headers.get('Authorization') || request.headers.get('authorization');
 

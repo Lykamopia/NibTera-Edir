@@ -55,7 +55,7 @@ async function validateToken(token: string): Promise<{ ok: boolean; phone?: stri
  * longer auto-loads member data; the user fetches it explicitly.
  */
 export async function validateNibToken(queryToken?: string) {
-  const requestId = `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+  const requestId = `${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
   payLog('validateNibToken', `STEP 1/2 START (req ${requestId})`, { hasQueryToken: !!queryToken });
   try {
     const token = await resolveToken(queryToken);

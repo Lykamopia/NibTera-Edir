@@ -1,8 +1,24 @@
 import crypto from 'crypto';
 
 const ALGORITHM = 'aes-256-cbc';
-const KEY = process.env.SIGNATURE_ENCRYPTION_KEY || 'default-secret-key-32-chars-long!!';
 const IV_LENGTH = 16;
+
+/**
+ * Resolve the at-rest encryption key from the environment. There is deliberately
+ * NO hard-coded fallback — a known default key would mean signatures are
+ * effectively unencrypted. The key derivation (first 32 bytes) is preserved for
+ * backward-compatibility with data already encrypted under a configured key.
+ */
+function getKey(): Buffer {
+  const key = process.env.SIGNATURE_ENCRYPTION_KEY;
+  if (!key || key.length < 32) {
+    throw new Error(
+      'SIGNATURE_ENCRYPTION_KEY is missing or too short (require >= 32 characters). ' +
+      'Set a strong random value in the environment / secrets manager.',
+    );
+  }
+  return Buffer.from(key.slice(0, 32));
+}
 
 /**
  * Encrypts a buffer using AES-256-CBC.
@@ -10,7 +26,7 @@ const IV_LENGTH = 16;
  */
 export function encryptBuffer(buffer: Buffer): Buffer {
   const iv = crypto.randomBytes(IV_LENGTH);
-  const cipher = crypto.createCipheriv(ALGORITHM, Buffer.from(KEY.slice(0, 32)), iv);
+  const cipher = crypto.createCipheriv(ALGORITHM, getKey(), iv);
   const encrypted = Buffer.concat([cipher.update(buffer), cipher.final()]);
   return Buffer.concat([iv, encrypted]);
 }
@@ -25,7 +41,7 @@ export function decryptBuffer(buffer: Buffer): Buffer {
   }
   const iv = buffer.slice(0, IV_LENGTH);
   const encryptedData = buffer.slice(IV_LENGTH);
-  const decipher = crypto.createDecipheriv(ALGORITHM, Buffer.from(KEY.slice(0, 32)), iv);
+  const decipher = crypto.createDecipheriv(ALGORITHM, getKey(), iv);
   const decrypted = Buffer.concat([decipher.update(encryptedData), decipher.final()]);
   return decrypted;
 }

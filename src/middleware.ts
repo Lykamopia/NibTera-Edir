@@ -31,6 +31,16 @@ const ROUTE_PERMISSIONS: { path: string; perms: string[] }[] = [
   { path: '/dashboard/edir-registration', perms: ['register_edir', 'approve_edir_registration', 'manage_edirs', 'super_admin'] },
 ].sort((a, b) => b.path.length - a.path.length);
 
+// Trusted origins permitted to embed the framable (public pay/portal) routes.
+// Configured via env (space-separated list of origins, e.g.
+// "https://superapp.nib.com.et https://app.nib.com.et"). Falls back to '*' only
+// when unset so the embedded flow keeps working until the allowlist is configured.
+function frameAncestors(framable: boolean): string[] {
+  if (!framable) return ["'none'"];
+  const env = (process.env.FRAME_ANCESTORS || '').trim();
+  return env ? env.split(/\s+/) : ["*"];
+}
+
 function generateCsp(nonce: string, framable: boolean) {
   const policies: Record<string, string[]> = {
     'default-src': ["'self'"],
@@ -42,12 +52,25 @@ function generateCsp(nonce: string, framable: boolean) {
     'object-src': ["'none'"],
     'base-uri': ["'self'"],
     'form-action': ["'self'"],
-    // Allow framing only for the public payment routes.
-    'frame-ancestors': framable ? ["*"] : ["'none'"],
+    // Allow framing only for the public payment routes, and only from the
+    // configured trusted client origins (no blanket '*' once FRAME_ANCESTORS is set).
+    'frame-ancestors': frameAncestors(framable),
     'upgrade-insecure-requests': [],
   };
   return Object.entries(policies).map(([k, v]) => `${k} ${v.join(' ')}`).join('; ');
 }
+
+// Permissions-Policy: explicitly disable every browser capability the app does
+// not use, so a future XSS/compromised dependency cannot silently reach for the
+// camera, mic, geolocation, etc. Only `fullscreen` is allowed (self) for charts.
+const PERMISSIONS_POLICY = [
+  'accelerometer=()', 'ambient-light-sensor=()', 'autoplay=()', 'battery=()',
+  'camera=()', 'display-capture=()', 'document-domain=()', 'encrypted-media=()',
+  'fullscreen=(self)', 'geolocation=()', 'gyroscope=()', 'hid=()',
+  'idle-detection=()', 'magnetometer=()', 'microphone=()', 'midi=()',
+  'payment=()', 'picture-in-picture=()', 'publickey-credentials-get=()',
+  'screen-wake-lock=()', 'serial=()', 'usb=()', 'xr-spatial-tracking=()',
+].join(', ');
 
 const baseSecurityHeaders: { key: string; value: string }[] = [
   { key: 'Referrer-Policy', value: 'strict-origin' },
@@ -55,6 +78,7 @@ const baseSecurityHeaders: { key: string; value: string }[] = [
   { key: 'X-Content-Type-Options', value: 'nosniff' },
   { key: 'X-Permitted-Cross-Domain-Policies', value: 'none' },
   { key: 'Cross-Origin-Opener-Policy', value: 'same-origin' },
+  { key: 'Permissions-Policy', value: PERMISSIONS_POLICY },
 ];
 
 export default withAuth(
@@ -103,6 +127,10 @@ export default withAuth(
       response.headers.set('Cross-Origin-Resource-Policy', 'same-origin');
     }
     response.headers.set('Content-Security-Policy', generateCsp(nonce, framable));
+
+    // Do not advertise the server/framework stack in responses.
+    response.headers.delete('X-Powered-By');
+    response.headers.delete('Server');
     return response;
   },
   {
