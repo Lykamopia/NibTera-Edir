@@ -89,6 +89,7 @@ function PayInner() {
 
   const pay = async () => {
     if (!member) return;
+    if ((member as any).canAcceptPayments === false) { setError((member as any).paymentAccountReason || t('err_noAccount')); return; }
     const amt = Number(amount);
     if (!amt || amt <= 0) { setError(t('err_amount')); return; }
     payLog('client/pay', 'Pay clicked', { amount: amt, memberId: member.memberId, token: maskToken(token) });
@@ -249,6 +250,9 @@ function MemberPanel({ member, payerPhone, amount, setAmount, paying, error, txn
   const amountDue = Number(m.totalOutstanding) + Number(m.monthlyFee);
   // On-behalf detection: the fetched member's phone differs from the payer's phone.
   const onBehalf = !!payerPhone && !sameNumber(payerPhone, m.phone);
+  // Per-tenant payment availability — the member's Edir must be active with a
+  // configured payment account. The server re-enforces this in getPaymentToken.
+  const canPay = m.canAcceptPayments !== false;
 
   return (
     <>
@@ -271,6 +275,17 @@ function MemberPanel({ member, payerPhone, amount, setAmount, paying, error, txn
           </div>
         </div>
       </Card>
+
+      {/* Edir cannot accept payments — no active/configured payment account */}
+      {!canPay && (
+        <div className="page-enter flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <div>
+            <div className="font-semibold">{t('accountUnavailableTitle')}</div>
+            <div className="mt-0.5 text-foreground/80">{m.paymentAccountReason || t('err_noAccount')}</div>
+          </div>
+        </div>
+      )}
 
       {/* Member identity */}
       <Card className="page-enter overflow-hidden">
@@ -373,8 +388,8 @@ function MemberPanel({ member, payerPhone, amount, setAmount, paying, error, txn
       {/* Sticky pay bar */}
       <div className="fixed inset-x-0 bottom-0 z-20 border-t bg-card/90 p-3 backdrop-blur-md">
         <div className="mx-auto w-full max-w-md">
-          <Button className="h-14 w-full text-base font-semibold shadow-lg" onClick={onPay} disabled={paying || Number(amount) <= 0}>
-            {paying ? <><Loader2 className="mr-1.5 h-5 w-5 animate-spin" /> {t('processing')}</> : <><Wallet className="mr-1.5 h-5 w-5" /> {t('pay')} {money(Number(amount) || 0, cur)}</>}
+          <Button className="h-14 w-full text-base font-semibold shadow-lg" onClick={onPay} disabled={paying || Number(amount) <= 0 || !canPay}>
+            {paying ? <><Loader2 className="mr-1.5 h-5 w-5 animate-spin" /> {t('processing')}</> : !canPay ? <><AlertTriangle className="mr-1.5 h-5 w-5" /> {t('payUnavailable')}</> : <><Wallet className="mr-1.5 h-5 w-5" /> {t('pay')} {money(Number(amount) || 0, cur)}</>}
           </Button>
           {txn && <p className="mt-1 text-center font-mono text-[10px] text-muted-foreground">{t('ref')}: {txn}</p>}
         </div>

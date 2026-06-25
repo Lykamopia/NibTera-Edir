@@ -107,6 +107,9 @@ const en: Record<string, string> = {
   err_channel: 'Could not reach the NIB Super App to complete the payment. Please open this page from within the Super App.',
   err_notCompleted: 'Payment was not completed.',
   err_startFailed: 'Failed to start payment.',
+  err_noAccount: 'This Edir cannot accept payments yet. Please contact your Edir administrator.',
+  accountUnavailableTitle: 'Payments unavailable for this Edir',
+  payUnavailable: 'Payments unavailable',
   thankYou: 'Thank you',
 };
 
@@ -207,6 +210,9 @@ const am: Record<string, string> = {
   err_channel: 'ክፍያውን ለማጠናቀቅ NIB ሱፐር አፕ ማግኘት አልተቻለም። እባክዎ ይህን ገጽ ከሱፐር አፕ ውስጥ ይክፈቱ።',
   err_notCompleted: 'ክፍያው አልተጠናቀቀም።',
   err_startFailed: 'ክፍያ መጀመር አልተቻለም።',
+  err_noAccount: 'ይህ እድር እስካሁን ክፍያ መቀበል አይችልም። እባክዎ የእድር አስተዳዳሪዎን ያነጋግሩ።',
+  accountUnavailableTitle: 'ለዚህ እድር ክፍያ አይገኝም',
+  payUnavailable: 'ክፍያ አይገኝም',
   thankYou: 'እናመሰግናለን',
 };
 

@@ -79,7 +79,7 @@ async function main() {
   const hashed = await bcrypt.hash(password, 12);
 
   // ── Tenant ──────────────────────────────────────────────────────────────
-  const edir = await prisma.edir.create({ data: { name: 'Demo Edir', description: 'Seeded demonstration association.' } });
+  const edir = await prisma.edir.create({ data: { name: 'Demo Edir', description: 'Seeded demonstration association.', accountNumber: process.env.NIB_ACCOUNT_NO || '1000000000001' } });
   await prisma.edirSettings.create({
     data: {
       edirId: edir.id, monthlyFee: 200, registrationFee: 1000, currency: 'ETB', dueDay: 5, gracePeriodDays: 5,
@@ -180,7 +180,7 @@ async function main() {
   }
 
   // ── Second Edir (multi-tenant demo) ────────────────────────────────────────
-  const edir2 = await prisma.edir.create({ data: { name: 'Bole Community Edir', description: 'Second demo association.' } });
+  const edir2 = await prisma.edir.create({ data: { name: 'Bole Community Edir', description: 'Second demo association.', accountNumber: '1000000000002' } });
   await prisma.edirSettings.create({ data: { edirId: edir2.id, monthlyFee: 150, registrationFee: 800, currency: 'ETB', dueDay: 1, gracePeriodDays: 7 } });
   await prisma.role.create({ data: { name: 'Edir Admin', scope: 'EDIR', permissions: EDIR_PERMISSIONS.join(','), edirId: edir2.id } });
   await prisma.role.create({ data: { name: 'Member', scope: 'EDIR', permissions: 'view_dashboard', edirId: edir2.id } });

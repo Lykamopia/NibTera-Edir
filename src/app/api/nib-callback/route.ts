@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Prisma } from '@prisma/client';
-import { NIB_CONFIG } from '@/lib/nib-config';
 import prisma from '@/lib/prisma';
 import { nibCallbackSchema, validateData } from '@/lib/validation';
 import { settlePaymentTx } from '@/lib/payment-settlement';
+import { resolveEdirPaymentAccount } from '@/lib/edir-payment-account';
 import { fetchDetailedMemberByPhone } from '@/lib/data';
 import { writeAudit } from '@/lib/audit';
 import { debugLog } from '@/lib/debug';
@@ -66,18 +66,14 @@ export async function POST(request: NextRequest) {
   payLog('callback', 'token claims', claims ? { transactionId: claims.transactionId, accountNo: claims.accountNo, amount: claims.amount, exp: claims.exp, phone: claims.phone } : null);
 
   const refMatches = !!claims && String(claims.transactionId) === String(ourRef);
-  const accountMatches = !claims?.accountNo || NIB_CONFIG.ACCOUNT_NO === 'YOUR_ACCOUNT_NO' || String(claims.accountNo) === NIB_CONFIG.ACCOUNT_NO;
   const notExpired = !claims?.exp || Number(claims.exp) * 1000 > Date.now();
-  if (!claims || !refMatches || !accountMatches || !notExpired) {
-    payLog('callback', 'anti-forgery binding failed → 401', { hasClaims: !!claims, refMatches, accountMatches, notExpired });
+  if (!claims || !refMatches || !notExpired) {
+    payLog('callback', 'anti-forgery binding failed → 401', { hasClaims: !!claims, refMatches, notExpired });
     return NextResponse.json({ message: 'Invalid Token' }, { status: 401 });
   }
-
-  // Anti-forgery: the credited account in the body must also be ours (when sent).
-  if (accountNo && NIB_CONFIG.ACCOUNT_NO !== 'YOUR_ACCOUNT_NO' && accountNo !== NIB_CONFIG.ACCOUNT_NO) {
-    payLog('callback', 'account mismatch → 400', { accountNo });
-    return NextResponse.json({ message: 'Account mismatch' }, { status: 400 });
-  }
+  // The credited-account binding is enforced PER-EDIR once the beneficiary's Edir
+  // is resolved below (the payment must credit that member's Edir account, not a
+  // shared/hard-coded one).
 
   try {
     // Locate our record by OUR reference; self-heal from the token claims if absent.
@@ -122,6 +118,23 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ message: 'Transaction has no member.' }, { status: 400 });
     }
     if (!payerPhone) payerPhone = claims?.phone ?? paidByNumber ?? null;
+
+    // Multi-tenant anti-forgery: the settlement must credit the BENEFICIARY's Edir
+    // account. Validate both the signed token claim and the bank-supplied account
+    // against the Edir's configured account number (resolved per-tenant). When the
+    // Edir has no configured account (legacy), fall back to requiring the two
+    // account values to at least agree with each other.
+    const expected = await resolveEdirPaymentAccount(logEdirId);
+    const expectedAccount = expected.accountNumber;
+    const claimAcct = claims?.accountNo != null ? String(claims.accountNo) : null;
+    const bodyAcct = accountNo != null ? String(accountNo) : null;
+    const accountOk = expectedAccount
+      ? (!claimAcct || claimAcct === expectedAccount) && (!bodyAcct || bodyAcct === expectedAccount)
+      : (!claimAcct || !bodyAcct || claimAcct === bodyAcct);
+    if (!accountOk) {
+      payLog('callback', 'Edir account mismatch → 400', { edirId: logEdirId, expectedAccount, claimAcct, bodyAcct });
+      return NextResponse.json({ message: 'Account mismatch' }, { status: 400 });
+    }
 
     // Beneficiary identity for the audit trail (name + membership id + phone).
     const beneficiary = await prisma.member.findUnique({

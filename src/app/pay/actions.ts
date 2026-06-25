@@ -6,6 +6,7 @@ import { format } from 'date-fns';
 import { Prisma } from '@prisma/client';
 import { NIB_CONFIG, type NibValidateResponse, type NibPaymentResponse } from '@/lib/nib-config';
 import { fetchDetailedMemberByPhone } from '@/lib/data';
+import { resolveEdirPaymentAccount } from '@/lib/edir-payment-account';
 import { getPendingPaymentStatus } from '@/lib/payment-status';
 import prisma from '@/lib/prisma';
 import { debugLog } from '@/lib/debug';
@@ -138,11 +139,34 @@ export async function getPaymentToken(amount: number, token: string, memberId: s
   const beneficiaryPhone = beneficiary?.phone ?? null;
   payLog('getPaymentToken', 'STEP 3 START', { amount, memberId, edirId: resolvedEdirId, beneficiaryPhone, payerPhone, transactionId, transactionTime, token: maskToken(token) });
 
+  // Multi-tenant payment destination: resolve the BENEFICIARY's Edir account and
+  // refuse to proceed unless that Edir is ACTIVE with a real account configured.
+  // This routes funds to the correct Edir (never a shared/hard-coded account) and
+  // blocks payments to Edirs that cannot legitimately receive them.
+  const account = await resolveEdirPaymentAccount(resolvedEdirId);
+  if (!account.ok || !account.accountNumber) {
+    payLog('getPaymentToken', 'BLOCKED — Edir payment account unavailable', { edirId: resolvedEdirId, reason: account.reason });
+    try {
+      await prisma.paymentLog.create({
+        data: {
+          edirId: resolvedEdirId, memberId,
+          amount: new Prisma.Decimal(amount),
+          method: 'NIBTERA_MINI_APP', status: 'FAILED',
+          description: JSON.stringify({ ...(breakdown ?? {}), failureReason: `Edir payment account unavailable: ${account.reason}`, payerPhone, beneficiaryPhone }),
+          transactionId, verificationType: 'AUTOMATIC',
+        },
+      });
+    } catch (e) {
+      payLog('getPaymentToken', 'could not record account-unavailable FAILED log', String(e));
+    }
+    return { status: 'error', message: account.reason || 'This Edir cannot accept payments yet.', transactionId };
+  }
+
   const signatureString = [
-    `accountNo=${NIB_CONFIG.ACCOUNT_NO}`,
+    `accountNo=${account.accountNumber}`,
     `amount=${amount}`,
     `callBackURL=${NIB_CONFIG.CALLBACK_URL}`,
-    `companyName=${NIB_CONFIG.COMPANY_NAME}`,
+    `companyName=${account.companyName}`,
     `Key=${NIB_CONFIG.NIB_PAYMENT_KEY}`,
     `token=${token}`,
     `transactionId=${transactionId}`,
@@ -173,10 +197,10 @@ export async function getPaymentToken(amount: number, token: string, memberId: s
   };
 
   const payload = {
-    accountNo: NIB_CONFIG.ACCOUNT_NO,
+    accountNo: account.accountNumber,
     amount: String(amount),
     callBackURL: NIB_CONFIG.CALLBACK_URL,
-    companyName: NIB_CONFIG.COMPANY_NAME,
+    companyName: account.companyName,
     token, transactionId, transactionTime, signature,
     // Beneficiary identity travels with the gateway request (informational fields,
     // outside the signed set) so the transaction references the member being paid

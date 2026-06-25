@@ -41,8 +41,17 @@ export type MemberInput = z.infer<typeof memberSchema>;
 async function nextMemberId(edirId: string, client: Prisma.TransactionClient | typeof prisma = prisma): Promise<string> {
   const year = new Date().getFullYear();
   const prefix = `EDR-${year}-`;
-  const count = await client.member.count({ where: { edirId, memberId: { startsWith: prefix } } });
-  return `${prefix}${String(count + 1).padStart(4, '0')}`;
+  // Derive the next sequence from the HIGHEST existing id, not the row count: a
+  // count-based id collides after a member is deleted (count drops, so count+1
+  // reuses an in-use number). Ids are zero-padded to 4 digits, so a descending
+  // string sort matches a numeric sort.
+  const latest = await client.member.findFirst({
+    where: { edirId, memberId: { startsWith: prefix } },
+    orderBy: { memberId: 'desc' },
+    select: { memberId: true },
+  });
+  const lastSeq = latest ? parseInt(latest.memberId.slice(prefix.length), 10) || 0 : 0;
+  return `${prefix}${String(lastSeq + 1).padStart(4, '0')}`;
 }
 
 /**

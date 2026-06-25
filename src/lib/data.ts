@@ -22,6 +22,10 @@ export interface DetailedMember {
   edirId: string;
   edirName: string;
   edirLogoUrl: string | null;
+  /** True only when the member's Edir is ACTIVE with a configured payment account. */
+  canAcceptPayments: boolean;
+  /** Why payments are blocked (null when canAcceptPayments is true). */
+  paymentAccountReason: string | null;
   memberId: string;
   name: string;
   role: string;
@@ -66,7 +70,7 @@ export async function fetchDetailedMemberByPhone(phone: string): Promise<Detaile
     where: { phone: normalized },
     include: {
       paymentStatus: true,
-      edir: { select: { name: true, logoUrl: true, settings: true } },
+      edir: { select: { name: true, logoUrl: true, settings: true, status: true, accountNumber: true } },
       installmentPlans: { include: { installments: { orderBy: { sequence: 'asc' } } } },
       paymentLogs: { orderBy: { createdAt: 'desc' }, take: 25 },
       eventParticipations: { where: { penalized: true }, include: { event: { select: { title: true, datetime: true, absencePenalty: true } } } },
@@ -77,6 +81,16 @@ export async function fetchDetailedMemberByPhone(phone: string): Promise<Detaile
 
   const settings = member.edir?.settings;
   const now = new Date();
+  // Per-tenant payment availability — mirrors resolveEdirPaymentAccount so the UI
+  // can warn/disable before the server-side gate in getPaymentToken rejects.
+  const edirStatus = member.edir?.status;
+  const edirAccount = (member.edir?.accountNumber || '').trim();
+  const canAcceptPayments = edirStatus === 'ACTIVE' && !!edirAccount && edirAccount !== 'YOUR_ACCOUNT_NO';
+  const paymentAccountReason = canAcceptPayments
+    ? null
+    : edirStatus !== 'ACTIVE'
+      ? `This Edir is ${String(edirStatus ?? 'inactive').toLowerCase()} and cannot accept payments.`
+      : 'This Edir has not configured a payment account yet.';
   const monthlyFee = Number(settings?.monthlyFee ?? 0);
   const balance = Number(member.paymentStatus?.balance ?? 0);
   const currency = settings?.currency ?? 'ETB';
@@ -140,6 +154,8 @@ export async function fetchDetailedMemberByPhone(phone: string): Promise<Detaile
     edirId: member.edirId,
     edirName: member.edir?.name ?? 'Edir',
     edirLogoUrl: member.edir?.logoUrl ?? null,
+    canAcceptPayments,
+    paymentAccountReason,
     memberId: member.memberId,
     name: member.name,
     role: member.role,

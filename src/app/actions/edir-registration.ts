@@ -99,11 +99,24 @@ export async function getEdirRegistrations(filters?: { status?: 'PENDING' | 'APP
     const page = Math.max(1, filters?.page ?? 1);
     const limit = 25;
 
-    // Build where clause based on actor scope
-    const where: any = { status: 'PENDING' };
-    if (filters?.status) {
-      where.status = filters.status;
-    }
+    // The registration lifecycle status (PENDING/APPROVED/REJECTED/RETURNED) lives
+    // on the EDIR_REGISTRATION ApprovalRequest (ApprovalStatus) — NOT on Edir.status
+    // (EdirStatus is only PENDING/ACTIVE/SUSPENDED/CLOSED). Map the requested filter
+    // to the approval status(es) and filter on the approvals relation. The engine
+    // marks an executed approval CLOSED, so APPROVED covers both APPROVED and CLOSED.
+    const STATUS_MAP: Record<string, string[]> = {
+      PENDING: ['PENDING'],
+      APPROVED: ['APPROVED', 'CLOSED'],
+      REJECTED: ['REJECTED'],
+      RETURNED: ['RETURNED'],
+    };
+    const approvalStatuses = STATUS_MAP[filters?.status ?? 'PENDING'] ?? ['PENDING'];
+
+    // Only Edirs that went through the registration maker-checker flow (have an
+    // EDIR_REGISTRATION approval) in the requested approval state.
+    const where: any = {
+      approvals: { some: { module: 'EDIR_REGISTRATION', status: { in: approvalStatuses } } },
+    };
 
     if (actor.orgScope === 'BRANCH' && actor.branchId) {
       where.branchId = actor.branchId;
