@@ -44,7 +44,7 @@ function buildApprovalWhere(
   } else if (tab === 'mine') {
     where = { ...where, makerId: actor.id };
   } else {
-    where = { ...where, status: { in: ['CLOSED', 'REJECTED'] } };
+    where = { ...where, status: { in: ['CLOSED', 'REJECTED'] }, makerId: actor.id };
   }
   if (filters.module && filters.module !== 'all') {
     // On the pending tab, never widen beyond the modules the actor can check.
@@ -153,11 +153,29 @@ export async function getApprovalDetail(id: string) {
     },
   });
   if (!request) return null;
-  if (!actor.isSuperAdmin && request.edirId !== actor.edirId) return null;
+  
+  // Check tenant access first
+  if (!actor.isSuperAdmin) {
+    if (actor.accessibleEdirIds === null) {
+      // HEAD_OFFICE, allow all tenants
+    } else if (!actor.accessibleEdirIds.includes(request.edirId)) {
+      return null;
+    }
+  }
 
-  const checkerPerm = MODULE_CHECKER_PERMISSION[request.module];
+  // Check if user is authorized to view this request:
+  // - Must be the maker OR
+  // - Must have the checker permission for this module (to view/pend) OR
+  // - Must be a super admin
   const isMaker = request.makerId === actor.id;
-  const canCheck = !isMaker && request.status === 'PENDING' && actorHasPermission(actor, checkerPerm);
+  const checkerPerm = MODULE_CHECKER_PERMISSION[request.module];
+  const hasCheckerPermission = actorHasPermission(actor, checkerPerm);
+  
+  if (!actor.isSuperAdmin && !isMaker && !hasCheckerPermission) {
+    return null;
+  }
+
+  const canCheck = !isMaker && request.status === 'PENDING' && hasCheckerPermission;
   const canResubmit = isMaker && request.status === 'RETURNED';
 
   return {
