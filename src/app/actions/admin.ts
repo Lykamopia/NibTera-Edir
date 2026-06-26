@@ -228,8 +228,8 @@ const roleSchema = z.object({
   name: z.string().min(2),
   permissions: z.array(z.string()).default([]),
   // Scope is set on create; 'EDIR' (a specific Edir or a cross-Edir template) or
-  // 'SUPER_ADMIN' (a platform role). Edir Admins always create EDIR roles.
-  scope: z.enum(['EDIR', 'SUPER_ADMIN']).default('EDIR'),
+  // 'PLATFORM' (a platform role). Edir Admins always create EDIR roles.
+  scope: z.enum(['EDIR', 'PLATFORM']).default('EDIR'),
   edirId: z.string().nullable().optional(), // EDIR scope: target Edir, or null = template for all Edirs
 });
 
@@ -249,7 +249,7 @@ export async function saveRole(input: z.infer<typeof roleSchema>) {
           return { success: false as const, error: 'You can only manage roles within your own Edir.' };
         }
       }
-      const scopeKind: RoleScopeKind = existing.scope === 'SUPER_ADMIN' ? 'PLATFORM' : 'EDIR';
+      const scopeKind: RoleScopeKind = (existing.scope === 'SUPER_ADMIN' || existing.scope === 'PLATFORM') ? 'PLATFORM' : 'EDIR';
       const permissions = filterPermissionsForScope(data.permissions, scopeKind).join(',');
       await prisma.role.update({ where: { id: data.id }, data: { name: data.name, permissions } });
       await writeAudit({ edirId: existing.edirId, userId: actor.id, action: 'ROLE_SAVED', targetType: 'Role', targetId: data.id, details: data.name });
@@ -265,15 +265,15 @@ export async function saveRole(input: z.infer<typeof roleSchema>) {
     }
 
     // ── Creating a new role ─────────────────────────────────────────────────
-    const scopeKind: RoleScopeKind = data.scope === 'SUPER_ADMIN' ? 'PLATFORM' : 'EDIR';
+    const scopeKind: RoleScopeKind = data.scope === 'PLATFORM' ? 'PLATFORM' : 'EDIR';
     if (scopeKind === 'PLATFORM' && !actor.isSuperAdmin) {
       return { success: false as const, error: 'Only Super Administrators can create platform roles.' };
     }
 
-    let scope: 'EDIR' | 'SUPER_ADMIN';
+    let scope: 'EDIR' | 'PLATFORM';
     let edirId: string | null;
     if (scopeKind === 'PLATFORM') {
-      scope = 'SUPER_ADMIN';
+      scope = 'PLATFORM';
       edirId = null;
     } else {
       scope = 'EDIR';

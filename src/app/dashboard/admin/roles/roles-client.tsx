@@ -22,7 +22,7 @@ const PLATFORM_KEY = '__platform__';
 
 /** A role's category for grouping/badging. */
 function roleCategory(r: any): { key: string; label: string; kind: 'platform' | 'template' | 'edir' } {
-  if (r.scope === 'SUPER_ADMIN') return { key: PLATFORM_KEY, label: 'Platform roles', kind: 'platform' };
+  if (r.scope === 'SUPER_ADMIN' || r.scope === 'PLATFORM') return { key: PLATFORM_KEY, label: 'Platform roles', kind: 'platform' };
   if (!r.edirId) return { key: TEMPLATE_KEY, label: 'Global templates (all Edirs)', kind: 'template' };
   return { key: r.edirId, label: r.edirName || 'Unnamed Edir', kind: 'edir' };
 }
@@ -66,7 +66,7 @@ export default function RolesClient({ isSuperAdmin = false }: { isSuperAdmin?: b
     return roles.filter(r => {
       if (q && !r.name.toLowerCase().includes(q) && !(r.edirName || '').toLowerCase().includes(q)) return false;
       if (filter === 'all') return true;
-      if (filter === PLATFORM_KEY) return r.scope === 'SUPER_ADMIN';
+      if (filter === PLATFORM_KEY) return r.scope === 'SUPER_ADMIN' || r.scope === 'PLATFORM';
       if (filter === TEMPLATE_KEY) return r.scope === 'EDIR' && !r.edirId;
       return r.edirId === filter;
     });
@@ -91,7 +91,7 @@ export default function RolesClient({ isSuperAdmin = false }: { isSuperAdmin?: b
       <div className="min-w-0">
         <div className="flex items-center gap-2 font-medium">
           <span className="truncate">{r.name}</span>
-          {r.scope === 'SUPER_ADMIN' && <Badge variant="outline" className="border-amber-300 bg-amber-100 text-amber-800">Platform</Badge>}
+          {(r.scope === 'SUPER_ADMIN' || r.scope === 'PLATFORM') && <Badge variant="outline" className="border-amber-300 bg-amber-100 text-amber-800">Platform</Badge>}
           {r.scope === 'EDIR' && !r.edirId && <Badge variant="outline" className="border-info/30 bg-info/10 text-info">Template</Badge>}
         </div>
         <div className="text-xs text-muted-foreground">{permCount(r)} permission{permCount(r) !== 1 ? 's' : ''} · {r.userCount} user{r.userCount !== 1 ? 's' : ''}</div>
@@ -221,7 +221,7 @@ function RoleDialog({ role, isSuperAdmin, edirs, onClose, onDone }: {
       id: role.id,
       name,
       permissions: perms,
-      scope: scopeKind === 'PLATFORM' ? 'SUPER_ADMIN' : 'EDIR',
+      scope: scopeKind === 'PLATFORM' ? 'PLATFORM' : 'EDIR',
       edirId: scopeKind === 'EDIR' ? (targetEdir || null) : null,
     } as any);
     setSaving(false);

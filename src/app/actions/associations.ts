@@ -132,29 +132,50 @@ export type OrgScope = 'HEAD_OFFICE' | 'DISTRICT' | 'BRANCH';
 
 /**
  * Roles assignable to a platform user, by organizational scope:
- *  • HEAD_OFFICE → platform (SUPER_ADMIN) and HEAD_OFFICE roles
- *  • DISTRICT    → DISTRICT roles for the chosen district (+ global district templates)
- *  • BRANCH      → BRANCH roles for the chosen branch (+ global branch templates)
+ *  • HEAD_OFFICE → platform (PLATFORM/SUPER_ADMIN) and HEAD_OFFICE roles
+ *  • DISTRICT    → platform roles + DISTRICT roles for the chosen district (+ global district templates)
+ *  • BRANCH      → platform roles + BRANCH roles for the chosen branch (+ global branch templates)
  */
 export async function getScopedRolesForAssociation(scope: OrgScope, scopeId?: string | null) {
   const actor = await getActor();
   if (!actor.isSuperAdmin) throw new AccessDeniedError('Only Super Administrators can manage platform users.');
-  if (scope === 'DISTRICT') {
-    return prisma.role.findMany({
-      where: { scope: 'DISTRICT', OR: [...(scopeId ? [{ districtId: scopeId }] : []), { districtId: null }] },
-      orderBy: { name: 'asc' }, select: { id: true, name: true },
-    });
-  }
-  if (scope === 'BRANCH') {
-    return prisma.role.findMany({
-      where: { scope: 'BRANCH', OR: [...(scopeId ? [{ branchId: scopeId }] : []), { branchId: null }] },
-      orderBy: { name: 'asc' }, select: { id: true, name: true },
-    });
-  }
-  return prisma.role.findMany({
-    where: { scope: { in: ['SUPER_ADMIN', 'HEAD_OFFICE'] } },
-    orderBy: { name: 'asc' }, select: { id: true, name: true },
+  
+  // First get all platform roles
+  const platformRoles = await prisma.role.findMany({
+    where: { scope: { in: ['SUPER_ADMIN', 'PLATFORM'] } },
+    orderBy: { name: 'asc' },
+    select: { id: true, name: true },
   });
+  
+  let scopeSpecificRoles: any[] = [];
+  
+  if (scope === 'DISTRICT') {
+    scopeSpecificRoles = await prisma.role.findMany({
+      where: { scope: 'DISTRICT', OR: [...(scopeId ? [{ districtId: scopeId }] : []), { districtId: null }] },
+      orderBy: { name: 'asc' },
+      select: { id: true, name: true },
+    });
+  } else if (scope === 'BRANCH') {
+    scopeSpecificRoles = await prisma.role.findMany({
+      where: { scope: 'BRANCH', OR: [...(scopeId ? [{ branchId: scopeId }] : []), { branchId: null }] },
+      orderBy: { name: 'asc' },
+      select: { id: true, name: true },
+    });
+  } else {
+    scopeSpecificRoles = await prisma.role.findMany({
+      where: { scope: 'HEAD_OFFICE' },
+      orderBy: { name: 'asc' },
+      select: { id: true, name: true },
+    });
+  }
+  
+  // Combine and deduplicate roles
+  const allRolesMap = new Map<string, any>();
+  [...platformRoles, ...scopeSpecificRoles].forEach(role => {
+    allRolesMap.set(role.id, role);
+  });
+  
+  return Array.from(allRolesMap.values()).sort((a, b) => a.name.localeCompare(b.name));
 }
 
 const createPlatformAdminSchema = z.object({
@@ -204,7 +225,9 @@ export async function createPlatformAdmin(input: z.infer<typeof createPlatformAd
     const role = await prisma.role.findUnique({ where: { id: data.roleId }, select: { scope: true, name: true, districtId: true, branchId: true } });
     if (!role) return { success: false as const, error: 'Role not found.' };
     const roleMatches =
-      (scope === 'HEAD_OFFICE' && (role.scope === 'SUPER_ADMIN' || role.scope === 'HEAD_OFFICE')) ||
+      // Platform roles can be assigned to any organizational scope
+      (role.scope === 'PLATFORM' || role.scope === 'SUPER_ADMIN') ||
+      (scope === 'HEAD_OFFICE' && role.scope === 'HEAD_OFFICE') ||
       (scope === 'DISTRICT' && role.scope === 'DISTRICT' && (!role.districtId || role.districtId === districtId)) ||
       (scope === 'BRANCH' && role.scope === 'BRANCH' && (!role.branchId || role.branchId === branchId));
     if (!roleMatches) return { success: false as const, error: 'The selected role does not match the chosen organizational scope.' };
@@ -245,7 +268,7 @@ export async function createPlatformAdmin(input: z.infer<typeof createPlatformAd
 }
 
 const SCOPE_LABEL: Record<string, string> = {
-  SUPER_ADMIN: 'Head Office', HEAD_OFFICE: 'Head Office', DISTRICT: 'District', BRANCH: 'Branch',
+  SUPER_ADMIN: 'Head Office', PLATFORM: 'Head Office', HEAD_OFFICE: 'Head Office', DISTRICT: 'District', BRANCH: 'Branch',
 };
 
 /** Platform users (no Edir) — Head Office, District and Branch operators. */
@@ -253,7 +276,7 @@ export async function getPlatformUsers() {
   const actor = await getActor();
   if (!actor.isSuperAdmin) throw new AccessDeniedError('Only Super Administrators can view platform users.');
   const users = await prisma.user.findMany({
-    where: { edirId: null, role: { is: { scope: { in: ['SUPER_ADMIN', 'HEAD_OFFICE', 'DISTRICT', 'BRANCH'] } } } },
+    where: { edirId: null, role: { is: { scope: { in: ['SUPER_ADMIN', 'PLATFORM', 'HEAD_OFFICE', 'DISTRICT', 'BRANCH'] } } } },
     include: { role: { select: { name: true, scope: true } }, district: { select: { name: true } }, branch: { select: { name: true } } },
     orderBy: { createdAt: 'desc' },
   });
@@ -469,12 +492,13 @@ export async function updateUserAssociation(input: z.infer<typeof editAssociatio
     if (data.roleId) {
       const role = await prisma.role.findUnique({ where: { id: data.roleId }, select: { scope: true, name: true, edirId: true, districtId: true, branchId: true } });
       if (!role) return { success: false as const, error: 'Role not found.' };
-      if (role.scope === 'SUPER_ADMIN' && data.scope !== 'HEAD_OFFICE') return { success: false as const, error: 'A platform role can only be assigned to a Head Office user.' };
+      // Platform roles can be assigned to any organizational scope
+      if (role.scope === 'SUPER_ADMIN' && data.scope !== 'HEAD_OFFICE' && role.scope !== 'PLATFORM') return { success: false as const, error: 'A SUPER_ADMIN role can only be assigned to a Head Office user.' };
       const roleOk =
         (data.scope === 'EDIR' && role.scope === 'EDIR' && (!role.edirId || role.edirId === edirId)) ||
-        (data.scope === 'DISTRICT' && role.scope === 'DISTRICT' && (!role.districtId || role.districtId === districtId)) ||
-        (data.scope === 'BRANCH' && role.scope === 'BRANCH' && (!role.branchId || role.branchId === branchId)) ||
-        (data.scope === 'HEAD_OFFICE' && (role.scope === 'SUPER_ADMIN' || role.scope === 'HEAD_OFFICE'));
+        (data.scope === 'DISTRICT' && (role.scope === 'PLATFORM' || role.scope === 'SUPER_ADMIN' || (role.scope === 'DISTRICT' && (!role.districtId || role.districtId === districtId)))) ||
+        (data.scope === 'BRANCH' && (role.scope === 'PLATFORM' || role.scope === 'SUPER_ADMIN' || (role.scope === 'BRANCH' && (!role.branchId || role.branchId === branchId)))) ||
+        (data.scope === 'HEAD_OFFICE' && (role.scope === 'SUPER_ADMIN' || role.scope === 'PLATFORM' || role.scope === 'HEAD_OFFICE'));
       if (!roleOk) return { success: false as const, error: 'The selected role does not match the chosen scope.' };
       roleName = role.name;
     }
