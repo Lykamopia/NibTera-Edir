@@ -1,5 +1,6 @@
-import UsersClient from './users-client';
+import { redirect } from 'next/navigation';
 
+// User management lives on the unified People page; this legacy route redirects there.
 export default function UsersPage() {
-  return <UsersClient />;
+  redirect('/dashboard/people');
 }

@@ -9,7 +9,7 @@ const FRAMABLE_PREFIXES = ["/pay", "/portal", "/api/nib-callback"];
 // stays in the edge runtime without importing the Prisma-backed permission
 // registry. Mirrors src/lib/permissions.ts `pagePermissions`; longest-match wins.
 const ROUTE_PERMISSIONS: { path: string; perms: string[] }[] = [
-  { path: '/dashboard/people', perms: ['view_members', 'manage_members', 'view_users', 'manage_users', 'super_admin'] },
+  { path: '/dashboard/people', perms: ['view_members', 'manage_members', 'view_users', 'manage_users', 'manage_associations', 'super_admin'] },
   { path: '/dashboard/members', perms: ['view_members', 'manage_members'] },
   { path: '/dashboard/payments', perms: ['view_payments', 'record_payment'] },
   { path: '/dashboard/approvals', perms: ['view_approvals', 'approve_payment', 'approve_member_removal', 'approve_penalty_waiver', 'approve_emergency_claim', 'approve_emergency_disbursement', 'approve_asset_issuance', 'approve_rule_change', 'approve_edir_registration', 'approve_edir_update', 'approve_user_creation', 'approve_document', 'review_member_documents'] },
@@ -38,13 +38,16 @@ const ROUTE_PERMISSIONS: { path: string; perms: string[] }[] = [
 // Configured via env (space-separated list of origins, e.g.
 // "https://superapp.nib.com.et https://app.nib.com.et"). Falls back to '*' only
 // when unset so the embedded flow keeps working until the allowlist is configured.
-function frameAncestors(framable: boolean): string[] {
+function frameAncestors(framable: boolean, sameOriginEmbeddable: boolean): string[] {
+  // Uploaded files (e.g. PDFs) are served from the same origin and previewed in an
+  // <iframe> inside the dashboard — allow same-origin framing only, never cross-site.
+  if (sameOriginEmbeddable) return ["'self'"];
   if (!framable) return ["'none'"];
   const env = (process.env.FRAME_ANCESTORS || '').trim();
   return env ? env.split(/\s+/) : ["*"];
 }
 
-function generateCsp(nonce: string, framable: boolean) {
+function generateCsp(nonce: string, framable: boolean, sameOriginEmbeddable: boolean) {
   const policies: Record<string, string[]> = {
     'default-src': ["'self'"],
     'script-src': ["'self'", `'nonce-${nonce}'`, "'strict-dynamic'", "'sha256-n46vPwSWuMC0W703pBofImv82Z26xo4LXymv0E9caPk='"],
@@ -57,7 +60,7 @@ function generateCsp(nonce: string, framable: boolean) {
     'form-action': ["'self'"],
     // Allow framing only for the public payment routes, and only from the
     // configured trusted client origins (no blanket '*' once FRAME_ANCESTORS is set).
-    'frame-ancestors': frameAncestors(framable),
+    'frame-ancestors': frameAncestors(framable, sameOriginEmbeddable),
     'upgrade-insecure-requests': [],
   };
   return Object.entries(policies).map(([k, v]) => `${k} ${v.join(' ')}`).join('; ');
@@ -89,6 +92,9 @@ export default withAuth(
     const token = (req as any).nextauth?.token;
     const { pathname } = req.nextUrl;
     const framable = FRAMABLE_PREFIXES.some((p) => pathname.startsWith(p));
+    // Uploaded files are same-origin resources previewed inside the dashboard
+    // (e.g. PDF <iframe>). They must be framable by our own pages — not DENY.
+    const sameOriginEmbeddable = pathname.startsWith('/uploads/');
 
     // ── First-login mandatory password change ─────────────────────────────────
     // A member in the "First Login Required" state cannot reach any app feature
@@ -124,12 +130,12 @@ export default withAuth(
     const response = NextResponse.next({ request: { headers: requestHeaders } });
 
     baseSecurityHeaders.forEach((h) => response.headers.set(h.key, h.value));
-    response.headers.set('X-Frame-Options', framable ? 'ALLOWALL' : 'DENY');
+    response.headers.set('X-Frame-Options', framable ? 'ALLOWALL' : sameOriginEmbeddable ? 'SAMEORIGIN' : 'DENY');
     if (!framable) {
       response.headers.set('Cross-Origin-Embedder-Policy', 'require-corp');
       response.headers.set('Cross-Origin-Resource-Policy', 'same-origin');
     }
-    response.headers.set('Content-Security-Policy', generateCsp(nonce, framable));
+    response.headers.set('Content-Security-Policy', generateCsp(nonce, framable, sameOriginEmbeddable));
 
     // Do not advertise the server/framework stack in responses.
     response.headers.delete('X-Powered-By');

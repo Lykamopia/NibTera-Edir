@@ -22,7 +22,7 @@ export const IMPLEMENTED_PAGES = new Set<string>([
   'admin-settings',
   'system-districts', // District management (Super Admin / DISTRICT scope)
   'system-branches', // Branch management (Super Admin / DISTRICT scope)
-  'system-associations', // standalone access for limited platform roles (manage_associations)
+  // 'system-associations' retired — user creation/association now lives on the People page.
 ]);
 
 export interface NavItem extends PagePermissionDef {}

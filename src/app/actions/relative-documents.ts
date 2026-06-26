@@ -9,7 +9,7 @@ import { writeAudit } from '@/lib/audit';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
 
-export const RELATIVE_DOC_CATEGORIES = ['General', 'ID', 'Certificate', 'Medical', 'Proof of Relationship', 'Photo', 'Other'] as const;
+export const RELATIVE_DOC_CATEGORIES = ['National ID', 'Birth Certificate', 'Passport', 'Medical Certificate', 'Marriage Certificate', 'Proof of Relationship', 'Photo', 'Other'] as const;
 
 const MAKER_PERMS = ['manage_documents', 'manage_members'] as const;
 

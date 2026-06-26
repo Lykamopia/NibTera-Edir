@@ -45,6 +45,7 @@ export interface PeopleContext {
   canManageUsers: boolean;
   canLock: boolean;
   canResetPassword: boolean;
+  canManageAssociations: boolean;
   edirs: { id: string; name: string }[];
   roles: { id: string; name: string; scope: string; edirId: string | null }[];
 }
@@ -64,10 +65,14 @@ function buildCaps(actor: Awaited<ReturnType<typeof getActor>>): PeopleContext {
     isSuperAdmin,
     canMembers: isSuperAdmin || actorHasPermission(actor, ['view_members', 'manage_members']),
     canManageMembers: isSuperAdmin || actorHasPermission(actor, ['manage_members']),
-    canUsers: isSuperAdmin || actorHasPermission(actor, ['view_users', 'manage_users']),
-    canManageUsers: isSuperAdmin || actorHasPermission(actor, ['manage_users']),
+    // manage_associations folds in here: the standalone User Associations module was
+    // merged into People, so association managers must be able to manage users here.
+    canUsers: isSuperAdmin || actorHasPermission(actor, ['view_users', 'manage_users', 'manage_associations']),
+    canManageUsers: isSuperAdmin || actorHasPermission(actor, ['manage_users', 'manage_associations']),
     canLock: isSuperAdmin || actorHasPermission(actor, ['lock_user', 'unlock_user']),
     canResetPassword: isSuperAdmin || actorHasPermission(actor, ['reset_password']),
+    // Scope/association editing (move a user across Edir/branch/district/head-office).
+    canManageAssociations: isSuperAdmin || actorHasPermission(actor, ['manage_associations']),
     edirs: [],
     roles: [],
   };

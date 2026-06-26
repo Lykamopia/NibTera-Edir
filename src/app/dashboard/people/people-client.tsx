@@ -9,24 +9,24 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
-import { Switch } from '@/components/ui/switch';
 import { Card, CardContent } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger, DialogDescription } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import {
-  UsersRound, Users, UserCog, Network, Building2, Search, Download, Plus, UserPlus, MoreHorizontal,
+  UsersRound, Users, UserCog, Building2, Search, Download, Plus, UserPlus, MoreHorizontal,
   Eye, UserX, UserMinus, ArrowRightLeft, Lock, Unlock, KeyRound, Power, Loader2, Upload, History,
   Wallet, ArrowUpDown, ArrowUp, ArrowDown, IdCard,
 } from 'lucide-react';
 import { CredentialsDialog, type Credentials } from '@/components/credentials-dialog';
+import { CreateUserDialog, EditAssociationDialog } from './association-dialogs';
 import { useConfirm } from '@/components/ui/confirm-provider';
 import { DateRangeFilter, ALL_TIME, toParam, type DateRangeValue } from '@/components/ui/date-range-filter';
 import { getPeopleDirectory, exportPeopleCsv, type PersonRow, type PeopleContext, type PeopleStats } from '@/app/actions/people';
 import { createMember, requestMemberRemoval, type MemberInput } from '@/app/actions/members';
 import { setUserRole, setUserStatus, lockUser, unlockUser, adminResetUserPassword, bulkInviteUsers } from '@/app/actions/admin';
-import { associateUsers, removeUserFromEdir, getEdirRolesForAssociation, getAssociationUsers, getAssociationAudit } from '@/app/actions/associations';
+import { removeUserFromEdir, getAssociationAudit } from '@/app/actions/associations';
 
 const STATUS_COLORS: Record<string, string> = {
   ACTIVE: 'border-success/20 bg-success/10 text-success',
@@ -56,7 +56,8 @@ export default function PeopleClient() {
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'name', dir: 'asc' });
 
   const [detail, setDetail] = useState<PersonRow | null>(null);
-  const [reassign, setReassign] = useState<PersonRow | null>(null);
+  const [editAccess, setEditAccess] = useState<PersonRow | null>(null);
+  const [addUser, setAddUser] = useState(false);
   const [showActivity, setShowActivity] = useState(false);
   const [cred, setCred] = useState<{ name: string; credentials: Credentials } | null>(null);
   const confirm = useConfirm();
@@ -79,7 +80,9 @@ export default function PeopleClient() {
     if (res?.success) { toast.success(ok); load(); } else toast.error(res?.error || 'Action failed.');
   };
 
-  const rolesForEdir = (edirId: string | null) => (ctx?.roles ?? []).filter(r => !r.edirId || r.edirId === edirId);
+  // Only the Edir's own roles + cross-Edir EDIR templates are assignable to a
+  // member/user of that Edir — never another Edir's roles or platform roles.
+  const rolesForEdir = (edirId: string | null) => (ctx?.roles ?? []).filter(r => r.scope === 'EDIR' && (!r.edirId || r.edirId === edirId));
 
   const toggleSort = (key: SortKey) =>
     setSort(s => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' }));
@@ -254,8 +257,7 @@ export default function PeopleClient() {
           <DateRangeFilter value={dateRange} onChange={setDateRange} className="h-9" align="end" />
           <Button variant="outline" size="sm" onClick={onExport}><Download className="mr-1 h-4 w-4" /> Export</Button>
           {isSuper && <Button variant="outline" size="sm" onClick={() => setShowActivity(true)}><History className="mr-1 h-4 w-4" /> Activity</Button>}
-          {/* Cross-Edir bulk association lives in the dedicated User Associations module — link there instead of duplicating it here. */}
-          {isSuper && <Button asChild variant="outline" size="sm"><Link href="/dashboard/system/associations"><Network className="mr-1 h-4 w-4" /> User Associations</Link></Button>}
+          {ctx?.canManageUsers && <Button size="sm" variant="outline" onClick={() => setAddUser(true)}><UserPlus className="mr-1 h-4 w-4" /> Add User</Button>}
           {ctx?.canManageUsers && <BulkImportDialog ctx={ctx} onDone={load} />}
           {ctx?.canManageMembers && <AddMemberDialog ctx={ctx} onCreated={load} onCredentials={setCred} />}
         </div>
@@ -337,7 +339,7 @@ export default function PeopleClient() {
                       <RowActions
                         r={r} ctx={ctx!} isSuper={isSuper}
                         onView={() => setDetail(r)}
-                        onReassign={() => setReassign(r)}
+                        onReassign={() => setEditAccess(r)}
                         onRemoveMember={() => onRemoveMember(r)}
                         onRemoveFromEdir={() => onRemoveFromEdir(r)}
                         act={act}
@@ -358,13 +360,14 @@ export default function PeopleClient() {
         <PersonDetail
           r={detail} ctx={ctx} isSuper={isSuper}
           onClose={() => setDetail(null)}
-          onReassign={() => { setReassign(detail); setDetail(null); }}
+          onReassign={() => { setEditAccess(detail); setDetail(null); }}
           onRemoveMember={() => onRemoveMember(detail)}
           onRemoveFromEdir={() => onRemoveFromEdir(detail)}
           act={act}
         />
       )}
-      {reassign && ctx && <ReassignDialog person={reassign} edirs={ctx.edirs} onClose={() => setReassign(null)} onDone={() => { setReassign(null); load(); }} />}
+      {editAccess?.userId && ctx && <EditAssociationDialog userId={editAccess.userId} userLabel={editAccess.name} edirs={ctx.edirs} onClose={() => setEditAccess(null)} onDone={() => { setEditAccess(null); load(); }} />}
+      {addUser && ctx && <CreateUserDialog edirs={ctx.edirs} canPlatform={isSuper} initialKind="edir" onClose={() => setAddUser(false)} onDone={(c) => { setAddUser(false); if (c) setCred(c); load(); }} />}
       {showActivity && <ActivityDialog onClose={() => setShowActivity(false)} />}
     </div>
   );
@@ -424,11 +427,11 @@ function RowActions({ r, ctx, isSuper, onView, onReassign, onRemoveMember, onRem
           </>
         )}
 
-        {isSuper && r.hasLogin && (
+        {(isSuper || ctx.canManageAssociations) && r.hasLogin && (
           <>
             <DropdownMenuSeparator />
             <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">Association</DropdownMenuLabel>
-            <DropdownMenuItem onClick={onReassign}><ArrowRightLeft className="mr-2 h-4 w-4" /> {r.edirId ? 'Reassign / transfer' : 'Assign to Edir'}</DropdownMenuItem>
+            <DropdownMenuItem onClick={onReassign}><ArrowRightLeft className="mr-2 h-4 w-4" /> Manage access</DropdownMenuItem>
             {r.edirId && <DropdownMenuItem className="text-destructive" onClick={onRemoveFromEdir}><UserMinus className="mr-2 h-4 w-4" /> Remove from Edir</DropdownMenuItem>}
           </>
         )}
@@ -498,10 +501,10 @@ function PersonDetail({ r, ctx, isSuper, onClose, onReassign, onRemoveMember, on
           {r.hasLogin && ctx.canResetPassword && (
             <Button size="sm" variant="outline" onClick={() => act(() => adminResetUserPassword(r.userId!), 'Reset email sent.')}><KeyRound className="mr-1 h-4 w-4" /> Reset password</Button>
           )}
-          {isSuper && r.hasLogin && (
-            <Button size="sm" variant="outline" onClick={onReassign}><ArrowRightLeft className="mr-1 h-4 w-4" /> {r.edirId ? 'Transfer' : 'Assign'}</Button>
+          {(isSuper || ctx.canManageAssociations) && r.hasLogin && (
+            <Button size="sm" variant="outline" onClick={onReassign}><ArrowRightLeft className="mr-1 h-4 w-4" /> Manage access</Button>
           )}
-          {isSuper && r.edirId && r.hasLogin && (
+          {(isSuper || ctx.canManageAssociations) && r.edirId && r.hasLogin && (
             <Button size="sm" variant="ghost" className="text-destructive" onClick={onRemoveFromEdir}><UserMinus className="mr-1 h-4 w-4" /> Remove from Edir</Button>
           )}
           {r.hasMembership && ctx.canManageMembers && (
@@ -532,7 +535,8 @@ function AddMemberDialog({ ctx, onCreated, onCredentials }: {
   const photoRef = useRef<HTMLInputElement>(null);
 
   // Roles are Edir-scoped; for Super-Admins narrow to the chosen Edir.
-  const availableRoles = ctx.isSuperAdmin ? ctx.roles.filter(r => !r.edirId || r.edirId === form.edirId) : ctx.roles;
+  // Same rule for new members: the chosen Edir's roles + cross-Edir EDIR templates only.
+  const availableRoles = ctx.roles.filter(r => r.scope === 'EDIR' && (!ctx.isSuperAdmin || !r.edirId || r.edirId === form.edirId));
 
   const set = (k: keyof MemberInput, v: any) => setForm(f => ({ ...f, [k]: v }));
   const reset = () => { setForm(EMPTY_MEMBER); setStage('form'); setSaving(false); };
@@ -816,52 +820,6 @@ function BulkImportDialog({ ctx, onDone }: { ctx: PeopleContext; onDone: () => v
     </Dialog>
   );
 }
-
-// ─── Reassign / transfer ─────────────────────────────────────────────────────
-
-function ReassignDialog({ person, edirs, onClose, onDone }: { person: PersonRow; edirs: { id: string; name: string }[]; onClose: () => void; onDone: () => void }) {
-  const [edirId, setEdirId] = useState(edirs.find(e => e.id !== person.edirId)?.id ?? edirs[0]?.id ?? '');
-  const [roles, setRoles] = useState<any[]>([]);
-  const [roleId, setRoleId] = useState('');
-  const [activate, setActivate] = useState(true);
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => { if (edirId) getEdirRolesForAssociation(edirId).then(r => { setRoles(r); setRoleId(r.find((x: any) => x.name === 'Member')?.id ?? r[0]?.id ?? ''); }); }, [edirId]);
-
-  const submit = async () => {
-    if (!person.userId) { toast.error('This person has no login to associate.'); return; }
-    if (!edirId) { toast.error('Select an Edir.'); return; }
-    setSaving(true);
-    const res = await associateUsers({ userIds: [person.userId], edirId, roleId: roleId || null, activate });
-    setSaving(false);
-    if (res?.success) { toast.success('User reassigned.'); onDone(); } else toast.error(res?.error || 'Failed.');
-  };
-
-  return (
-    <Dialog open onOpenChange={o => { if (!o) onClose(); }}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{person.edirId ? 'Reassign / Transfer' : 'Assign to Edir'}</DialogTitle>
-          <DialogDescription>{person.name}{person.edirName ? ` · currently in ${person.edirName}` : ' · currently unassigned'}</DialogDescription>
-        </DialogHeader>
-        <div className="space-y-3">
-          <div className="space-y-1.5"><Label className="text-xs">Target Edir</Label>
-            <Select value={edirId} onValueChange={setEdirId}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{edirs.map(e => <SelectItem key={e.id} value={e.id}>{e.name}</SelectItem>)}</SelectContent></Select>
-          </div>
-          <div className="space-y-1.5"><Label className="text-xs">Role</Label>
-            <Select value={roleId} onValueChange={setRoleId}><SelectTrigger><SelectValue placeholder="Keep current" /></SelectTrigger><SelectContent>{roles.map(r => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}</SelectContent></Select>
-          </div>
-          <div className="flex items-center justify-between rounded-lg border p-2.5"><span className="text-sm">Activate after transfer</span><Switch checked={activate} onCheckedChange={setActivate} /></div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
-          <Button onClick={submit} disabled={saving}>{saving && <Loader2 className="mr-1 h-4 w-4 animate-spin" />} {person.edirId ? 'Transfer' : 'Assign'}</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 
 // ─── Association activity ────────────────────────────────────────────────────
 

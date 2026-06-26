@@ -90,7 +90,7 @@ export default function MemberProfileClient({ initial, memberId }: { initial: Pr
         <TabsList className="flex w-full flex-wrap justify-start">
           <TabsTrigger value="overview"><CircleUser className="mr-1.5 h-4 w-4" /> Overview</TabsTrigger>
           <TabsTrigger value="dependents"><Users className="mr-1.5 h-4 w-4" /> Dependents</TabsTrigger>
-          <TabsTrigger value="documents"><FolderOpen className="mr-1.5 h-4 w-4" /> Documents</TabsTrigger>
+          <TabsTrigger value="documents"><FolderOpen className="mr-1.5 h-4 w-4" /> Member Documents</TabsTrigger>
           <TabsTrigger value="payments"><CreditCard className="mr-1.5 h-4 w-4" /> Payments</TabsTrigger>
           <TabsTrigger value="benefits"><Siren className="mr-1.5 h-4 w-4" /> Benefits</TabsTrigger>
           <TabsTrigger value="audit"><ScrollText className="mr-1.5 h-4 w-4" /> Audit</TabsTrigger>
@@ -388,7 +388,7 @@ function DependentsTab({ profile, onChanged }: { profile: Profile; onChanged: ()
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">Spouse, children, parents, beneficiaries, and other relatives relevant for benefit eligibility and emergency claims.</p>
+        <p className="text-sm text-muted-foreground">Spouse, children, parents, beneficiaries, and other relatives relevant for benefit eligibility and emergency claims. Each dependent has its own documents section below their details.</p>
         <Button onClick={() => setEditing(null)}><Plus className="mr-1 h-4 w-4" /> Add Relative</Button>
       </div>
       {profile.relatives.length === 0 ? (
@@ -522,8 +522,8 @@ function MemberDocsTab({ profile, memberId, onChanged }: { profile: Profile; mem
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Supporting Documents</CardTitle>
-        <CardDescription>IDs, certificates, medical documents, and other attachments.</CardDescription>
+        <CardTitle className="text-base">Member Documents</CardTitle>
+        <CardDescription>This member’s own documents — IDs, certificates, and attachments. Each dependent’s documents are managed under the <span className="font-medium text-foreground">Dependents</span> tab.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="flex flex-wrap items-end gap-2">
@@ -533,7 +533,7 @@ function MemberDocsTab({ profile, memberId, onChanged }: { profile: Profile; mem
               <SelectContent>{DOC_CATEGORIES.map(c => <SelectItem key={c} value={c}>{c.replace(/_/g, ' ')}</SelectItem>)}</SelectContent>
             </Select>
           </div>
-          <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) onUpload(f); }} />
+          <input ref={fileRef} type="file" accept="image/*,application/pdf" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) onUpload(f); }} />
           <Button variant="outline" disabled={busy} onClick={() => fileRef.current?.click()}><Upload className="mr-1 h-4 w-4" /> Upload</Button>
         </div>
         {profile.documents.length === 0 ? (

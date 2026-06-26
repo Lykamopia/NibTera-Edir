@@ -425,6 +425,24 @@ export function ensureApprovalModules() {
             edirId: edir.id, userId: actor.id, action: 'USER_INVITED', targetType: 'User', targetId: user.id,
             details: `Invited managing admin ${email} for ${edir.name}.`,
           }, tx);
+
+          // Enroll the managing admin as a regular MEMBER of the new Edir too, so
+          // they carry the same contribution obligations (monthly fees, penalties,
+          // eligibility) as everyone else — their Edir Admin role simply adds the
+          // administration capability on top. This Edir is brand-new, so the admin
+          // is its first member (mirrors ensureMembershipForUser, done in-tx).
+          const memberCount = await tx.member.count({ where: { edirId: edir.id } });
+          const memberCode = `EDR-${new Date().getFullYear()}-${String(memberCount + 1).padStart(4, '0')}`;
+          const settingsRow = await tx.edirSettings.findUnique({ where: { edirId: edir.id }, select: { registrationFee: true } });
+          const regFee = settingsRow?.registrationFee ?? new Prisma.Decimal(0);
+          await tx.member.create({
+            data: {
+              edirId: edir.id, memberId: memberCode, userId: user.id,
+              name: payload.admin.name, phone, email,
+              role: 'Member', status: 'ACTIVE',
+              paymentStatus: { create: { balance: regFee, status: regFee.greaterThan(0) ? 'PENDING' : 'PAID' } },
+            },
+          });
         }
       }
     },

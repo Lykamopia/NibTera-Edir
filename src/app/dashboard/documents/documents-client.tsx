@@ -375,6 +375,7 @@ function DetailDialog({ id, isStaff, onClose, onChanged }: { id: string; isStaff
 
   const doc = d.document;
   const isImage = doc.fileType === 'image';
+  const isPdf = doc.fileType === 'pdf' || (doc.fileName || '').toLowerCase().endsWith('.pdf');
 
   return (
     <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
@@ -390,6 +391,8 @@ function DetailDialog({ id, isStaff, onClose, onChanged }: { id: string; isStaff
             <div className="flex min-h-48 items-center justify-center overflow-hidden rounded-lg border bg-muted/30">
               {isImage ? (
                 <img src={doc.fileUrl} alt={doc.fileName} className="max-h-72 w-full object-contain" />
+              ) : isPdf ? (
+                <iframe src={doc.fileUrl} title={doc.title || doc.fileName} className="h-[60vh] w-full" />
               ) : (() => {
                 const f = fileFormat(doc.fileName, doc.fileType);
                 return (

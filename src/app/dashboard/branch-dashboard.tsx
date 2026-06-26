@@ -139,7 +139,7 @@ export default function BranchDashboard({ actor }: { actor: Actor }) {
               <a href="/dashboard/approvals" className="block p-3 rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors text-sm font-medium text-blue-600">
                 Review Approvals ({stats.pendingApprovals})
               </a>
-              <a href="/dashboard/members" className="block p-3 rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors text-sm font-medium text-blue-600">
+              <a href="/dashboard/people" className="block p-3 rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors text-sm font-medium text-blue-600">
                 Manage Members
               </a>
             </div>

@@ -64,7 +64,12 @@ export async function POST(req: NextRequest) {
   const origin = req.headers.get('origin');
   if (origin) {
     try {
-      if (new URL(origin).host !== req.headers.get('host')) {
+      const originHost = new URL(origin).host;
+      // Behind a reverse proxy the internal Host header differs from the public
+      // host, so accept a match against the proxy-forwarded host too.
+      const forwardedHost = (req.headers.get('x-forwarded-host') || '').split(',')[0].trim();
+      const allowedHosts = [req.headers.get('host'), forwardedHost].filter(Boolean);
+      if (!allowedHosts.includes(originHost)) {
         return NextResponse.json({ success: false, error: 'Cross-origin request blocked.' }, { status: 403 });
       }
     } catch {
