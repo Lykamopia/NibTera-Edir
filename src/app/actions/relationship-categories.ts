@@ -10,7 +10,7 @@ import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
 
 /** Sensible defaults used when an Edir has not configured its own categories yet. */
-export const DEFAULT_RELATIONSHIP_CATEGORIES = [
+const DEFAULT_RELATIONSHIP_CATEGORIES = [
   { name: 'Spouse', benefitEligible: true, emergencyEligible: true },
   { name: 'Child', benefitEligible: true, emergencyEligible: true },
   { name: 'Parent', benefitEligible: true, emergencyEligible: true },
@@ -22,7 +22,7 @@ export const DEFAULT_RELATIONSHIP_CATEGORIES = [
   { name: 'Other', benefitEligible: false, emergencyEligible: false },
 ];
 
-export interface ActiveRelationshipCategory {
+interface ActiveRelationshipCategory {
   name: string;
   description: string | null;
   benefitEligible: boolean;
