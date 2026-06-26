@@ -72,7 +72,7 @@ export default function AccountClient() {
 
   return (
     <div className="space-y-5">
-      <PageHeader title="My Account" description="Your membership, contributions, requests, and settings — all in one place." icon={CircleUser} />
+      <PageHeader title="My Account" description="Your personal profile, account settings, notifications, and preferences — all in one place." icon={CircleUser} />
 
       {/* Identity header */}
       <Card>
@@ -105,20 +105,18 @@ export default function AccountClient() {
         </CardContent>
       </Card>
 
-      {!p.hasMembership ? (
-        <Card><CardContent className="p-0"><EmptyState icon={CircleUser} title="No membership linked yet" description="Your login isn’t linked to a member record. Contact your Edir administrator." /></CardContent></Card>
-      ) : (
-        <Tabs defaultValue="overview">
-          <TabsList className="flex w-full flex-wrap justify-start">
-            <TabsTrigger value="overview"><CircleUser className="mr-1.5 h-4 w-4" /> Overview</TabsTrigger>
-            <TabsTrigger value="payments"><CreditCard className="mr-1.5 h-4 w-4" /> Payments</TabsTrigger>
-            <TabsTrigger value="relatives"><Users className="mr-1.5 h-4 w-4" /> Relatives</TabsTrigger>
-            <TabsTrigger value="requests"><MessageSquareWarning className="mr-1.5 h-4 w-4" /> Requests</TabsTrigger>
-            <TabsTrigger value="documents"><FolderOpen className="mr-1.5 h-4 w-4" /> Documents</TabsTrigger>
-            <TabsTrigger value="security"><KeyRound className="mr-1.5 h-4 w-4" /> Security</TabsTrigger>
-          </TabsList>
+      <Tabs defaultValue={p.hasMembership ? "overview" : "security"}>
+        <TabsList className="flex w-full flex-wrap justify-start">
+          {p.hasMembership && <TabsTrigger value="overview"><CircleUser className="mr-1.5 h-4 w-4" /> Overview</TabsTrigger>}
+          {p.hasMembership && <TabsTrigger value="payments"><CreditCard className="mr-1.5 h-4 w-4" /> Payments</TabsTrigger>}
+          {p.hasMembership && <TabsTrigger value="relatives"><Users className="mr-1.5 h-4 w-4" /> Relatives</TabsTrigger>}
+          {p.hasMembership && <TabsTrigger value="requests"><MessageSquareWarning className="mr-1.5 h-4 w-4" /> Requests</TabsTrigger>}
+          {p.hasMembership && <TabsTrigger value="documents"><FolderOpen className="mr-1.5 h-4 w-4" /> Documents</TabsTrigger>}
+          <TabsTrigger value="security"><KeyRound className="mr-1.5 h-4 w-4" /> Security</TabsTrigger>
+        </TabsList>
 
-          {/* Overview */}
+        {/* Overview (only for members) */}
+        {p.hasMembership && (
           <TabsContent value="overview" className="mt-4 space-y-4">
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <StatCard title="Outstanding Balance" value={money(p.payments.balance, cur)} icon={Wallet} accent={p.payments.balance > 0 ? 'warning' : 'success'} />
@@ -179,8 +177,10 @@ export default function AccountClient() {
               </Card>
             )}
           </TabsContent>
+        )}
 
-          {/* Payments */}
+        {/* Payments (only for members) */}
+        {p.hasMembership && (
           <TabsContent value="payments" className="mt-4 space-y-4">
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
               <StatCard title="Balance" value={money(p.payments.balance, cur)} accent={p.payments.balance > 0 ? 'warning' : 'success'} />
@@ -233,8 +233,10 @@ export default function AccountClient() {
               </CardContent>
             </Card>
           </TabsContent>
+        )}
 
-          {/* Relatives */}
+        {/* Relatives (only for members) */}
+        {p.hasMembership && (
           <TabsContent value="relatives" className="mt-4 space-y-4">
             <div className="flex items-center justify-between">
               <p className="text-sm text-muted-foreground">Your beneficiaries and relatives. Submit a request to add a new one for approval.</p>
@@ -258,8 +260,10 @@ export default function AccountClient() {
               </div>
             )}
           </TabsContent>
+        )}
 
-          {/* Requests */}
+        {/* Requests (only for members) */}
+        {p.hasMembership && (
           <TabsContent value="requests" className="mt-4 space-y-4">
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               <ActionTile icon={Siren} label="Emergency" onClick={() => setRequestType('EMERGENCY')} />
@@ -314,8 +318,10 @@ export default function AccountClient() {
               </CardContent>
             </Card>
           </TabsContent>
+        )}
 
-          {/* Documents */}
+        {/* Documents (only for members) */}
+        {p.hasMembership && (
           <TabsContent value="documents" className="mt-4">
             <Card>
               <CardHeader><CardTitle className="text-base">My Documents</CardTitle><CardDescription>Documents on your record and files you’ve uploaded — each upload is stored centrally and shown with its live approval status.</CardDescription></CardHeader>
@@ -335,9 +341,11 @@ export default function AccountClient() {
               </CardContent>
             </Card>
           </TabsContent>
+        )}
 
-          {/* Security */}
-          <TabsContent value="security" className="mt-4 grid gap-4 lg:grid-cols-2">
+        {/* Security (for all users) */}
+        <TabsContent value="security" className="mt-4 space-y-4">
+          <div className="grid gap-4 lg:grid-cols-2">
             <ChangePassword />
             <div className="space-y-4">
               <Card>
@@ -351,11 +359,28 @@ export default function AccountClient() {
               </Card>
               <Card><CardHeader className="pb-2"><CardTitle className="text-base">Notification Preferences</CardTitle></CardHeader><CardContent><NotificationSettings /></CardContent></Card>
             </div>
-          </TabsContent>
-        </Tabs>
-      )}
+          </div>
+          
+          {/* Notifications for non-members */}
+          {!p.hasMembership && p.notifications.length > 0 && (
+            <Card>
+              <CardHeader className="pb-2"><CardTitle className="flex items-center gap-2 text-base"><Bell className="h-4 w-4" /> Notifications</CardTitle></CardHeader>
+              <CardContent className="p-0">
+                <div className="divide-y">
+                  {p.notifications.map(n => (
+                    <div key={n.id} className="flex items-center justify-between gap-3 px-4 py-2.5 text-sm">
+                      <div className="min-w-0"><div className={`truncate ${n.read ? '' : 'font-semibold'}`}>{n.title}</div><div className="truncate text-xs text-muted-foreground">{n.body}</div></div>
+                      <span className="shrink-0 text-xs text-muted-foreground">{new Date(n.createdAt).toLocaleDateString()}</span>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </TabsContent>
+      </Tabs>
 
-      {requestType && <RequestDialog type={requestType} onClose={() => setRequestType(null)} onDone={() => { setRequestType(null); load(); }} />}
+      {p.hasMembership && requestType && <RequestDialog type={requestType} onClose={() => setRequestType(null)} onDone={() => { setRequestType(null); load(); }} />}
     </div>
   );
 }
