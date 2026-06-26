@@ -32,7 +32,7 @@ export default function RolesClient({ isSuperAdmin = false }: { isSuperAdmin?: b
   const [edirs, setEdirs] = useState<{ id: string; name: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
-  const [editing, setEditing] = useState<any | null>(null);
+  const [editing, setEditing] = useState<{ id?: string; name: string; permissions: string[]; scope: 'PLATFORM' | 'EDIR'; edirId?: string; edirName?: string } | null>(null);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState('all');
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -121,7 +121,12 @@ export default function RolesClient({ isSuperAdmin = false }: { isSuperAdmin?: b
               : 'Define roles from the permission catalog, grouped by module and action.'}
           </p>
         </div>
-        <Button size="sm" onClick={() => setEditing({ name: '', permissions: [], scope: 'EDIR', edirId: null })}><Plus className="h-4 w-4 mr-1" /> New Role</Button>
+        <div className="flex flex-wrap gap-2">
+          {isSuperAdmin && (
+            <Button size="sm" onClick={() => setEditing({ name: '', permissions: [], scope: 'PLATFORM', edirId: null })}><Plus className="h-4 w-4 mr-1" /> Create Platform Role</Button>
+          )}
+          <Button size="sm" variant={isSuperAdmin ? "outline" : "default"} onClick={() => setEditing({ name: '', permissions: [], scope: 'EDIR', edirId: null })}><Plus className="h-4 w-4 mr-1" /> Create Edir Role</Button>
+        </div>
       </div>
 
       {isSuperAdmin && !loading && !error && (
@@ -183,7 +188,7 @@ function RoleDialog({ role, isSuperAdmin, edirs, onClose, onDone }: {
   role: any; isSuperAdmin: boolean; edirs: { id: string; name: string }[]; onClose: () => void; onDone: () => void;
 }) {
   const isEdit = !!role.id;
-  const initialScope: RoleScopeKind = role.scope === 'SUPER_ADMIN' ? 'PLATFORM' : 'EDIR';
+  const initialScope: RoleScopeKind = role.scope === 'SUPER_ADMIN' ? 'PLATFORM' : (role.scope || 'EDIR');
   const [name, setName] = useState(role.name);
   const [perms, setPerms] = useState<string[]>(role.permissions);
   const [scopeKind, setScopeKind] = useState<RoleScopeKind>(initialScope);
@@ -233,15 +238,17 @@ function RoleDialog({ role, isSuperAdmin, edirs, onClose, onDone }: {
     <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
       <DialogContent className="max-w-2xl max-h-[88vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{isEdit ? 'Edit Role' : 'New Role'}</DialogTitle>
+          <DialogTitle>
+            {isEdit ? 'Edit Role' : (scopeKind === 'PLATFORM' ? 'Create Platform Role' : 'Create Edir Role')}
+          </DialogTitle>
           <DialogDescription>Grant capabilities grouped by module and action. {scopeSummary}</DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5"><Label className="text-xs">Role Name</Label><Input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Treasurer, Edir Creator" /></div>
-            {/* Scope (Super-Admins, create only) */}
-            {isSuperAdmin && !isEdit && (
+            {/* Scope (Super-Admins, only when editing or no fixed scope) */}
+            {false && isSuperAdmin && !isEdit && (
               <div className="space-y-1.5">
                 <Label className="text-xs">Role Scope</Label>
                 <div className="flex rounded-lg border p-0.5">

@@ -35,7 +35,7 @@ export default function AssociationsClient({ embedded }: { embedded?: boolean } 
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
-  const [creating, setCreating] = useState(false);
+  const [creating, setCreating] = useState<'edir' | 'platform' | false>(false);
   const [cred, setCred] = useState<{ name: string; credentials: Credentials } | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -51,7 +51,6 @@ export default function AssociationsClient({ embedded }: { embedded?: boolean } 
   if (loading) return <LoadingState label="Loading associations…" className="min-h-[50vh]" />;
   if (error) return <ErrorState variant="page" onRetry={loadEdirs} />;
 
-  const createBtn = <Button size="sm" className="shadow-sm" onClick={() => setCreating(true)}><UserCog className="mr-1.5 h-4 w-4" /> Create User</Button>;
   const totalUsers = edirs.reduce((s, e) => s + (e.users || 0), 0);
   const stats = [
     { icon: Building2, label: 'Edirs', value: edirs.length },
@@ -63,7 +62,12 @@ export default function AssociationsClient({ embedded }: { embedded?: boolean } 
       {cred && <CredentialsDialog memberName={cred.name} credentials={cred.credentials} onClose={() => setCred(null)} />}
 
       {embedded ? (
-        <div className="flex justify-end">{createBtn}</div>
+        <div className="flex justify-end gap-2">
+          <Button size="sm" className="shadow-sm" variant="outline" onClick={() => setCreating('edir')}><UserCog className="mr-1.5 h-4 w-4" /> Create Edir User</Button>
+          {isSuperAdmin && (
+            <Button size="sm" className="shadow-sm" onClick={() => setCreating('platform')}><UserCog className="mr-1.5 h-4 w-4" /> Create Platform User</Button>
+          )}
+        </div>
       ) : (
         <div className="relative overflow-hidden rounded-2xl border bg-gradient-to-br from-primary/10 via-primary/[0.04] to-transparent p-5 sm:p-6">
           <div className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-primary/10 blur-3xl" />
@@ -82,13 +86,18 @@ export default function AssociationsClient({ embedded }: { embedded?: boolean } 
                   <div className="leading-tight"><div className="text-lg font-bold tabular-nums">{s.value.toLocaleString()}</div><div className="text-[10px] uppercase tracking-wide text-muted-foreground">{s.label}</div></div>
                 </div>
               ))}
-              {createBtn}
+              <div className="flex gap-2">
+                <Button size="sm" className="shadow-sm" variant="outline" onClick={() => setCreating('edir')}><UserCog className="mr-1.5 h-4 w-4" /> Create Edir User</Button>
+                {isSuperAdmin && (
+                  <Button size="sm" className="shadow-sm" onClick={() => setCreating('platform')}><UserCog className="mr-1.5 h-4 w-4" /> Create Platform User</Button>
+                )}
+              </div>
             </div>
           </div>
         </div>
       )}
 
-      {creating && <CreateUserDialog edirs={edirs} canPlatform={isSuperAdmin} onClose={() => setCreating(false)}
+      {creating && <CreateUserDialog edirs={edirs} canPlatform={isSuperAdmin} initialKind={creating} onClose={() => setCreating(false)}
         onDone={(c) => { setCreating(false); if (c) setCred(c); refreshAll(); }} />}
 
       <Tabs defaultValue="edir">
@@ -542,8 +551,8 @@ function EditAssociationDialog({ userId, userLabel, edirs, onClose, onDone }: { 
   );
 }
 
-function CreateUserDialog({ edirs, canPlatform, onClose, onDone }: { edirs: any[]; canPlatform: boolean; onClose: () => void; onDone: (cred?: { name: string; credentials: Credentials }) => void }) {
-  const [kind, setKind] = useState<'edir' | 'platform'>('edir');
+function CreateUserDialog({ edirs, canPlatform, initialKind, onClose, onDone }: { edirs: any[]; canPlatform: boolean; initialKind: 'edir' | 'platform'; onClose: () => void; onDone: (cred?: { name: string; credentials: Credentials }) => void }) {
+  const [kind, setKind] = useState<'edir' | 'platform'>(initialKind);
   const [form, setForm] = useState({ name: '', email: '', phone: '', edirId: '', roleId: '', districtId: '', branchId: '' });
   const [edirRoles, setEdirRoles] = useState<any[]>([]);
   const [platformRoles, setPlatformRoles] = useState<any[]>([]);
@@ -601,7 +610,7 @@ function CreateUserDialog({ edirs, canPlatform, onClose, onDone }: { edirs: any[
     <Dialog open onOpenChange={o => { if (!o) onClose(); }}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Create User</DialogTitle>
+          <DialogTitle>{kind === 'platform' ? 'Create Platform User' : 'Create Edir User'}</DialogTitle>
           <DialogDescription>
             {kind === 'platform'
               ? 'Create a platform user (no Edir). Place them at Head Office, or within a District and optionally a Branch — the role list adapts to the chosen scope. They get a temporary password (changed on first login).'
@@ -609,7 +618,7 @@ function CreateUserDialog({ edirs, canPlatform, onClose, onDone }: { edirs: any[
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
-          {canPlatform && (
+          {false && canPlatform && (
             <div className="space-y-1.5">
               <Label className="text-xs">Account Type</Label>
               <div className="flex rounded-lg border p-0.5">
