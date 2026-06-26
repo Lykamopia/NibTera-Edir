@@ -1,7 +1,8 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
+import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -11,8 +12,14 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
-import { Loader2, Network, Search, UserPlus, ArrowRightLeft, UserMinus, Building2, ScrollText, Users, UserCog, Crown, KeyRound, Pencil } from 'lucide-react';
-import { PageHeader, LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import {
+  Loader2, Network, Search, UserPlus, ArrowRightLeft, UserMinus, Building2, ScrollText, Users, UserCog,
+  Crown, KeyRound, Pencil, MoreHorizontal, ArrowUpDown, ArrowUp, ArrowDown, Power, MapPin,
+} from 'lucide-react';
+import { LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
+import { Pagination, usePagination } from '@/components/ui/pagination';
 import { useConfirm } from '@/components/ui/confirm-provider';
 import { CredentialsDialog, type Credentials } from '@/components/credentials-dialog';
 import {
@@ -24,11 +31,89 @@ import {
 } from '@/app/actions/associations';
 import { getEdirContext } from '@/app/actions/edir-context';
 
+const PAGE_SIZE = 10;
+
 const STATUS: Record<string, string> = {
   ACTIVE: 'border-success/20 bg-success/10 text-success', INACTIVE: 'bg-muted text-muted-foreground',
   SUSPENDED: 'border-warning/20 bg-warning/10 text-warning', INVITED: 'border-info/20 bg-info/10 text-info',
 };
+const STATUS_OPTIONS = ['ACTIVE', 'INACTIVE', 'SUSPENDED'] as const;
 const fmt = (d: any) => (d ? new Date(d).toLocaleDateString() : 'Never');
+const titleCase = (s: string) => (s ? s.charAt(0) + s.slice(1).toLowerCase() : s);
+const label = (u: any) => u.name || u.email || u.phone || '—';
+const matches = (u: any, q: string) => !q || [u.name, u.email, u.phone].some(v => (v || '').toLowerCase().includes(q));
+
+type Sort = { key: string; dir: 'asc' | 'desc' };
+function useSort(initial: string): [Sort, (k: string) => void] {
+  const [sort, setSort] = useState<Sort>({ key: initial, dir: 'asc' });
+  const toggle = (key: string) => setSort(s => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' }));
+  return [sort, toggle];
+}
+
+// ─── Shared presentational pieces ────────────────────────────────────────────
+
+function SortHead({ label, k, sort, onSort, className }: { label: string; k: string; sort: Sort; onSort: (k: string) => void; className?: string }) {
+  const Icon = sort.key !== k ? ArrowUpDown : sort.dir === 'asc' ? ArrowUp : ArrowDown;
+  return (
+    <TableHead className={className}>
+      <button onClick={() => onSort(k)} className={cn('inline-flex items-center gap-1 hover:text-foreground', className?.includes('text-right') && 'flex-row-reverse')}>
+        {label}<Icon className="h-3.5 w-3.5 text-muted-foreground" />
+      </button>
+    </TableHead>
+  );
+}
+
+function StatusBadge({ status }: { status: string }) {
+  return <Badge variant="outline" className={STATUS[status] ?? ''}>{titleCase(status)}</Badge>;
+}
+
+function UserCell({ u }: { u: any }) {
+  return (
+    <div className="flex items-center gap-3">
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-semibold text-muted-foreground">
+        {label(u).slice(0, 2).toUpperCase()}
+      </span>
+      <div className="min-w-0">
+        <div className="truncate font-medium">{label(u)}</div>
+        <div className="truncate text-xs text-muted-foreground">{u.phone || u.email || ''}</div>
+      </div>
+    </div>
+  );
+}
+
+/** Shared toolbar: search box + optional filter selects + right-aligned action. */
+function Toolbar({ query, onQuery, placeholder, children, action }: {
+  query: string; onQuery: (v: string) => void; placeholder: string; children?: React.ReactNode; action?: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <div className="relative min-w-48 flex-1 sm:max-w-xs">
+        <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+        <Input className="pl-8" placeholder={placeholder} value={query} onChange={e => onQuery(e.target.value)} />
+      </div>
+      {children}
+      {action && <div className="ml-auto">{action}</div>}
+    </div>
+  );
+}
+
+function StatusFilter({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <Select value={value} onValueChange={onChange}>
+      <SelectTrigger className="w-36"><SelectValue placeholder="Status" /></SelectTrigger>
+      <SelectContent>
+        <SelectItem value="all">All statuses</SelectItem>
+        {Object.keys(STATUS).map(s => <SelectItem key={s} value={s}>{titleCase(s)}</SelectItem>)}
+      </SelectContent>
+    </Select>
+  );
+}
+
+function TableCard({ children }: { children: React.ReactNode }) {
+  return <Card><CardContent className="p-0">{children}</CardContent></Card>;
+}
+
+// ─── Page ────────────────────────────────────────────────────────────────────
 
 export default function AssociationsClient({ embedded }: { embedded?: boolean } = {}) {
   const [edirs, setEdirs] = useState<any[]>([]);
@@ -57,17 +142,21 @@ export default function AssociationsClient({ embedded }: { embedded?: boolean } 
     { icon: Users, label: 'Edir Users', value: totalUsers },
   ];
 
+  const createButtons = (
+    <div className="flex gap-2">
+      <Button size="sm" className="shadow-sm" variant="outline" onClick={() => setCreating('edir')}><UserCog className="mr-1.5 h-4 w-4" /> Create Edir User</Button>
+      {isSuperAdmin && (
+        <Button size="sm" className="shadow-sm" onClick={() => setCreating('platform')}><UserCog className="mr-1.5 h-4 w-4" /> Create Platform User</Button>
+      )}
+    </div>
+  );
+
   return (
     <div className="space-y-5">
       {cred && <CredentialsDialog memberName={cred.name} credentials={cred.credentials} onClose={() => setCred(null)} />}
 
       {embedded ? (
-        <div className="flex justify-end gap-2">
-          <Button size="sm" className="shadow-sm" variant="outline" onClick={() => setCreating('edir')}><UserCog className="mr-1.5 h-4 w-4" /> Create Edir User</Button>
-          {isSuperAdmin && (
-            <Button size="sm" className="shadow-sm" onClick={() => setCreating('platform')}><UserCog className="mr-1.5 h-4 w-4" /> Create Platform User</Button>
-          )}
-        </div>
+        <div className="flex justify-end gap-2">{createButtons}</div>
       ) : (
         <div className="relative overflow-hidden rounded-2xl border bg-gradient-to-br from-primary/10 via-primary/[0.04] to-transparent p-5 sm:p-6">
           <div className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-primary/10 blur-3xl" />
@@ -86,12 +175,7 @@ export default function AssociationsClient({ embedded }: { embedded?: boolean } 
                   <div className="leading-tight"><div className="text-lg font-bold tabular-nums">{s.value.toLocaleString()}</div><div className="text-[10px] uppercase tracking-wide text-muted-foreground">{s.label}</div></div>
                 </div>
               ))}
-              <div className="flex gap-2">
-                <Button size="sm" className="shadow-sm" variant="outline" onClick={() => setCreating('edir')}><UserCog className="mr-1.5 h-4 w-4" /> Create Edir User</Button>
-                {isSuperAdmin && (
-                  <Button size="sm" className="shadow-sm" onClick={() => setCreating('platform')}><UserCog className="mr-1.5 h-4 w-4" /> Create Platform User</Button>
-                )}
-              </div>
+              {createButtons}
             </div>
           </div>
         </div>
@@ -116,74 +200,15 @@ export default function AssociationsClient({ embedded }: { embedded?: boolean } 
   );
 }
 
-// ─── Platform Users ──────────────────────────────────────────────────────────
-
-function PlatformUsersTab({ refreshKey, edirs, onCredentials }: { refreshKey: number; edirs: any[]; onCredentials: (c: { name: string; credentials: Credentials }) => void }) {
-  const [users, setUsers] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [editUser, setEditUser] = useState<any | null>(null);
-  const confirm = useConfirm();
-
-  const load = useCallback(() => {
-    setLoading(true);
-    getPlatformUsers().then(setUsers).catch(() => toast.error('Failed to load platform users.')).finally(() => setLoading(false));
-  }, []);
-  useEffect(() => { load(); }, [load, refreshKey]);
-
-  const onStatus = async (u: any, status: any) => {
-    const res = await setAssociationUserStatus(u.id, status);
-    if (res?.success) load(); else toast.error(res?.error || 'Failed.');
-  };
-  const onReset = async (u: any) => {
-    if (!(await confirm({ title: 'Reset password', description: `Issue a new temporary password for ${u.name || u.email}?`, confirmText: 'Reset' }))) return;
-    const res = await resetAssociationUserPassword(u.id);
-    if (res?.success && res.credentials) { toast.success('Temporary password issued.'); onCredentials({ name: u.name || u.email, credentials: res.credentials as Credentials }); load(); }
-    else toast.error(res?.error || 'Failed.');
-  };
-
-  if (loading) return <LoadingState />;
-  return (
-    <Card><CardContent className="p-0">
-      {users.length === 0 ? <EmptyState icon={Crown} title="No platform users yet" description="Use “Create User → Platform user” to add one." /> : (
-        <div className="divide-y">
-          {users.map(u => {
-            const placement = u.branchName
-              ? `${u.districtName ? `${u.districtName} / ` : ''}${u.branchName}`
-              : u.districtName || (u.scopeLabel === 'Head Office' ? 'Head Office' : null);
-            return (
-            <div key={u.id} className="flex flex-col gap-2 p-3 sm:flex-row sm:items-center sm:justify-between">
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-medium">{u.name || u.email || u.phone}</span>
-                  <Badge variant="outline" className={STATUS[u.status] ?? ''}>{u.status}</Badge>
-                  {u.scopeLabel && <Badge variant="outline" className="border-primary/20 bg-primary/10 text-primary">{u.scopeLabel}</Badge>}
-                  {u.roleName && <Badge variant="secondary">{u.roleName}</Badge>}
-                  {u.mustChangePassword && <Badge variant="outline" className="border-info/20 bg-info/10 text-info">Pending first login</Badge>}
-                </div>
-                <div className="text-xs text-muted-foreground">{u.phone || u.email}{placement ? ` · ${placement}` : ''} · last login {fmt(u.lastLoginAt)}</div>
-              </div>
-              <div className="flex shrink-0 flex-wrap gap-1.5">
-                <Button size="sm" variant="outline" onClick={() => setEditUser(u)}><Pencil className="mr-1 h-4 w-4" /> Edit</Button>
-                <Button size="sm" variant="outline" onClick={() => onReset(u)}><KeyRound className="mr-1 h-4 w-4" /> Reset password</Button>
-              </div>
-            </div>
-            );
-          })}
-        </div>
-      )}
-    </CardContent>
-    {editUser && <EditAssociationDialog userId={editUser.id} userLabel={editUser.name || editUser.email || editUser.phone} edirs={edirs} onClose={() => setEditUser(null)} onDone={() => { setEditUser(null); load(); }} />}
-    </Card>
-  );
-}
-
 // ─── By Edir ─────────────────────────────────────────────────────────────────
 
 function ByEdirTab({ edirs, onChanged }: { edirs: any[]; onChanged: () => void }) {
   const [edirId, setEdirId] = useState<string>(edirs[0]?.id ?? '');
   const [users, setUsers] = useState<any[]>([]);
-  const [roles, setRoles] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [query, setQuery] = useState('');
+  const [status, setStatus] = useState('all');
+  const [sort, toggleSort] = useSort('name');
   const [adding, setAdding] = useState(false);
   const [reassign, setReassign] = useState<any | null>(null);
   const confirm = useConfirm();
@@ -192,62 +217,101 @@ function ByEdirTab({ edirs, onChanged }: { edirs: any[]; onChanged: () => void }
   const load = useCallback(() => {
     if (!edirId) return;
     setLoading(true);
-    Promise.all([getEdirUsers(edirId), getEdirRolesForAssociation(edirId)])
-      .then(([u, r]) => { setUsers(u); setRoles(r); })
+    getEdirUsers(edirId)
+      .then(setUsers)
       .catch(() => toast.error('Failed to load users.')).finally(() => setLoading(false));
   }, [edirId]);
   useEffect(() => { load(); }, [load]);
 
   const refresh = () => { load(); onChanged(); };
   const onRemove = async (u: any) => {
-    if (!(await confirm({ title: 'Remove from Edir', description: `Remove ${u.name || u.email} from this Edir? They will be unassigned and deactivated.`, destructive: true, confirmText: 'Remove' }))) return;
+    if (!(await confirm({ title: 'Remove from Edir', description: `Remove ${label(u)} from this Edir? They will be unassigned and deactivated.`, destructive: true, confirmText: 'Remove' }))) return;
     const res = await removeUserFromEdir(u.id);
     if (res?.success) { toast.success('User removed.'); refresh(); } else toast.error(res?.error || 'Failed.');
   };
-  const onStatus = async (u: any, status: any) => {
-    const res = await setAssociationUserStatus(u.id, status);
+  const onStatus = async (u: any, s: string) => {
+    const res = await setAssociationUserStatus(u.id, s as any);
     if (res?.success) refresh(); else toast.error(res?.error || 'Failed.');
   };
 
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const dir = sort.dir === 'asc' ? 1 : -1;
+    return users
+      .filter(u => (status === 'all' || u.status === status) && matches(u, q))
+      .sort((a, b) => {
+        switch (sort.key) {
+          case 'role': return (a.roleName || '').localeCompare(b.roleName || '') * dir;
+          case 'status': return (a.status || '').localeCompare(b.status || '') * dir;
+          case 'lastLoginAt': return (new Date(a.lastLoginAt || 0).getTime() - new Date(b.lastLoginAt || 0).getTime()) * dir;
+          default: return label(a).localeCompare(label(b)) * dir;
+        }
+      });
+  }, [users, query, status, sort]);
+  const pg = usePagination(filtered, PAGE_SIZE);
+
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
+      <Toolbar query={query} onQuery={setQuery} placeholder="Search users in this Edir…"
+        action={edir && <Button onClick={() => setAdding(true)}><UserPlus className="mr-1.5 h-4 w-4" /> Associate Users</Button>}>
         <Select value={edirId} onValueChange={setEdirId}>
-          <SelectTrigger className="w-72"><SelectValue placeholder="Select an Edir" /></SelectTrigger>
+          <SelectTrigger className="w-64"><SelectValue placeholder="Select an Edir" /></SelectTrigger>
           <SelectContent>{edirs.map(e => <SelectItem key={e.id} value={e.id}>{e.name} · {e.users} user(s)</SelectItem>)}</SelectContent>
         </Select>
-        {edir && <div className="ml-auto"><Button onClick={() => setAdding(true)}><UserPlus className="mr-1.5 h-4 w-4" /> Associate Users</Button></div>}
-      </div>
+        <StatusFilter value={status} onChange={setStatus} />
+      </Toolbar>
 
-      {!edirId ? <Card><CardContent className="p-0"><EmptyState icon={Building2} title="Select an Edir" /></CardContent></Card>
-        : loading ? <LoadingState /> : (
-          <Card><CardContent className="p-0">
-            {users.length === 0 ? <EmptyState icon={Users} title="No users in this Edir" description="Use “Associate Users” to add members or staff." /> : (
-              <div className="divide-y">
-                {users.map(u => (
-                  <div key={u.id} className="flex flex-col gap-2 p-3 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-medium">{u.name || u.email || u.phone}</span>
-                        <Badge variant="outline" className={STATUS[u.status] ?? ''}>{u.status}</Badge>
-                        {u.roleName && <Badge variant="secondary">{u.roleName}</Badge>}
-                      </div>
-                      <div className="text-xs text-muted-foreground">{u.phone || u.email} · last login {fmt(u.lastLoginAt)}</div>
-                    </div>
-                    <div className="flex shrink-0 flex-wrap gap-1.5">
-                      <Select value={u.status} onValueChange={(v) => onStatus(u, v)}>
-                        <SelectTrigger className="h-8 w-32 text-xs"><SelectValue /></SelectTrigger>
-                        <SelectContent><SelectItem value="ACTIVE">Active</SelectItem><SelectItem value="INACTIVE">Inactive</SelectItem><SelectItem value="SUSPENDED">Suspended</SelectItem></SelectContent>
-                      </Select>
-                      <Button size="sm" variant="outline" onClick={() => setReassign(u)}><ArrowRightLeft className="mr-1 h-4 w-4" /> Transfer</Button>
-                      <Button size="sm" variant="ghost" className="text-destructive" onClick={() => onRemove(u)}><UserMinus className="h-4 w-4" /></Button>
-                    </div>
-                  </div>
-                ))}
-              </div>
+      {!edirId ? (
+        <TableCard><EmptyState icon={Building2} title="Select an Edir" description="Pick an Edir above to view and manage its users." /></TableCard>
+      ) : loading ? (
+        <TableCard><LoadingState rows={6} /></TableCard>
+      ) : (
+        <>
+          <TableCard>
+            {filtered.length === 0 ? (
+              <EmptyState icon={Users} title="No users found" description="Use “Associate Users” to add members or staff to this Edir." />
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <SortHead label="User" k="name" sort={sort} onSort={toggleSort} />
+                    <SortHead label="Role" k="role" sort={sort} onSort={toggleSort} />
+                    <SortHead label="Status" k="status" sort={sort} onSort={toggleSort} />
+                    <SortHead label="Last login" k="lastLoginAt" sort={sort} onSort={toggleSort} />
+                    <TableHead className="w-12" />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {pg.pageItems.map(u => (
+                    <TableRow key={u.id}>
+                      <TableCell><UserCell u={u} /></TableCell>
+                      <TableCell>{u.roleName ? <Badge variant="secondary">{u.roleName}</Badge> : <span className="text-sm text-muted-foreground">—</span>}</TableCell>
+                      <TableCell><StatusBadge status={u.status} /></TableCell>
+                      <TableCell className="text-sm text-muted-foreground">{fmt(u.lastLoginAt)}</TableCell>
+                      <TableCell className="text-right">
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="h-8 w-8"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="w-44">
+                            <DropdownMenuItem onClick={() => setReassign(u)}><ArrowRightLeft className="mr-2 h-4 w-4" /> Transfer</DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">Set status</DropdownMenuLabel>
+                            {STATUS_OPTIONS.map(s => (
+                              <DropdownMenuItem key={s} disabled={u.status === s} onClick={() => onStatus(u, s)}><Power className="mr-2 h-4 w-4" /> {titleCase(s)}</DropdownMenuItem>
+                            ))}
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem className="text-destructive" onClick={() => onRemove(u)}><UserMinus className="mr-2 h-4 w-4" /> Remove from Edir</DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
             )}
-          </CardContent></Card>
-        )}
+          </TableCard>
+          {filtered.length > 0 && <Pagination page={pg.page} pageCount={pg.pageCount} total={pg.total} pageSize={PAGE_SIZE} itemLabel="user" onPageChange={pg.setPage} />}
+        </>
+      )}
 
       {adding && edir && <AssociateDialog fixedEdir={edir} edirs={edirs} onClose={() => setAdding(false)} onDone={() => { setAdding(false); refresh(); }} />}
       {reassign && <ReassignDialog user={reassign} edirs={edirs} onClose={() => setReassign(null)} onDone={() => { setReassign(null); refresh(); }} />}
@@ -259,6 +323,9 @@ function ByEdirTab({ edirs, onChanged }: { edirs: any[]; onChanged: () => void }
 
 function ByUserTab({ edirs, onChanged }: { edirs: any[]; onChanged: () => void }) {
   const [query, setQuery] = useState('');
+  const [status, setStatus] = useState('all');
+  const [edirFilter, setEdirFilter] = useState('all');
+  const [sort, toggleSort] = useSort('name');
   const [users, setUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [reassign, setReassign] = useState<any | null>(null);
@@ -270,34 +337,240 @@ function ByUserTab({ edirs, onChanged }: { edirs: any[]; onChanged: () => void }
   }, [query]);
   useEffect(() => { load(); }, [load]);
 
+  const filtered = useMemo(() => {
+    const dir = sort.dir === 'asc' ? 1 : -1;
+    return users
+      .filter(u =>
+        (status === 'all' || u.status === status) &&
+        (edirFilter === 'all' || (edirFilter === 'none' && !u.edirId) || u.edirId === edirFilter))
+      .sort((a, b) => {
+        switch (sort.key) {
+          case 'edir': return (a.edirName || '').localeCompare(b.edirName || '') * dir;
+          case 'status': return (a.status || '').localeCompare(b.status || '') * dir;
+          default: return label(a).localeCompare(label(b)) * dir;
+        }
+      });
+  }, [users, status, edirFilter, sort]);
+  const pg = usePagination(filtered, PAGE_SIZE);
+
   return (
     <div className="space-y-4">
-      <div className="relative max-w-sm">
-        <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-        <Input className="pl-8" placeholder="Search users by name, email, phone…" value={query} onChange={e => setQuery(e.target.value)} />
-      </div>
-      {loading ? <LoadingState /> : (
-        <Card><CardContent className="p-0">
-          {users.length === 0 ? <EmptyState icon={Users} title="No users found" /> : (
-            <div className="divide-y">
-              {users.map(u => (
-                <div key={u.id} className="flex flex-col gap-2 p-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2"><span className="font-medium">{u.name || u.email}</span><Badge variant="outline" className={STATUS[u.status] ?? ''}>{u.status}</Badge></div>
-                    <div className="text-xs text-muted-foreground">{u.phone || u.email} · {u.edirName ? <>Edir: <span className="font-medium text-foreground">{u.edirName}</span>{u.roleName ? ` · ${u.roleName}` : ''}</> : <span className="text-warning">Unassigned</span>}</div>
-                  </div>
-                  <div className="flex shrink-0 gap-1.5">
-                    <Button size="sm" variant="outline" onClick={() => setEditUser(u)}><Pencil className="mr-1 h-4 w-4" /> Edit</Button>
-                    <Button size="sm" variant="outline" onClick={() => setReassign(u)}><ArrowRightLeft className="mr-1 h-4 w-4" /> {u.edirId ? 'Reassign' : 'Assign'}</Button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </CardContent></Card>
+      <Toolbar query={query} onQuery={setQuery} placeholder="Search by name, email, phone…">
+        <StatusFilter value={status} onChange={setStatus} />
+        <Select value={edirFilter} onValueChange={setEdirFilter}>
+          <SelectTrigger className="w-52"><SelectValue placeholder="Edir" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Edirs</SelectItem>
+            <SelectItem value="none">Unassigned</SelectItem>
+            {edirs.map(e => <SelectItem key={e.id} value={e.id}>{e.name}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      </Toolbar>
+
+      {loading ? <TableCard><LoadingState rows={6} /></TableCard> : (
+        <>
+          <TableCard>
+            {filtered.length === 0 ? (
+              <EmptyState icon={Users} title="No users found" description="Adjust the search or filters above." />
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <SortHead label="User" k="name" sort={sort} onSort={toggleSort} />
+                    <SortHead label="Edir" k="edir" sort={sort} onSort={toggleSort} />
+                    <TableHead>Role</TableHead>
+                    <SortHead label="Status" k="status" sort={sort} onSort={toggleSort} />
+                    <TableHead className="w-12" />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {pg.pageItems.map(u => (
+                    <TableRow key={u.id}>
+                      <TableCell><UserCell u={u} /></TableCell>
+                      <TableCell>{u.edirName ? <Badge variant="secondary">{u.edirName}</Badge> : <Badge variant="outline" className="border-warning/20 bg-warning/10 text-warning">Unassigned</Badge>}</TableCell>
+                      <TableCell>{u.roleName ? <span className="text-sm">{u.roleName}</span> : <span className="text-sm text-muted-foreground">—</span>}</TableCell>
+                      <TableCell><StatusBadge status={u.status} /></TableCell>
+                      <TableCell className="text-right">
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="h-8 w-8"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="w-44">
+                            <DropdownMenuItem onClick={() => setEditUser(u)}><Pencil className="mr-2 h-4 w-4" /> Edit association</DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => setReassign(u)}><ArrowRightLeft className="mr-2 h-4 w-4" /> {u.edirId ? 'Reassign / transfer' : 'Assign to Edir'}</DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </TableCard>
+          {filtered.length > 0 && <Pagination page={pg.page} pageCount={pg.pageCount} total={pg.total} pageSize={PAGE_SIZE} itemLabel="user" onPageChange={pg.setPage} />}
+        </>
       )}
+
       {reassign && <ReassignDialog user={reassign} edirs={edirs} onClose={() => setReassign(null)} onDone={() => { setReassign(null); load(); onChanged(); }} />}
-      {editUser && <EditAssociationDialog userId={editUser.id} userLabel={editUser.name || editUser.email || editUser.phone} edirs={edirs} onClose={() => setEditUser(null)} onDone={() => { setEditUser(null); load(); onChanged(); }} />}
+      {editUser && <EditAssociationDialog userId={editUser.id} userLabel={label(editUser)} edirs={edirs} onClose={() => setEditUser(null)} onDone={() => { setEditUser(null); load(); onChanged(); }} />}
+    </div>
+  );
+}
+
+// ─── Platform Users ──────────────────────────────────────────────────────────
+
+function PlatformUsersTab({ refreshKey, edirs, onCredentials }: { refreshKey: number; edirs: any[]; onCredentials: (c: { name: string; credentials: Credentials }) => void }) {
+  const [users, setUsers] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState('');
+  const [scope, setScope] = useState('all');
+  const [status, setStatus] = useState('all');
+  const [sort, toggleSort] = useSort('name');
+  const [editUser, setEditUser] = useState<any | null>(null);
+  const confirm = useConfirm();
+
+  const load = useCallback(() => {
+    setLoading(true);
+    getPlatformUsers().then(setUsers).catch(() => toast.error('Failed to load platform users.')).finally(() => setLoading(false));
+  }, []);
+  useEffect(() => { load(); }, [load, refreshKey]);
+
+  const onReset = async (u: any) => {
+    if (!(await confirm({ title: 'Reset password', description: `Issue a new temporary password for ${label(u)}?`, confirmText: 'Reset' }))) return;
+    const res = await resetAssociationUserPassword(u.id);
+    if (res?.success && res.credentials) { toast.success('Temporary password issued.'); onCredentials({ name: label(u), credentials: res.credentials as Credentials }); load(); }
+    else toast.error((res && !res.success && res.error) || 'Failed.');
+  };
+
+  const scopes = useMemo(() => Array.from(new Set(users.map(u => u.scopeLabel).filter(Boolean))) as string[], [users]);
+  const placementOf = (u: any) => u.branchName
+    ? `${u.districtName ? `${u.districtName} / ` : ''}${u.branchName}`
+    : u.districtName || (u.scopeLabel === 'Head Office' ? 'Head Office' : '—');
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const dir = sort.dir === 'asc' ? 1 : -1;
+    return users
+      .filter(u => (status === 'all' || u.status === status) && (scope === 'all' || u.scopeLabel === scope) && matches(u, q))
+      .sort((a, b) => {
+        switch (sort.key) {
+          case 'scope': return (a.scopeLabel || '').localeCompare(b.scopeLabel || '') * dir;
+          case 'status': return (a.status || '').localeCompare(b.status || '') * dir;
+          case 'lastLoginAt': return (new Date(a.lastLoginAt || 0).getTime() - new Date(b.lastLoginAt || 0).getTime()) * dir;
+          default: return label(a).localeCompare(label(b)) * dir;
+        }
+      });
+  }, [users, query, scope, status, sort]);
+  const pg = usePagination(filtered, PAGE_SIZE);
+
+  return (
+    <div className="space-y-4">
+      <Toolbar query={query} onQuery={setQuery} placeholder="Search platform users…">
+        {scopes.length > 0 && (
+          <Select value={scope} onValueChange={setScope}>
+            <SelectTrigger className="w-40"><SelectValue placeholder="Scope" /></SelectTrigger>
+            <SelectContent><SelectItem value="all">All scopes</SelectItem>{scopes.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
+          </Select>
+        )}
+        <StatusFilter value={status} onChange={setStatus} />
+      </Toolbar>
+
+      {loading ? <TableCard><LoadingState rows={6} /></TableCard> : (
+        <>
+          <TableCard>
+            {filtered.length === 0 ? (
+              <EmptyState icon={Crown} title="No platform users" description="Use “Create Platform User” to add a Head Office, District, or Branch operator." />
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <SortHead label="User" k="name" sort={sort} onSort={toggleSort} />
+                    <SortHead label="Scope" k="scope" sort={sort} onSort={toggleSort} />
+                    <TableHead>Placement</TableHead>
+                    <TableHead>Role</TableHead>
+                    <SortHead label="Status" k="status" sort={sort} onSort={toggleSort} />
+                    <SortHead label="Last login" k="lastLoginAt" sort={sort} onSort={toggleSort} />
+                    <TableHead className="w-12" />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {pg.pageItems.map(u => (
+                    <TableRow key={u.id}>
+                      <TableCell><UserCell u={u} /></TableCell>
+                      <TableCell>{u.scopeLabel ? <Badge variant="outline" className="border-primary/20 bg-primary/10 text-primary">{u.scopeLabel}</Badge> : '—'}</TableCell>
+                      <TableCell className="text-sm text-muted-foreground"><span className="inline-flex items-center gap-1"><MapPin className="h-3.5 w-3.5" /> {placementOf(u)}</span></TableCell>
+                      <TableCell>{u.roleName ? <Badge variant="secondary">{u.roleName}</Badge> : <span className="text-sm text-muted-foreground">—</span>}</TableCell>
+                      <TableCell>
+                        <div className="flex flex-wrap items-center gap-1">
+                          <StatusBadge status={u.status} />
+                          {u.mustChangePassword && <Badge variant="outline" className="border-info/20 bg-info/10 text-info">First login</Badge>}
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">{fmt(u.lastLoginAt)}</TableCell>
+                      <TableCell className="text-right">
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="h-8 w-8"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="w-48">
+                            <DropdownMenuItem onClick={() => setEditUser(u)}><Pencil className="mr-2 h-4 w-4" /> Edit association</DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => onReset(u)}><KeyRound className="mr-2 h-4 w-4" /> Reset password</DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </TableCard>
+          {filtered.length > 0 && <Pagination page={pg.page} pageCount={pg.pageCount} total={pg.total} pageSize={PAGE_SIZE} itemLabel="user" onPageChange={pg.setPage} />}
+        </>
+      )}
+
+      {editUser && <EditAssociationDialog userId={editUser.id} userLabel={label(editUser)} edirs={edirs} onClose={() => setEditUser(null)} onDone={() => { setEditUser(null); load(); }} />}
+    </div>
+  );
+}
+
+// ─── Audit Trail ─────────────────────────────────────────────────────────────
+
+function AuditTab() {
+  const [items, setItems] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+  const [query, setQuery] = useState('');
+  const load = useCallback(() => { setLoading(true); setError(false); getAssociationAudit().then(setItems).catch(() => setError(true)).finally(() => setLoading(false)); }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return items;
+    return items.filter(a => [a.action, a.details, a.by].some(v => (v || '').toLowerCase().includes(q)));
+  }, [items, query]);
+  const pg = usePagination(filtered, 12);
+
+  if (loading) return <TableCard><LoadingState rows={6} /></TableCard>;
+  if (error) return <ErrorState onRetry={load} />;
+  return (
+    <div className="space-y-4">
+      <Toolbar query={query} onQuery={setQuery} placeholder="Search by action, details, or user…" />
+      <TableCard>
+        {filtered.length === 0 ? <EmptyState icon={ScrollText} title="No association changes" description="Association activity will appear here." /> : (
+          <Table>
+            <TableHeader>
+              <TableRow><TableHead>Action</TableHead><TableHead>Details</TableHead><TableHead>By</TableHead><TableHead className="text-right">When</TableHead></TableRow>
+            </TableHeader>
+            <TableBody>
+              {pg.pageItems.map(a => (
+                <TableRow key={a.id}>
+                  <TableCell><Badge variant="outline" className="font-mono text-[11px] font-normal">{a.action.replace(/_/g, ' ')}</Badge></TableCell>
+                  <TableCell className="max-w-md truncate text-sm text-muted-foreground">{a.details || '—'}</TableCell>
+                  <TableCell className="text-sm">{a.by}</TableCell>
+                  <TableCell className="whitespace-nowrap text-right text-xs text-muted-foreground">{new Date(a.createdAt).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </TableCard>
+      {filtered.length > 0 && <Pagination page={pg.page} pageCount={pg.pageCount} total={pg.total} pageSize={12} itemLabel="entry" itemLabelPlural="entries" onPageChange={pg.setPage} />}
     </div>
   );
 }
@@ -693,30 +966,5 @@ function CreateUserDialog({ edirs, canPlatform, initialKind, onClose, onDone }: 
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  );
-}
-
-function AuditTab() {
-  const [items, setItems] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
-  const load = useCallback(() => { setLoading(true); setError(false); getAssociationAudit().then(setItems).catch(() => setError(true)).finally(() => setLoading(false)); }, []);
-  useEffect(() => { load(); }, [load]);
-
-  if (loading) return <LoadingState />;
-  if (error) return <ErrorState onRetry={load} />;
-  return (
-    <Card><CardContent className="p-0">
-      {items.length === 0 ? <EmptyState icon={ScrollText} title="No association changes yet" /> : (
-        <div className="divide-y">
-          {items.map(a => (
-            <div key={a.id} className="flex items-center justify-between gap-3 px-4 py-2.5 text-sm">
-              <div className="min-w-0"><span className="font-mono text-xs">{a.action.replace(/_/g, ' ')}</span><div className="truncate text-xs text-muted-foreground">{a.details} · by {a.by}</div></div>
-              <span className="shrink-0 text-xs text-muted-foreground">{new Date(a.createdAt).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })}</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </CardContent></Card>
   );
 }
