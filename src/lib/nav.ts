@@ -47,9 +47,9 @@ export const SUPER_ADMIN_HIDDEN_PAGES = new Set<string>([
 export function buildNav(permissions: Permission[], isSuperAdmin: boolean): NavSection[] {
   const has = (perms: Permission[]) => isSuperAdmin || perms.some(p => permissions.includes(p));
 
-  return PAGE_SECTIONS.map(section => ({
-    id: section.id,
-    label: section.label,
+  const sections: NavSection[] = PAGE_SECTIONS.map(section => ({
+    id: section.id as string,
+    label: section.label as string,
     items: pagePermissions.filter(
       p => p.section === section.id
         && IMPLEMENTED_PAGES.has(p.id)
@@ -57,4 +57,18 @@ export function buildNav(permissions: Permission[], isSuperAdmin: boolean): NavS
         && has(p.accessPermissions),
     ),
   })).filter(s => s.items.length > 0);
+
+  // Super-Admins don't operate inside a single Edir by default, so the Edir-scoped
+  // pages are pulled out of the normal sections above. Surface them TOGETHER in one
+  // dedicated group so a Super-Admin can drill into any Edir's operational pages —
+  // scoped via the top-bar Edir switcher. Routes already permit super_admin
+  // (see src/middleware.ts), so these links resolve without extra gating.
+  if (isSuperAdmin) {
+    const edirItems = pagePermissions.filter(
+      p => SUPER_ADMIN_HIDDEN_PAGES.has(p.id) && IMPLEMENTED_PAGES.has(p.id),
+    );
+    if (edirItems.length > 0) sections.push({ id: 'edir-ops', label: 'Edir Pages', items: edirItems });
+  }
+
+  return sections;
 }

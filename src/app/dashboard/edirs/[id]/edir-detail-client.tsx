@@ -15,8 +15,12 @@ import {
   ArrowLeft, Building2, Users, UserCircle, Wallet, TrendingDown, FileText, FileImage, File as FileIcon,
   Download, Eye, CalendarDays, Phone, Mail, MapPin, CreditCard, Landmark, Pencil, ScrollText, Activity,
   CheckCircle2, Clock, X, RotateCcw, Boxes, LifeBuoy, BarChart3, Settings as SettingsIcon, History,
-  ShieldCheck, ExternalLink, ClipboardList,
+  ShieldCheck, ExternalLink, ClipboardList, KeyRound, Loader2,
 } from 'lucide-react';
+import { toast } from 'sonner';
+import { useConfirm } from '@/components/ui/confirm-provider';
+import { CredentialsDialog, type Credentials } from '@/components/credentials-dialog';
+import { adminGenerateTempPassword } from '@/app/actions/admin';
 
 type Doc = EdirProfile['documents'][number];
 
@@ -43,8 +47,29 @@ function docIcon(fileType: string) {
 export default function EdirDetailClient({ profile: p }: { profile: EdirProfile }) {
   const router = useRouter();
   const [preview, setPreview] = useState<Doc | null>(null);
+  const [cred, setCred] = useState<{ name: string; credentials: Credentials } | null>(null);
+  const [resetting, setResetting] = useState<string | null>(null);
+  const confirm = useConfirm();
   const cur = p.settings?.currency ?? 'ETB';
   const caps = p.caps;
+
+  // Recover an administrator who can't sign in (e.g. their invite email failed):
+  // issue a temporary password, activate the account, and show it once for manual
+  // hand-off. The action is permission-gated and audited server-side.
+  const onResetManager = async (u: EdirProfile['admins'][number]) => {
+    const who = u.name || u.email || 'this manager';
+    const ok = await confirm({
+      title: 'Generate temporary password',
+      description: `Issue a new temporary password for ${who}? Their account is activated and any existing session is signed out. You'll see the password once to deliver it manually (phone or in person).`,
+      confirmText: 'Generate password',
+    });
+    if (!ok) return;
+    setResetting(u.id);
+    const res = await adminGenerateTempPassword(u.id);
+    setResetting(null);
+    if (res?.success && res.credentials) setCred({ name: who, credentials: res.credentials as Credentials });
+    else toast.error((res && !res.success && res.error) || 'Failed to reset password.');
+  };
 
   const TABS = [
     { id: 'overview', label: 'Overview', icon: Building2, show: true },
@@ -133,7 +158,8 @@ export default function EdirDetailClient({ profile: p }: { profile: EdirProfile 
               {p.approval && <ApprovalCard approval={p.approval} />}
             </div>
             <div className="space-y-6">
-              <PeopleCard title="Administrators" icon={ShieldCheck} people={p.admins} empty="No administrators assigned." />
+              <PeopleCard title="Administrators" icon={ShieldCheck} people={p.admins} empty="No administrators assigned."
+                canReset={caps.canResetPassword} onReset={onResetManager} resettingId={resetting} />
               <PeopleCard title="Committee" icon={Users} people={p.committee} empty="No committee members." />
               <Card>
                 <CardHeader className="pb-3"><CardTitle className="flex items-center gap-2 text-base"><ScrollText className="h-4 w-4 text-primary" /> Rules & Bylaws</CardTitle></CardHeader>
@@ -285,6 +311,9 @@ export default function EdirDetailClient({ profile: p }: { profile: EdirProfile 
         </TabsContent>
       </Tabs>
 
+      {/* One-time credentials slip after a manual password reset */}
+      {cred && <CredentialsDialog memberName={cred.name} credentials={cred.credentials} onClose={() => setCred(null)} />}
+
       {/* Document preview dialog */}
       <Dialog open={!!preview} onOpenChange={(o) => { if (!o) setPreview(null); }}>
         <DialogContent className="max-h-[90vh] max-w-3xl overflow-hidden">
@@ -333,7 +362,10 @@ function InfoCard({ title, icon: Icon, rows }: { title: string; icon: any; rows:
   );
 }
 
-function PeopleCard({ title, icon: Icon, people, empty }: { title: string; icon: any; people: EdirProfile['admins']; empty: string }) {
+function PeopleCard({ title, icon: Icon, people, empty, canReset, onReset, resettingId }: {
+  title: string; icon: any; people: EdirProfile['admins']; empty: string;
+  canReset?: boolean; onReset?: (u: EdirProfile['admins'][number]) => void; resettingId?: string | null;
+}) {
   return (
     <Card>
       <CardHeader className="pb-3"><CardTitle className="flex items-center gap-2 text-base"><Icon className="h-4 w-4 text-primary" /> {title} <span className="text-sm font-normal text-muted-foreground">({people.length})</span></CardTitle></CardHeader>
@@ -343,10 +375,20 @@ function PeopleCard({ title, icon: Icon, people, empty }: { title: string; icon:
             {people.map(u => (
               <li key={u.id} className="flex items-center gap-2.5">
                 <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">{(u.name || u.email || '?').slice(0, 2).toUpperCase()}</span>
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium">{u.name || u.email}</p>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5">
+                    <p className="truncate text-sm font-medium">{u.name || u.email}</p>
+                    {u.status && u.status !== 'ACTIVE' && (
+                      <Badge variant="outline" className="border-warning/30 bg-warning/10 px-1.5 py-0 text-[10px] text-warning">{u.status === 'INVITED' ? 'Not onboarded' : u.status}</Badge>
+                    )}
+                  </div>
                   <p className="truncate text-xs text-muted-foreground">{u.roleName || '—'}</p>
                 </div>
+                {canReset && onReset && (
+                  <Button size="icon" variant="ghost" className="h-8 w-8 shrink-0" title="Generate temporary password (manual delivery)" onClick={() => onReset(u)} disabled={resettingId === u.id}>
+                    {resettingId === u.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
+                  </Button>
+                )}
               </li>
             ))}
           </ul>

@@ -204,6 +204,9 @@ export async function getEdirProfile(edirId: string) {
       canViewReports: oversight || has(['view_edir_reports', 'view_committee_oversight']),
       canViewSettings: oversight || has(['manage_edir_settings', 'manage_committee']),
       canViewAudit: oversight || has(['view_audit_log', 'view_payment_log']),
+      // Recover a manager who can't sign in (e.g. their invite email failed): issue
+      // a temporary password to hand over manually. Gated on reset_password.
+      canResetPassword: has(['reset_password', 'super_admin']),
     },
   };
 }

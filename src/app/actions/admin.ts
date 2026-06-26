@@ -11,6 +11,8 @@ import { LogSeverity } from '@/lib/types';
 import { ALL_PERMISSION_IDS, PLATFORM_PERMISSION_IDS, filterPermissionsForScope, type RoleScopeKind } from '@/lib/permissions';
 import { normalizeEthiopianPhone, isValidEthiopianPhone } from '@/lib/utils';
 import { sendPasswordResetEmail, sendVerificationEmail } from '@/lib/email';
+import { generateTempPassword } from '@/lib/temp-password';
+import bcrypt from 'bcrypt';
 import { ensureMembershipForUser } from '@/app/actions/members';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
@@ -326,6 +328,49 @@ export async function adminResetUserPassword(userId: string) {
     sendPasswordResetEmail({ to: user.email, name: user.name || user.email, token }).catch(() => {});
     await writeAudit({ edirId: user.edirId, userId: actor.id, action: 'USER_PASSWORD_RESET', targetType: 'User', targetId: userId });
     return { success: true as const };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/**
+ * Issue a fresh temporary password and RETURN it (instead of emailing) so an
+ * administrator can deliver the credentials manually — e.g. when the invitation
+ * email to a newly-activated Edir manager failed to send. The account is also
+ * ACTIVATED so the user can sign in immediately (auth rejects non-ACTIVE accounts)
+ * and is forced to change the password on first login. Existing sessions are
+ * revoked. Restricted to `reset_password` (super_admin bypasses) and audited.
+ */
+export async function adminGenerateTempPassword(userId: string) {
+  try {
+    const actor = await getActor();
+    await assertPermission(actor, 'reset_password');
+    const user = await prisma.user.findUnique({ where: { id: userId }, include: { role: { select: { scope: true } } } });
+    if (!user) return { success: false as const, error: 'User not found.' };
+    if (user.role?.scope === 'SUPER_ADMIN') return { success: false as const, error: 'Platform Super-Admins cannot be reset here.' };
+    await assertSameTenant(actor, user.edirId);
+
+    const tempPassword = generateTempPassword();
+    const hashedPassword = await bcrypt.hash(tempPassword, 12);
+    await prisma.user.update({
+      where: { id: userId },
+      // Activate (so an INVITED/email-failed manager can sign in), force a change on
+      // first login, and rotate the session so any old credential stops working.
+      data: { hashedPassword, status: 'ACTIVE', mustChangePassword: true, tokenVersion: { increment: 1 }, lockoutUntil: null, failedLoginAttempts: 0 },
+    });
+    await writeAudit({
+      edirId: user.edirId, userId: actor.id, action: 'USER_PASSWORD_RESET', targetType: 'User', targetId: userId,
+      details: 'Temporary password issued for manual delivery (email bypass).',
+    });
+    await logSecurityEvent({
+      event: SecurityEvent.PASSWORD_RESET_SUCCESS,
+      severity: LogSeverity.WARN,
+      actor,
+      details: `User '${actor.name}' issued a temporary password for user ${userId} (manual delivery).`,
+      targetId: userId, targetType: 'User',
+    });
+    revalidatePath('/dashboard/edirs');
+    return { success: true as const, credentials: { username: user.phone ?? user.email ?? '', tempPassword, channel: user.phone ? 'SMS' : 'email' } };
   } catch (error) {
     return failure(error);
   }
