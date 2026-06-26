@@ -159,6 +159,113 @@ export function ensureApprovalModules() {
     },
   });
 
+  // ── Relative / Dependent Document (maker–checker for upload, edit, delete) ─────
+  registerModule('RELATIVE_DOCUMENT_ACTION', {
+    async execute(payload: { documentId: string; action: string; changes?: any }, { tx, actor }) {
+      const doc = await tx.relativeDocument.findUnique({
+        where: { id: payload.documentId },
+        include: { relative: { include: { member: { select: { edirId: true } } } } },
+      });
+      if (!doc) throw new Error('The document no longer exists.');
+      const now = new Date();
+      const stamp = { reviewedById: actor.id, approvedById: actor.id, reviewedAt: now, approvedAt: now, pendingAction: null, pendingPayload: Prisma.DbNull, rejectionReason: null };
+      const changes = payload.changes ?? {};
+      const edirId = doc.relative.member?.edirId ?? null;
+
+      switch (payload.action) {
+        case 'upload':
+          await tx.relativeDocument.update({ where: { id: doc.id }, data: { ...stamp, status: 'APPROVED' } });
+          // Archive the prior version so the newly-approved one becomes current.
+          if (doc.supersedesId) {
+            await tx.relativeDocument.update({ where: { id: doc.supersedesId }, data: { archivedAt: now } });
+          }
+          break;
+        case 'edit':
+          await tx.relativeDocument.update({
+            where: { id: doc.id },
+            data: { ...stamp, status: 'APPROVED', category: changes.category ?? doc.category, documentName: changes.documentName ?? doc.documentName, remarks: changes.remarks ?? doc.remarks },
+          });
+          break;
+        case 'delete':
+          await tx.relativeDocument.delete({ where: { id: doc.id } });
+          break;
+        default:
+          throw new Error(`Unknown relative document action: ${payload.action}`);
+      }
+
+      if (doc.uploadedById && payload.action !== 'delete') {
+        await tx.notification.create({
+          data: {
+            userId: doc.uploadedById, edirId, type: 'document', priority: 'normal',
+            title: 'Document approved',
+            body: `Your ${payload.action} request for "${doc.documentName || doc.fileName || 'document'}" was approved.`,
+            linkUrl: '/dashboard/members', entityType: 'RelativeDocument',
+          },
+        });
+      }
+    },
+    async onReject(payload: { documentId: string; action: string }, { tx, actor, comment }) {
+      const doc = await tx.relativeDocument.findUnique({
+        where: { id: payload.documentId },
+        include: { relative: { include: { member: { select: { edirId: true } } } } },
+      });
+      if (!doc) return;
+      const base = { reviewedById: actor.id, reviewedAt: new Date(), rejectionReason: comment ?? null, pendingAction: null, pendingPayload: Prisma.DbNull };
+      // A rejected initial upload becomes REJECTED; a rejected edit/delete just clears the pending flag.
+      await tx.relativeDocument.update({
+        where: { id: doc.id },
+        data: payload.action === 'upload' ? { ...base, status: 'REJECTED' as const } : base,
+      });
+      if (doc.uploadedById) {
+        await tx.notification.create({
+          data: {
+            userId: doc.uploadedById, edirId: doc.relative.member?.edirId ?? null, type: 'document', priority: 'normal',
+            title: 'Document rejected',
+            body: `Your ${payload.action} request for "${doc.documentName || doc.fileName || 'document'}" was rejected${comment ? `: ${comment}` : '.'}`,
+            linkUrl: '/dashboard/members', entityType: 'RelativeDocument',
+          },
+        });
+      }
+    },
+  });
+
+  // ── Relationship Category (per-Edir family relationship config) ────────────────
+  registerModule('RELATIONSHIP_CATEGORY', {
+    async execute(payload: { categoryId: string; action: string; changes?: any }, { tx }) {
+      const cat = await tx.relationshipCategory.findUnique({ where: { id: payload.categoryId } });
+      if (!cat) throw new Error('The relationship category no longer exists.');
+      const ALLOWED = ['name', 'description', 'isActive', 'benefitEligible', 'emergencyEligible', 'requiredDocuments', 'maxDependents'];
+      switch (payload.action) {
+        case 'create':
+          // The row was provisionally created at submit time — approval just makes it live.
+          await tx.relationshipCategory.update({ where: { id: cat.id }, data: { pendingAction: null, pendingPayload: Prisma.DbNull } });
+          break;
+        case 'edit': {
+          const changes = payload.changes ?? {};
+          const data: Record<string, any> = { pendingAction: null, pendingPayload: Prisma.DbNull };
+          for (const [k, v] of Object.entries(changes)) if (ALLOWED.includes(k)) data[k] = v;
+          await tx.relationshipCategory.update({ where: { id: cat.id }, data });
+          break;
+        }
+        case 'delete':
+          await tx.relationshipCategory.delete({ where: { id: cat.id } });
+          break;
+        default:
+          throw new Error(`Unknown relationship category action: ${payload.action}`);
+      }
+    },
+    async onReject(payload: { categoryId: string; action: string }, { tx }) {
+      const cat = await tx.relationshipCategory.findUnique({ where: { id: payload.categoryId } });
+      if (!cat) return;
+      if (payload.action === 'create') {
+        // A rejected create removes the provisional row entirely.
+        await tx.relationshipCategory.delete({ where: { id: cat.id } });
+      } else {
+        await tx.relationshipCategory.update({ where: { id: cat.id }, data: { pendingAction: null, pendingPayload: Prisma.DbNull } });
+      }
+    },
+  });
+
   // ── Rule Change (apply governance-setting or bylaw change + log the diff) ─────
   registerModule('RULE_CHANGE', {
     async execute(payload: any, { tx, request, actor }) {
@@ -256,6 +363,26 @@ export function ensureApprovalModules() {
       if (roleCount === 0) {
         await tx.role.createMany({
           data: DEFAULT_EDIR_ROLES.map(r => ({ name: r.name, scope: 'EDIR' as const, edirId: edir.id, permissions: r.permissions.join(',') })),
+        });
+      }
+
+      // Default family relationship categories (idempotent) so the Edir starts with
+      // a manageable, editable set rather than the hard-coded fallback.
+      const catCount = await tx.relationshipCategory.count({ where: { edirId: edir.id } });
+      if (catCount === 0) {
+        const DEFAULT_CATEGORIES = [
+          { name: 'Spouse', benefitEligible: true, emergencyEligible: true },
+          { name: 'Child', benefitEligible: true, emergencyEligible: true },
+          { name: 'Parent', benefitEligible: true, emergencyEligible: true },
+          { name: 'Sibling', benefitEligible: true, emergencyEligible: true },
+          { name: 'Grandparent', benefitEligible: true, emergencyEligible: true },
+          { name: 'Grandchild', benefitEligible: true, emergencyEligible: true },
+          { name: 'Guardian', benefitEligible: false, emergencyEligible: true },
+          { name: 'Beneficiary', benefitEligible: true, emergencyEligible: true },
+          { name: 'Other', benefitEligible: false, emergencyEligible: false },
+        ];
+        await tx.relationshipCategory.createMany({
+          data: DEFAULT_CATEGORIES.map((c, i) => ({ edirId: edir.id, name: c.name, benefitEligible: c.benefitEligible, emergencyEligible: c.emergencyEligible, displayOrder: i })),
         });
       }
     },

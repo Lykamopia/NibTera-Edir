@@ -54,6 +54,7 @@ model Edir {
   bylaws             Bylaw[]
   rulesVersions      RulesVersion[]
   memberRequests     MemberRequest[]
+  relationshipCategories RelationshipCategory[]
 
   @@index([branchId])
 }
@@ -231,6 +232,7 @@ model Member {
 }
 
 enum DocumentStatus {
+  DRAFT
   PENDING
   APPROVED
   REJECTED
@@ -255,16 +257,38 @@ model Relative {
 }
 
 model RelativeDocument {
-  id         String         @id @default(cuid())
-  relativeId String
-  relative   Relative       @relation(fields: [relativeId], references: [id], onDelete: Cascade)
-  fileUrl    String
-  fileName   String?
-  status     DocumentStatus @default(PENDING)
-  notes      String?
-  createdAt  DateTime       @default(now())
+  id              String         @id @default(cuid())
+  relativeId      String
+  relative        Relative       @relation(fields: [relativeId], references: [id], onDelete: Cascade)
+  category        String         @default("General") // ID | CERTIFICATE | MEDICAL | PROOF_OF_RELATIONSHIP | PHOTO | OTHER
+  documentName    String? // human title, distinct from the stored fileName
+  fileUrl         String
+  fileName        String?
+  fileType        String         @default("file") // image | pdf | file
+  status          DocumentStatus @default(PENDING)
+  remarks         String? // uploader-supplied remarks
+  notes           String? // legacy / reviewer note (retained)
+  // Version history: each new version supersedes the prior document in the chain.
+  version         Int            @default(1)
+  supersedesId    String?
+  supersedes      RelativeDocument?  @relation("RelDocVersions", fields: [supersedesId], references: [id], onDelete: SetNull)
+  versions        RelativeDocument[] @relation("RelDocVersions")
+  // Maker–checker lifecycle (mirrors DmsDocument).
+  pendingAction   String? // upload | edit | delete (awaiting approval)
+  pendingPayload  Json?
+  rejectionReason String?
+  uploadedById    String?
+  reviewedById    String?
+  approvedById    String?
+  reviewedAt      DateTime?
+  approvedAt      DateTime?
+  archivedAt      DateTime? // set when superseded by a newer approved version
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @default(now()) @updatedAt
 
   @@index([relativeId])
+  @@index([status])
+  @@index([supersedesId])
 }
 
 model MemberDocument {
@@ -279,6 +303,32 @@ model MemberDocument {
   createdAt  DateTime       @default(now())
 
   @@index([memberId])
+}
+
+// Per-Edir configurable family relationship categories (Spouse, Child, Guardian,
+// custom, …). Replaces the hard-coded relationship list; populates every
+// relationship selector. Changes flow through the RELATIONSHIP_CATEGORY
+// maker–checker module. Scoped to a single Edir.
+model RelationshipCategory {
+  id                String   @id @default(cuid())
+  edirId            String
+  edir              Edir     @relation(fields: [edirId], references: [id], onDelete: Cascade)
+  name              String
+  description       String?
+  isActive          Boolean  @default(true)
+  displayOrder      Int      @default(0)
+  benefitEligible   Boolean  @default(true) // eligible for benefit payouts
+  emergencyEligible Boolean  @default(true) // eligible for emergency claims
+  requiredDocuments String? // CSV of required document types for this relationship
+  maxDependents     Int? // max members of this relationship per member (null = unlimited)
+  // Maker–checker lifecycle.
+  pendingAction     String? // create | edit | delete (awaiting approval)
+  pendingPayload    Json?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @default(now()) @updatedAt
+
+  @@unique([edirId, name])
+  @@index([edirId])
 }
 
 // ─── Payments & Contributions ────────────────────────────────────────────────
@@ -404,6 +454,8 @@ enum ApprovalModule {
   EDIR_UPDATE
   USER_CREATION
   DOCUMENT_ACTION
+  RELATIVE_DOCUMENT_ACTION
+  RELATIONSHIP_CATEGORY
 }
 
 // ─── Document Management System (maker–checker) ──────────────────────────────

@@ -353,7 +353,7 @@ export async function ensureDefaultEdirRoles(edirId: string, client: Prisma.Tran
 
 export async function getEdirs(range?: DateRangeParam) {
   const actor = await getActor();
-  await assertPermission(actor, ['manage_edirs', 'create_edir', 'edit_edir', 'view_edir_reports', 'super_admin']);
+  await assertPermission(actor, ['view_edir', 'register_edir', 'approve_edir_registration', 'approve_edir_update', 'manage_edirs', 'create_edir', 'edit_edir', 'revoke_edir', 'delete_edir', 'manage_edir_documents', 'manage_edir_settings', 'view_edir_reports', 'super_admin']);
   const edirs = await prisma.edir.findMany({
     where: { ...dateWhere('createdAt', range) },
     include: {
@@ -393,6 +393,7 @@ export async function getEdirAdminCapabilities() {
     canEdit: actorHasPermission(actor, ['edit_edir', 'manage_edirs', 'super_admin']),
     canRevoke: actorHasPermission(actor, ['revoke_edir', 'manage_edirs', 'super_admin']),
     canDelete: actorHasPermission(actor, ['delete_edir', 'super_admin']),
+    canApprove: actorHasPermission(actor, ['approve_edir_registration', 'approve_edir_update', 'super_admin']),
   };
 }
 

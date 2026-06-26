@@ -25,6 +25,7 @@ import { getRuleConfig, saveRuleConfig } from '@/app/actions/rule-config';
 import { saveEmergencyType, deleteEmergencyType } from '@/app/actions/emergencies';
 import { useConfirm } from '@/components/ui/confirm-provider';
 import BrandingCard from './branding-card';
+import RelationshipCategoriesManager from './relationship-categories-manager';
 
 type Tier = { id: string; label?: string | null; fromDays: number; toDays: number | null; type: 'FIXED' | 'PERCENT'; value: number };
 type Cfg = {
@@ -147,6 +148,7 @@ export default function RuleConfigClient() {
           <TabsTrigger value="contributions"><Coins className="mr-1.5 h-4 w-4" /> Contributions</TabsTrigger>
           <TabsTrigger value="penalties"><AlertTriangle className="mr-1.5 h-4 w-4" /> Penalties</TabsTrigger>
           <TabsTrigger value="membership"><Users className="mr-1.5 h-4 w-4" /> Membership</TabsTrigger>
+          <TabsTrigger value="relationships"><Users className="mr-1.5 h-4 w-4" /> Relationships</TabsTrigger>
           <TabsTrigger value="emergencies"><Siren className="mr-1.5 h-4 w-4" /> Emergencies</TabsTrigger>
           <TabsTrigger value="log"><ScrollText className="mr-1.5 h-4 w-4" /> Change Log</TabsTrigger>
         </TabsList>
@@ -276,6 +278,10 @@ export default function RuleConfigClient() {
         </TabsContent>
 
         {/* ── Emergencies ── */}
+        <TabsContent value="relationships" className="mt-4">
+          <RelationshipCategoriesManager />
+        </TabsContent>
+
         <TabsContent value="emergencies" className="mt-4 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-sm text-muted-foreground">Define the emergency categories members can claim against, each with its own payout and eligibility rules.</p>

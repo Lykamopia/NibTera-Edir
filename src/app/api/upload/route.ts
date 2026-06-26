@@ -45,6 +45,11 @@ function hasAllowedImageMagic(buf: Buffer): boolean {
   return false;
 }
 
+/** PDF magic number `%PDF` — allowed for document/agreement uploads only. */
+function hasPdfMagic(buf: Buffer): boolean {
+  return buf.length >= 5 && buf[0] === 0x25 && buf[1] === 0x50 && buf[2] === 0x44 && buf[3] === 0x46;
+}
+
 // Main POST handler for file uploads
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -117,15 +122,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: false, error: `File type (${fileExtension}) is not allowed.` }, { status: 400 });
   }
   
-  if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
-      return NextResponse.json({ success: false, error: 'Only image files (JPEG, PNG, GIF, WEBP) are allowed.' }, { status: 400 });
+  // Document/agreement uploads may also be PDFs; everything else is image-only.
+  const allowsPdf = type === 'documents' || type === 'rules';
+  const allowedMime = allowsPdf ? [...ALLOWED_IMAGE_TYPES, 'application/pdf'] : ALLOWED_IMAGE_TYPES;
+  if (!allowedMime.includes(file.type)) {
+      return NextResponse.json({ success: false, error: allowsPdf ? 'Only image or PDF files are allowed.' : 'Only image files (JPEG, PNG, GIF, WEBP) are allowed.' }, { status: 400 });
   }
-  
+
   // Verify MIME type server-side, as client-sent type can be spoofed.
   const serverMimeType = mime.lookup(filename);
   if (serverMimeType && serverMimeType !== file.type) {
-      if (!ALLOWED_IMAGE_TYPES.includes(serverMimeType)) {
-          return NextResponse.json({ success: false, error: `Invalid image file type. Server detected: ${serverMimeType}.` }, { status: 400 });
+      if (!allowedMime.includes(serverMimeType)) {
+          return NextResponse.json({ success: false, error: `Invalid file type. Server detected: ${serverMimeType}.` }, { status: 400 });
       }
       if (BLOCKED_EXTENSIONS.includes(`.${mime.extension(serverMimeType) || ''}`)) {
           return NextResponse.json({ success: false, error: 'Disallowed file type detected on server.' }, { status: 400 });
@@ -137,8 +145,8 @@ export async function POST(req: NextRequest) {
   let buffer = Buffer.from(bytes);
 
   // Server-side content inspection: the declared MIME/extension can be spoofed,
-  // so verify the actual bytes are a permitted image before persisting.
-  if (!hasAllowedImageMagic(buffer)) {
+  // so verify the actual bytes are a permitted image (or PDF for document uploads).
+  if (!(hasAllowedImageMagic(buffer) || (allowsPdf && hasPdfMagic(buffer)))) {
     await logSecurityEvent({
       event: SecurityEvent.PERMISSION_DENIED,
       severity: LogSeverity.WARN,

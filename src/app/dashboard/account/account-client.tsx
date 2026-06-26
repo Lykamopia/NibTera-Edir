@@ -22,6 +22,7 @@ import { NotificationSettings } from '@/components/notification-settings';
 import { changePassword } from '@/app/actions/auth';
 import { getMyPortal } from '@/app/actions/account';
 import { getMyRequests, submitMemberRequest } from '@/app/actions/member-requests';
+import { getActiveRelationshipCategories } from '@/app/actions/relationship-categories';
 import { toUserError } from '@/lib/errors';
 
 type Portal = NonNullable<Awaited<ReturnType<typeof getMyPortal>>>;
@@ -391,6 +392,9 @@ function RequestDialog({ type, onClose, onDone }: { type: string; onClose: () =>
     assetName: '', qty: '1',
   });
   const set = (k: string, v: any) => setF((s: any) => ({ ...s, [k]: v }));
+  const [relOptions, setRelOptions] = useState<string[]>(RELATIONSHIPS);
+  useEffect(() => { getActiveRelationshipCategories().then(c => { if (c?.length) setRelOptions(c.map(x => x.name)); }).catch(() => {}); }, []);
+  const relChoices = relOptions.includes(f.relationship) ? relOptions : [f.relationship, ...relOptions];
 
   const titles: Record<string, string> = { RELATIVE: 'Request to Add Relative', EMERGENCY: 'Report an Emergency', ASSET: 'Request an Asset', GRIEVANCE: 'Grievance / Feedback' };
 
@@ -441,7 +445,7 @@ function RequestDialog({ type, onClose, onDone }: { type: string; onClose: () =>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5"><Label className="text-xs">Full Name</Label><Input value={f.name} onChange={e => set('name', e.target.value)} /></div>
               <div className="space-y-1.5"><Label className="text-xs">Relationship</Label>
-                <Select value={f.relationship} onValueChange={v => set('relationship', v)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{RELATIONSHIPS.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}</SelectContent></Select>
+                <Select value={f.relationship} onValueChange={v => set('relationship', v)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{relChoices.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}</SelectContent></Select>
               </div>
               <div className="space-y-1.5"><Label className="text-xs">Phone</Label><Input value={f.phone} onChange={e => set('phone', e.target.value)} /></div>
               <div className="space-y-1.5"><Label className="text-xs">Date of Birth</Label><Input type="date" value={f.dateOfBirth} onChange={e => set('dateOfBirth', e.target.value)} /></div>

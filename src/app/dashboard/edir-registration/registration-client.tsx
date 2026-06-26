@@ -79,7 +79,7 @@ interface EdirItem {
   users: number;
 }
 
-type EdirCaps = { canCreate: boolean; canEdit: boolean; canRevoke: boolean; canDelete: boolean };
+type EdirCaps = { canCreate: boolean; canEdit: boolean; canRevoke: boolean; canDelete: boolean; canApprove: boolean };
 
 const FORM_STEPS = [
   { id: 'details', label: 'Edir Details' },

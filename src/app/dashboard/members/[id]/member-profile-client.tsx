@@ -20,7 +20,9 @@ import {
 import { EmptyState } from '@/components/ui/states';
 import { CredentialsDialog, type Credentials } from '@/components/credentials-dialog';
 import { useConfirm, usePrompt } from '@/components/ui/confirm-provider';
-import { getMemberProfile, updateMember, addRelative, updateRelative, removeRelative, addRelativeDocument, reviewDocument, addMemberDocument, deleteMemberDocument, reviewMemberDocument, resetMemberPassword } from '@/app/actions/members';
+import { getMemberProfile, updateMember, addRelative, updateRelative, removeRelative, addMemberDocument, deleteMemberDocument, reviewMemberDocument, resetMemberPassword } from '@/app/actions/members';
+import RelativeDocuments from './relative-documents-section';
+import { getActiveRelationshipCategories } from '@/app/actions/relationship-categories';
 import { getMemberRoles } from '@/app/actions/rule-config';
 
 type Profile = NonNullable<Awaited<ReturnType<typeof getMemberProfile>>>;
@@ -404,28 +406,12 @@ function DependentsTab({ profile, onChanged }: { profile: Profile; onChanged: ()
 }
 
 function RelativeCard({ relative: r, onEdit, onChanged }: { relative: any; onEdit: () => void; onChanged: () => void }) {
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [busy, setBusy] = useState(false);
   const confirm = useConfirm();
-  const prompt = usePrompt();
-
-  const onUpload = async (file: File) => {
-    setBusy(true);
-    const up = await uploadFile(file, 'documents');
-    if (up) { const res = await addRelativeDocument(r.id, { fileUrl: up.path, fileName: up.name }); if (res?.success) { toast.success('Document uploaded.'); onChanged(); } else toast.error(res?.error || 'Failed.'); }
-    setBusy(false); if (fileRef.current) fileRef.current.value = '';
-  };
-  const review = async (docId: string, status: 'APPROVED' | 'REJECTED') => {
-    let notes: string | undefined;
-    if (status === 'REJECTED') { const r = await prompt({ title: 'Reject document', label: 'Reason (optional)', multiline: true, confirmText: 'Reject' }); if (r === null) return; notes = r || undefined; }
-    const res = await reviewDocument(docId, status, notes);
-    if (res?.success) { toast.success(`Document ${status.toLowerCase()}.`); onChanged(); } else toast.error(res?.error || 'Failed.');
-  };
   const remove = async () => { if (!(await confirm({ title: 'Remove relative', description: `Remove ${r.name}?`, destructive: true, confirmText: 'Remove' }))) return; const res = await removeRelative(r.id); if (res?.success) { toast.success('Removed.'); onChanged(); } else toast.error(res?.error || 'Failed.'); };
 
   return (
     <Card>
-      <CardContent className="space-y-2 p-4">
+      <CardContent className="space-y-3 p-4">
         <div className="flex items-start justify-between gap-2">
           <div>
             <div className="flex flex-wrap items-center gap-1.5">
@@ -437,28 +423,13 @@ function RelativeCard({ relative: r, onEdit, onChanged }: { relative: any; onEdi
             {r.notes && <div className="mt-1 text-xs text-muted-foreground">{r.notes}</div>}
           </div>
           <div className="flex shrink-0 gap-1">
-            <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) onUpload(f); }} />
-            <Button size="icon" variant="ghost" className="h-8 w-8" disabled={busy} onClick={() => fileRef.current?.click()} title="Upload proof document"><Upload className="h-4 w-4" /></Button>
             <Button size="icon" variant="ghost" className="h-8 w-8" onClick={onEdit}><Pencil className="h-4 w-4" /></Button>
             <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={remove}><Trash2 className="h-4 w-4" /></Button>
           </div>
         </div>
-        {r.documents.length > 0 && (
-          <div className="space-y-1">
-            {r.documents.map((d: any) => (
-              <div key={d.id} className="flex items-center justify-between rounded border bg-muted/30 px-2 py-1.5 text-sm">
-                <a href={d.fileUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 text-primary hover:underline"><FileText className="h-4 w-4" /> {d.fileName || 'Document'} <ExternalLink className="h-3 w-3" /></a>
-                <div className="flex items-center gap-1.5">
-                  <Badge variant="outline" className={DOC_STATUS[d.status] ?? ''}>{d.status}</Badge>
-                  {d.status === 'PENDING' && (<>
-                    <Button size="icon" variant="ghost" className="h-7 w-7 text-success" onClick={() => review(d.id, 'APPROVED')}><Check className="h-4 w-4" /></Button>
-                    <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive" onClick={() => review(d.id, 'REJECTED')}><X className="h-4 w-4" /></Button>
-                  </>)}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
+        <div className="border-t pt-3">
+          <RelativeDocuments relativeId={r.id} relativeName={r.name} />
+        </div>
       </CardContent>
     </Card>
   );
@@ -472,7 +443,10 @@ function RelativeDialog({ relative, memberId, onClose, onDone }: { relative: any
     notes: relative?.notes ?? '',
   });
   const [saving, setSaving] = useState(false);
+  const [relOptions, setRelOptions] = useState<string[]>(RELATIONSHIPS);
+  useEffect(() => { getActiveRelationshipCategories().then(c => { if (c?.length) setRelOptions(c.map(x => x.name)); }).catch(() => {}); }, []);
   const set = (k: string, v: any) => setForm(f => ({ ...f, [k]: v }));
+  const options = relOptions.includes(form.relationship) ? relOptions : [form.relationship, ...relOptions];
 
   const submit = async () => {
     if (form.name.trim().length < 2) { toast.error('Name is required.'); return; }
@@ -498,7 +472,7 @@ function RelativeDialog({ relative, memberId, onClose, onDone }: { relative: any
             <div className="space-y-1.5"><Label className="text-xs">Relationship</Label>
               <Select value={form.relationship} onValueChange={v => set('relationship', v)}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>{RELATIONSHIPS.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}</SelectContent>
+                <SelectContent>{options.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             <div className="space-y-1.5"><Label className="text-xs">Phone</Label><Input value={form.phone} onChange={e => set('phone', e.target.value)} /></div>

@@ -84,10 +84,12 @@ export const pagePermissions: PagePermissionDef[] = [
   },
   {
     id: 'edir-registration', label: 'Edirs', path: '/dashboard/edir-registration', icon: 'Building2', section: 'operations',
-    accessPermissions: ['register_edir', 'approve_edir_registration', 'manage_edirs', 'create_edir', 'edit_edir', 'view_edir_reports', 'super_admin'],
+    accessPermissions: ['view_edir', 'register_edir', 'approve_edir_registration', 'approve_edir_update', 'manage_edirs', 'create_edir', 'edit_edir', 'revoke_edir', 'delete_edir', 'manage_edir_documents', 'manage_edir_settings', 'view_edir_reports', 'super_admin'],
     actions: [
+      { id: 'view_edir', label: 'View Edir', description: 'View Edir directory and details', isAccess: true },
       { id: 'register_edir', label: 'Register Edir', description: 'Submit new Edir for registration (maker)', isAccess: true },
       { id: 'approve_edir_registration', label: 'Approve Registration', description: 'Review and approve Edir registrations (checker)' },
+      { id: 'approve_edir_update', label: 'Approve Edir Update', description: 'Review and approve Edir updates (checker)' },
       { id: 'manage_edirs', label: 'Manage Edirs', description: 'Umbrella: create, edit, revoke, and manage Edirs' },
       { id: 'create_edir', label: 'Create Edir', description: 'Create a new Edir' },
       { id: 'edit_edir', label: 'Edit Edir', description: 'Edit an existing Edir’s profile' },
@@ -95,6 +97,8 @@ export const pagePermissions: PagePermissionDef[] = [
       { id: 'delete_edir', label: 'Delete Edir', description: 'Permanently delete an Edir (only when it has no operational data)' },
       { id: 'manage_edir_users', label: 'Manage Edir Users', description: 'Create and manage user accounts within Edirs' },
       { id: 'manage_edir_associations', label: 'Manage Edir Associations', description: 'Associate, transfer, and remove users across Edirs' },
+      { id: 'manage_edir_documents', label: 'Manage Edir Documents', description: 'Manage documents related to Edirs' },
+      { id: 'manage_edir_settings', label: 'Manage Edir Settings', description: 'Manage settings for Edirs' },
       { id: 'view_edir_reports', label: 'View Edir Reports', description: 'View cross-Edir reports and metrics' },
     ],
   },
@@ -271,6 +275,8 @@ export const MODULE_CHECKER_PERMISSION: Record<ApprovalModule, Permission> = {
   EDIR_UPDATE: 'approve_edir_update',
   USER_CREATION: 'approve_user_creation',
   DOCUMENT_ACTION: 'approve_document',
+  RELATIVE_DOCUMENT_ACTION: 'review_member_documents',
+  RELATIONSHIP_CATEGORY: 'manage_edir_settings',
 };
 
 export const MODULE_LABEL: Record<ApprovalModule, string> = {
@@ -286,6 +292,8 @@ export const MODULE_LABEL: Record<ApprovalModule, string> = {
   EDIR_UPDATE: 'Edir Update',
   USER_CREATION: 'User Creation',
   DOCUMENT_ACTION: 'Document Action',
+  RELATIVE_DOCUMENT_ACTION: 'Relative Document',
+  RELATIONSHIP_CATEGORY: 'Relationship Category',
 };
 
 // All access permissions that gate an admin/system page — used to decide whether
@@ -331,8 +339,10 @@ export const ALL_PERMISSION_IDS: Permission[] = Array.from(new Set(permissions.m
 export const PLATFORM_PERMISSION_IDS: Permission[] = Array.from(new Set<Permission>([
   ...pagePermissions.filter(p => p.section === 'system').flatMap(p => p.actions.map(a => a.id)),
   // Cross-tenant Edir management — grantable only to platform roles, never Edir-scoped roles.
-  'manage_edirs', 'create_edir', 'edit_edir', 'revoke_edir', 'delete_edir',
+  'view_edir', 'manage_edirs', 'create_edir', 'edit_edir', 'revoke_edir', 'delete_edir',
   'manage_edir_users', 'manage_edir_associations', 'view_edir_reports',
+  'manage_edir_documents', 'manage_edir_settings',
+  'approve_edir_registration', 'approve_edir_update',
   'super_admin',
 ])) as Permission[];
 
