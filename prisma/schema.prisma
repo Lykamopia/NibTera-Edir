@@ -148,6 +148,7 @@ model User {
 // Organizational scope of a role (system roles span all tenants).
 enum RoleScope {
   SUPER_ADMIN
+  PLATFORM
   HEAD_OFFICE
   DISTRICT
   BRANCH
@@ -581,11 +582,14 @@ model EdirSettings {
   minMembershipMonths Int   @default(0) // minimum tenure for benefit eligibility
   reinstatementFee  Decimal @default(0) @db.Decimal(15, 2)
   autoSuspendEnabled  Boolean @default(true)
+  autoTerminateEnabled Boolean @default(true)
   autoReminderEnabled Boolean @default(true)
-  memberRoles       Json? // configurable member role names, e.g. ["Member","Chairperson","Treasurer"]
-  emergencyReserve  Decimal @default(0) @db.Decimal(15, 2)
-  operatingFund     Decimal @default(0) @db.Decimal(15, 2)
-  updatedAt         DateTime @updatedAt
+  reminderDaysBefore  Json? // Array of days before due date to send reminders, e.g. [1, 3, 7]
+  reminderSentDates   Json? // Track dates reminders were sent to avoid duplicates
+  memberRoles         Json? // configurable member role names, e.g. ["Member","Chairperson","Treasurer"]
+  emergencyReserve    Decimal @default(0) @db.Decimal(15, 2)
+  operatingFund       Decimal @default(0) @db.Decimal(15, 2)
+  updatedAt           DateTime @updatedAt
 }
 
 model RuleChangeLog {

@@ -31,8 +31,9 @@ type Tier = { id: string; label?: string | null; fromDays: number; toDays: numbe
 type Cfg = {
   monthlyFee: number; registrationFee: number; currency: string; dueDay: number; gracePeriodDays: number;
   autoSuspendMonths: number; autoTerminateMonths: number; minMembershipMonths: number; reinstatementFee: number;
-  autoSuspendEnabled: boolean; autoReminderEnabled: boolean; memberRoles: string[];
+  autoSuspendEnabled: boolean; autoTerminateEnabled: boolean; autoReminderEnabled: boolean; memberRoles: string[];
   dailyPenaltyEnabled: boolean; dailyPenaltyType: 'FIXED' | 'PERCENT'; dailyPenaltyValue: number; dailyPenaltyMaxDays: number;
+  reminderDaysBefore: number[];
 };
 
 const newId = () => (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -96,7 +97,13 @@ export default function RuleConfigClient() {
     setLoading(true); setError(false); setNeedsEdir(false);
     getRuleConfig().then(r => {
       if ((r as any).needsEdir) { setNeedsEdir(true); return; }
-      const s = r.settings ?? { monthlyFee: 0, registrationFee: 0, currency: 'ETB', dueDay: 1, gracePeriodDays: 5, autoSuspendMonths: 3, autoTerminateMonths: 6, minMembershipMonths: 0, reinstatementFee: 0, autoSuspendEnabled: true, autoReminderEnabled: true, memberRoles: [], penaltyTiers: [], dailyPenaltyEnabled: false, dailyPenaltyType: 'FIXED', dailyPenaltyValue: 0, dailyPenaltyMaxDays: 0 };
+      const s = r.settings ?? { 
+        monthlyFee: 0, registrationFee: 0, currency: 'ETB', dueDay: 1, gracePeriodDays: 5, 
+        autoSuspendMonths: 3, autoTerminateMonths: 6, minMembershipMonths: 0, reinstatementFee: 0, 
+        autoSuspendEnabled: true, autoTerminateEnabled: true, autoReminderEnabled: true, 
+        memberRoles: [], penaltyTiers: [], dailyPenaltyEnabled: false, dailyPenaltyType: 'FIXED', 
+        dailyPenaltyValue: 0, dailyPenaltyMaxDays: 0, reminderDaysBefore: [1, 3, 7] 
+      };
       const { penaltyTiers, ...scalar } = s as any;
       setCfg(scalar);
       setTiers(((penaltyTiers as any[]) ?? []).map(t => ({ id: t.id ?? newId(), label: t.label ?? '', fromDays: Number(t.fromDays ?? 0), toDays: t.toDays == null ? null : Number(t.toDays), type: t.type === 'PERCENT' ? 'PERCENT' : 'FIXED', value: Number(t.value ?? 0) })));
@@ -272,7 +279,35 @@ export default function RuleConfigClient() {
               </div>
               <Separator />
               <ToggleRow label="Automatic Suspension" description="Automatically suspend members who pass the suspension threshold." checked={cfg.autoSuspendEnabled} onChange={v => set('autoSuspendEnabled', v)} />
+              <ToggleRow label="Automatic Termination" description="Automatically terminate members who pass the termination threshold." checked={cfg.autoTerminateEnabled} onChange={v => set('autoTerminateEnabled', v)} />
               <ToggleRow label="Automatic Reminder Notifications" description="Send members reminders before their contribution is due and when they fall behind." checked={cfg.autoReminderEnabled} onChange={v => set('autoReminderEnabled', v)} />
+              {cfg.autoReminderEnabled && (
+                <div className="mt-3">
+                  <FieldRow label="Reminder Schedule (days before due)" hint="Days before payment due date to send reminders. Separate multiple days with commas.">
+                    <div className="space-y-2">
+                      <Input 
+                        type="text" 
+                        value={cfg.reminderDaysBefore.join(", ")} 
+                        onChange={(e) => {
+                          const days = e.target.value
+                            .split(",")
+                            .map((s) => parseInt(s.trim()))
+                            .filter((n) => !isNaN(n) && n > 0);
+                          set("reminderDaysBefore", days.sort((a, b) => a - b));
+                        }} 
+                        placeholder="1, 3, 7" 
+                      />
+                      <div className="flex flex-wrap gap-1">
+                        {cfg.reminderDaysBefore.map((day, i) => (
+                          <Badge key={i} variant="outline">
+                            {day} day{day !== 1 ? "s" : ""} before
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  </FieldRow>
+                </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>

@@ -112,7 +112,7 @@ export async function getEdirRolesForAssociation(edirId: string) {
 export async function getPlatformRoles() {
   const actor = await getActor();
   if (!actor.isSuperAdmin) throw new AccessDeniedError('Only Super Administrators can manage platform users.');
-  return prisma.role.findMany({ where: { scope: 'SUPER_ADMIN' }, orderBy: { name: 'asc' }, select: { id: true, name: true, permissions: true } });
+  return prisma.role.findMany({ where: { scope: { in: ['SUPER_ADMIN', 'PLATFORM'] } }, orderBy: { name: 'asc' }, select: { id: true, name: true, permissions: true } });
 }
 
 /** Districts (each with their branches) for placing a platform user organizationally. */

@@ -41,7 +41,9 @@ const configSchema = z.object({
   minMembershipMonths: z.coerce.number().int().min(0).max(120),
   reinstatementFee: z.coerce.number().min(0),
   autoSuspendEnabled: z.boolean(),
+  autoTerminateEnabled: z.boolean(),
   autoReminderEnabled: z.boolean(),
+  reminderDaysBefore: z.array(z.coerce.number().int().min(1)).default([1, 3, 7]),
   // Configurable member roles
   memberRoles: z.array(z.string().min(1).max(60)).default([]),
   // Optional reason captured for the change log
@@ -88,7 +90,9 @@ export async function getRuleConfig() {
       minMembershipMonths: settings.minMembershipMonths,
       reinstatementFee: toNum(settings.reinstatementFee),
       autoSuspendEnabled: settings.autoSuspendEnabled,
+      autoTerminateEnabled: settings.autoTerminateEnabled,
       autoReminderEnabled: settings.autoReminderEnabled,
+      reminderDaysBefore: Array.isArray(settings.reminderDaysBefore) ? settings.reminderDaysBefore as number[] : [1, 3, 7],
       memberRoles: (Array.isArray(settings.memberRoles) && settings.memberRoles.length ? settings.memberRoles : DEFAULT_MEMBER_ROLES) as string[],
     } : null,
     emergencyTypes: emergencyTypes.map(t => ({
@@ -117,7 +121,9 @@ const FIELD_LABELS: Record<string, string> = {
   minMembershipMonths: 'Min. Membership (months)',
   reinstatementFee: 'Reinstatement Fee',
   autoSuspendEnabled: 'Automatic Suspension',
+  autoTerminateEnabled: 'Automatic Termination',
   autoReminderEnabled: 'Automatic Reminders',
+  reminderDaysBefore: 'Reminder Schedule (days before due)',
   penaltyTiers: 'Late-Payment Penalty Tiers',
   dailyPenaltyEnabled: 'Daily Penalty Accrual',
   dailyPenaltyType: 'Daily Penalty Type',
@@ -169,7 +175,9 @@ export async function saveRuleConfig(input: RuleConfigInput) {
       minMembershipMonths: data.minMembershipMonths,
       reinstatementFee: new Prisma.Decimal(data.reinstatementFee),
       autoSuspendEnabled: data.autoSuspendEnabled,
+      autoTerminateEnabled: data.autoTerminateEnabled,
       autoReminderEnabled: data.autoReminderEnabled,
+      reminderDaysBefore: data.reminderDaysBefore as unknown as Prisma.InputJsonValue,
       memberRoles: (data.memberRoles.length ? data.memberRoles : DEFAULT_MEMBER_ROLES) as unknown as Prisma.InputJsonValue,
     };
 
@@ -187,7 +195,9 @@ export async function saveRuleConfig(input: RuleConfigInput) {
         ['minMembershipMonths', existing.minMembershipMonths, data.minMembershipMonths],
         ['reinstatementFee', toNum(existing.reinstatementFee), data.reinstatementFee],
         ['autoSuspendEnabled', existing.autoSuspendEnabled, data.autoSuspendEnabled],
+        ['autoTerminateEnabled', existing.autoTerminateEnabled, data.autoTerminateEnabled],
         ['autoReminderEnabled', existing.autoReminderEnabled, data.autoReminderEnabled],
+        ['reminderDaysBefore', JSON.stringify(existing.reminderDaysBefore ?? []), JSON.stringify(data.reminderDaysBefore)],
         ['dailyPenaltyEnabled', existing.dailyPenaltyEnabled, data.dailyPenaltyEnabled],
         ['dailyPenaltyType', existing.dailyPenaltyType, data.dailyPenaltyType],
         ['dailyPenaltyValue', toNum(existing.dailyPenaltyValue), data.dailyPenaltyValue],
