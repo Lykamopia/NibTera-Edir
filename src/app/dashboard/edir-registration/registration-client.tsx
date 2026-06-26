@@ -33,6 +33,7 @@ import { getBranches } from '@/app/actions/branches';
 import { getEdirs, getEdirAdminCapabilities, revokeEdir, deleteEdir, saveEdir } from '@/app/actions/admin';
 import { useConfirm } from '@/components/ui/confirm-provider';
 import { type Actor } from '@/lib/tenant-scope';
+import { isValidEthiopianPhone } from '@/lib/utils';
 import {
   Building2, Check, Clock, X, RotateCcw, Upload, FileText, ChevronLeft, ChevronRight,
   Users, UserCircle, ListChecks, Ban, Trash2, Pencil, Loader2, Eye,
@@ -81,12 +82,15 @@ interface EdirItem {
 
 type EdirCaps = { canCreate: boolean; canEdit: boolean; canRevoke: boolean; canDelete: boolean; canApprove: boolean };
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 const FORM_STEPS = [
   { id: 'details', label: 'Edir Details' },
   { id: 'location', label: 'Branch & District' },
   { id: 'contact', label: 'Chairperson' },
   { id: 'address', label: 'Address' },
   { id: 'documents', label: 'Agreement' },
+  { id: 'admin', label: 'Managing Admin' },
   { id: 'review', label: 'Review' },
 ];
 
@@ -134,6 +138,9 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
     contactMobile: '',
     contactEmail: '',
     agreementDocUrl: '',
+    adminName: '',
+    adminEmail: '',
+    adminPhone: '',
   });
 
   useEffect(() => {
@@ -192,6 +199,18 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
     getEdirAdminCapabilities().then(setEdirCaps).catch(() => {});
   }, []);
 
+  // When the registrar reaches the Managing Admin step, prefill from the chairperson
+  // contact (the chairperson is usually the primary admin). Only fills blanks, so any
+  // edits the registrar makes are preserved.
+  useEffect(() => {
+    if (FORM_STEPS[currentStep]?.id !== 'admin') return;
+    setFormData(prev => {
+      if (prev.adminName || prev.adminEmail || prev.adminPhone) return prev;
+      if (!prev.contactPersonName && !prev.contactEmail && !prev.contactMobile) return prev;
+      return { ...prev, adminName: prev.contactPersonName || '', adminEmail: prev.contactEmail || '', adminPhone: prev.contactMobile || '' };
+    });
+  }, [currentStep]);
+
   const onRevoke = async (edir: EdirItem) => {
     const deactivate = edir.status === 'ACTIVE' || edir.status === 'PENDING';
     const next = deactivate ? 'SUSPENDED' : 'ACTIVE';
@@ -241,6 +260,22 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
       setCurrentStep(1);
       return;
     }
+    const adminStep = FORM_STEPS.findIndex(s => s.id === 'admin');
+    if (!formData.adminName.trim()) {
+      toast.error('Managing administrator name is required');
+      setCurrentStep(adminStep);
+      return;
+    }
+    if (!EMAIL_RE.test(formData.adminEmail.trim())) {
+      toast.error('Enter a valid email for the managing administrator');
+      setCurrentStep(adminStep);
+      return;
+    }
+    if (!isValidEthiopianPhone(formData.adminPhone)) {
+      toast.error('Enter a valid Ethiopian phone for the managing administrator');
+      setCurrentStep(adminStep);
+      return;
+    }
     try {
       setSubmitting(true);
       const result = await submitEdirRegistration(formData);
@@ -250,6 +285,7 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
           name: '', description: '', address: '', accountNumber: '',
           branchId: actor.branchId || '', contactPersonName: '', contactAddress: '',
           contactMobile: '', contactEmail: '', agreementDocUrl: '',
+          adminName: '', adminEmail: '', adminPhone: '',
         });
         setCurrentStep(0);
         await loadRegistrations();
@@ -265,7 +301,8 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
   };
 
   const selectedBranch = branches.find(b => b.id === formData.branchId);
-  const canSubmit = formData.name.trim() && formData.branchId;
+  const canSubmit = formData.name.trim() && formData.branchId && formData.adminName.trim()
+    && EMAIL_RE.test(formData.adminEmail.trim()) && isValidEthiopianPhone(formData.adminPhone);
   const isLastStep = currentStep === FORM_STEPS.length - 1;
 
   const totalMembers = edirs.reduce((sum, e) => sum + e.members, 0);
@@ -532,8 +569,32 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
                   </div>
                 )}
 
-                {/* Step 5: Review */}
+                {/* Step 5: Managing Admin */}
                 {currentStep === 5 && (
+                  <div className="space-y-4">
+                    <div className="flex items-start gap-2 rounded-lg border border-info/20 bg-info/5 p-3 text-sm text-info">
+                      <UserCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                      <p>This person receives a set-password email once the Edir is approved and becomes its <strong>Edir Admin</strong> — they sign in to finish configuring it. Prefilled from the chairperson; edit if a different person will manage the Edir.</p>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="adminName">Full Name <span className="text-destructive">*</span></Label>
+                      <Input id="adminName" name="adminName" value={formData.adminName} onChange={handleInputChange} placeholder="Full name" />
+                    </div>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div className="space-y-1.5">
+                        <Label htmlFor="adminEmail">Email Address <span className="text-destructive">*</span></Label>
+                        <Input id="adminEmail" name="adminEmail" type="email" value={formData.adminEmail} onChange={handleInputChange} placeholder="admin@example.com" />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="adminPhone">Phone <span className="text-destructive">*</span></Label>
+                        <Input id="adminPhone" name="adminPhone" value={formData.adminPhone} onChange={handleInputChange} placeholder="0912345678" />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Step 6: Review */}
+                {currentStep === 6 && (
                   <div className="space-y-5">
                     <ReviewSection title="Edir Information" rows={[
                       ['Edir Name', formData.name],
@@ -547,6 +608,11 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
                       ['Mobile', formData.contactMobile || '—'],
                       ['Email', formData.contactEmail || '—'],
                       ['Contact Address', formData.contactAddress || '—'],
+                    ]} />
+                    <ReviewSection title="Managing Administrator" rows={[
+                      ['Name', formData.adminName || '—'],
+                      ['Email', formData.adminEmail || '—'],
+                      ['Phone', formData.adminPhone || '—'],
                     ]} />
                     <ReviewSection title="Address & Document" rows={[
                       ['Edir Address', formData.address || '—'],

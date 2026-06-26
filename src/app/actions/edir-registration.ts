@@ -5,6 +5,7 @@ import prisma from '@/lib/prisma';
 import { submitForApproval } from '@/lib/approval-engine';
 import { revalidatePath } from 'next/cache';
 import { writeAudit } from '@/lib/audit';
+import { isValidEthiopianPhone, normalizeEthiopianPhone } from '@/lib/utils';
 
 function failure(error: unknown): { success: false; error: string } {
   console.error('Edir registration error:', error);
@@ -23,7 +24,13 @@ export interface EdirRegistrationInput {
   contactMobile?: string;
   contactEmail?: string;
   agreementDocUrl?: string;
+  // Primary managing user — invited as the Edir Admin when the registration is approved.
+  adminName: string;
+  adminEmail: string;
+  adminPhone: string;
 }
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export async function submitEdirRegistration(input: EdirRegistrationInput) {
   try {
@@ -32,6 +39,23 @@ export async function submitEdirRegistration(input: EdirRegistrationInput) {
 
     const name = input.name?.trim();
     if (!name) return { success: false as const, error: 'Edir name is required.' };
+
+    // ── Primary managing user (becomes the Edir Admin on approval) ──────────────
+    // Validate up-front so we fail before creating an Edir row, reusing the same
+    // rules as inviteUser. Final uniqueness is re-checked at approval time.
+    const adminName = input.adminName?.trim();
+    if (!adminName || adminName.length < 2) return { success: false as const, error: 'Managing administrator name is required.' };
+    const adminEmail = input.adminEmail?.toLowerCase().trim() ?? '';
+    if (!EMAIL_RE.test(adminEmail)) return { success: false as const, error: 'Enter a valid email for the managing administrator.' };
+    if (!isValidEthiopianPhone(input.adminPhone ?? '')) return { success: false as const, error: 'Enter a valid Ethiopian phone number for the managing administrator.' };
+    const adminPhone = normalizeEthiopianPhone(input.adminPhone);
+
+    const [adminEmailTaken, adminPhoneTaken] = await Promise.all([
+      prisma.user.findUnique({ where: { email: adminEmail } }),
+      prisma.user.findUnique({ where: { phone: adminPhone } }),
+    ]);
+    if (adminEmailTaken) return { success: false as const, error: 'A user with this email already exists.' };
+    if (adminPhoneTaken) return { success: false as const, error: 'A user with this phone already exists.' };
 
     // Verify branch exists and belongs to actor's scope
     const branch = await prisma.branch.findUnique({
@@ -65,13 +89,15 @@ export async function submitEdirRegistration(input: EdirRegistrationInput) {
       },
     });
 
-    // Submit for approval via maker-checker workflow
+    // Submit for approval via maker-checker workflow. The managing admin rides in
+    // the payload and is provisioned (invited) by the EDIR_REGISTRATION executor
+    // when the registration is approved.
     await submitForApproval(actor, {
       module: 'EDIR_REGISTRATION',
       edirId: edir.id,
       title: `Edir registration: ${name}`,
       summary: `Edir registration submitted: ${name}`,
-      payload: { edirId: edir.id },
+      payload: { edirId: edir.id, admin: { name: adminName, email: adminEmail, phone: adminPhone } },
       targetType: 'Edir',
       targetId: edir.id,
     });

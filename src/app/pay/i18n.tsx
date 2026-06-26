@@ -85,6 +85,10 @@ const en: Record<string, string> = {
   thisPaysFor: 'This pays for',
   paidForMonths: 'Paid for',
   monthsUnit: 'month(s)',
+  // settled-this-month banner
+  settledWord: 'settled',
+  upToDateMsg: "you're up to date",
+  payAheadFor: 'You can pay ahead for',
   // receipt
   receiptTitle: 'Payment Receipt',
   viewReceipt: 'View Receipt',
@@ -191,6 +195,10 @@ const am: Record<string, string> = {
   thisPaysFor: 'ይህ ክፍያ ለ',
   paidForMonths: 'የተከፈለላቸው ወራት',
   monthsUnit: 'ወር',
+  // settled-this-month banner
+  settledWord: 'ተከፍሏል',
+  upToDateMsg: 'ወቅታዊ ነዎት',
+  payAheadFor: 'አስቀድመው መክፈል የሚችሉት',
   receiptTitle: 'የክፍያ ደረሰኝ',
   viewReceipt: 'ደረሰኝ ይመልከቱ',
   reference: 'ማጣቀሻ',

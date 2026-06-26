@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { toast } from 'sonner';
-import { cn } from '@/lib/utils';
+import Papa from 'papaparse';
+import { cn, isValidEthiopianPhone } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -24,7 +25,7 @@ import { useConfirm } from '@/components/ui/confirm-provider';
 import { DateRangeFilter, ALL_TIME, toParam, type DateRangeValue } from '@/components/ui/date-range-filter';
 import { getPeopleDirectory, exportPeopleCsv, type PersonRow, type PeopleContext, type PeopleStats } from '@/app/actions/people';
 import { createMember, requestMemberRemoval, type MemberInput } from '@/app/actions/members';
-import { setUserRole, setUserStatus, lockUser, unlockUser, adminResetUserPassword } from '@/app/actions/admin';
+import { setUserRole, setUserStatus, lockUser, unlockUser, adminResetUserPassword, bulkInviteUsers } from '@/app/actions/admin';
 import { associateUsers, removeUserFromEdir, getEdirRolesForAssociation, getAssociationUsers, getAssociationAudit } from '@/app/actions/associations';
 
 const STATUS_COLORS: Record<string, string> = {
@@ -34,6 +35,8 @@ const STATUS_COLORS: Record<string, string> = {
   SUSPENDED: 'border-warning/20 bg-warning/10 text-warning',
   TERMINATED: 'border-destructive/20 bg-destructive/10 text-destructive',
 };
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 type SortKey = 'name' | 'balance' | 'status' | 'edir';
 
@@ -253,6 +256,7 @@ export default function PeopleClient() {
           {isSuper && <Button variant="outline" size="sm" onClick={() => setShowActivity(true)}><History className="mr-1 h-4 w-4" /> Activity</Button>}
           {/* Cross-Edir bulk association lives in the dedicated User Associations module — link there instead of duplicating it here. */}
           {isSuper && <Button asChild variant="outline" size="sm"><Link href="/dashboard/system/associations"><Network className="mr-1 h-4 w-4" /> User Associations</Link></Button>}
+          {ctx?.canManageUsers && <BulkImportDialog ctx={ctx} onDone={load} />}
           {ctx?.canManageMembers && <AddMemberDialog ctx={ctx} onCreated={load} onCredentials={setCred} />}
         </div>
       </div>
@@ -653,6 +657,161 @@ function AddMemberDialog({ ctx, onCreated, onCredentials }: {
                 <Button type="button" onClick={doCreate} disabled={saving}>{saving && <Loader2 className="mr-1 h-4 w-4 animate-spin" />} Confirm & Create</Button>
               </>}
         </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Bulk user import ────────────────────────────────────────────────────────
+
+type ImportRow = { name: string; email: string; phone: string; role: string };
+
+function BulkImportDialog({ ctx, onDone }: { ctx: PeopleContext; onDone: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [edirId, setEdirId] = useState('');
+  const [rows, setRows] = useState<ImportRow[]>([]);
+  const [fileName, setFileName] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [result, setResult] = useState<{ created: number; total: number; failed: { row: number; email?: string; error: string }[] } | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const reset = () => { setRows([]); setFileName(''); setResult(null); setEdirId(''); if (fileRef.current) fileRef.current.value = ''; };
+
+  // Client-side preview validation; the server re-validates authoritatively
+  // (uniqueness across the whole tenant, role membership of the target Edir).
+  const rowError = (r: ImportRow, idx: number): string | null => {
+    if (r.name.trim().length < 2) return 'Name required';
+    if (!EMAIL_RE.test(r.email.trim())) return 'Invalid email';
+    if (!isValidEthiopianPhone(r.phone.trim())) return 'Invalid phone';
+    if (rows.findIndex(x => x.email.trim().toLowerCase() === r.email.trim().toLowerCase()) !== idx) return 'Duplicate in file';
+    return null;
+  };
+  const validCount = rows.filter((r, i) => !rowError(r, i)).length;
+
+  const onFile = (file: File) => {
+    setResult(null);
+    Papa.parse<Record<string, string>>(file, {
+      header: true, skipEmptyLines: true,
+      transformHeader: h => h.trim().toLowerCase(),
+      complete: (res) => {
+        const parsed: ImportRow[] = (res.data || [])
+          .map(r => ({ name: (r.name ?? '').trim(), email: (r.email ?? '').trim(), phone: (r.phone ?? '').trim(), role: (r.role ?? '').trim() }))
+          .filter(r => r.name || r.email || r.phone || r.role);
+        setRows(parsed);
+        setFileName(file.name);
+        if (parsed.length === 0) toast.error('No rows found. Expected columns: Name, Email, Phone, Role.');
+      },
+      error: () => toast.error('Could not read the CSV file.'),
+    });
+  };
+
+  const downloadTemplate = () => {
+    const csv = 'Name,Email,Phone,Role\nAbebe Kebede,abebe@example.com,0912345678,Member\n';
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+    const a = document.createElement('a'); a.href = url; a.download = 'users-import-template.csv'; a.click(); URL.revokeObjectURL(url);
+  };
+
+  const submit = async () => {
+    if (ctx.isSuperAdmin && !edirId) { toast.error('Select a target Edir.'); return; }
+    if (rows.length === 0) { toast.error('Upload a CSV first.'); return; }
+    setSubmitting(true);
+    const res = await bulkInviteUsers({ edirId: ctx.isSuperAdmin ? edirId : undefined, rows });
+    setSubmitting(false);
+    if (res?.success) {
+      setResult({ created: res.created, total: res.total, failed: res.failed });
+      toast.success(`${res.created} imported${res.failed.length ? ` · ${res.failed.length} skipped` : ''}.`);
+      if (res.created > 0) onDone();
+    } else {
+      toast.error(res?.error || 'Import failed.');
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={o => { setOpen(o); if (!o) reset(); }}>
+      <DialogTrigger asChild><Button size="sm" variant="outline"><Upload className="mr-1 h-4 w-4" /> Import Users</Button></DialogTrigger>
+      <DialogContent className="max-h-[88vh] max-w-3xl overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Import Users</DialogTitle>
+          <DialogDescription>Upload a CSV to invite multiple users at once. Each becomes an INVITED account and receives a set-password email.</DialogDescription>
+        </DialogHeader>
+
+        {result ? (
+          <div className="space-y-4">
+            <div className="rounded-lg border bg-muted/30 p-4 text-sm">
+              <p className="font-medium">{result.created} of {result.total} users imported.</p>
+              {result.failed.length > 0 && <p className="text-muted-foreground">{result.failed.length} row{result.failed.length === 1 ? '' : 's'} skipped — see below.</p>}
+            </div>
+            {result.failed.length > 0 && (
+              <div className="max-h-64 overflow-y-auto rounded-lg border">
+                <Table>
+                  <TableHeader><TableRow><TableHead className="w-16">Row</TableHead><TableHead>Email</TableHead><TableHead>Reason</TableHead></TableRow></TableHeader>
+                  <TableBody>
+                    {result.failed.map((f, i) => (
+                      <TableRow key={i}><TableCell className="tabular-nums">{f.row}</TableCell><TableCell className="text-sm">{f.email || '—'}</TableCell><TableCell className="text-sm text-destructive">{f.error}</TableCell></TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+            <DialogFooter>
+              <Button variant="outline" onClick={reset}>Import another</Button>
+              <Button onClick={() => { setOpen(false); reset(); }}>Done</Button>
+            </DialogFooter>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {ctx.isSuperAdmin && (
+              <div className="space-y-1.5">
+                <Label className="text-xs">Target Edir</Label>
+                <Select value={edirId} onValueChange={setEdirId}>
+                  <SelectTrigger><SelectValue placeholder="Select the Edir to import into…" /></SelectTrigger>
+                  <SelectContent>{ctx.edirs.map(e => <SelectItem key={e.id} value={e.id}>{e.name}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center gap-2">
+              <input ref={fileRef} type="file" accept=".csv,text/csv" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) onFile(f); }} />
+              <Button type="button" variant="outline" size="sm" onClick={() => fileRef.current?.click()}><Upload className="mr-1 h-4 w-4" /> {fileName || 'Choose CSV'}</Button>
+              <Button type="button" variant="ghost" size="sm" onClick={downloadTemplate}><Download className="mr-1 h-4 w-4" /> Download template</Button>
+              <span className="text-xs text-muted-foreground">Columns: Name, Email, Phone, Role (Role optional)</span>
+            </div>
+
+            {rows.length > 0 && (
+              <div className="space-y-2">
+                <div className="text-xs text-muted-foreground">{validCount} of {rows.length} rows look valid. Invalid rows are skipped on import.</div>
+                <div className="max-h-72 overflow-y-auto rounded-lg border">
+                  <Table>
+                    <TableHeader><TableRow><TableHead className="w-10"></TableHead><TableHead>Name</TableHead><TableHead>Email</TableHead><TableHead>Phone</TableHead><TableHead>Role</TableHead></TableRow></TableHeader>
+                    <TableBody>
+                      {rows.map((r, i) => {
+                        const err = rowError(r, i);
+                        return (
+                          <TableRow key={i} className={err ? 'bg-destructive/5' : ''}>
+                            <TableCell>{err
+                              ? <Badge variant="outline" className="border-destructive/30 text-destructive">!</Badge>
+                              : <Badge variant="outline" className="border-success/30 text-success">✓</Badge>}</TableCell>
+                            <TableCell className="text-sm">{r.name || '—'}</TableCell>
+                            <TableCell className="text-sm">{r.email || '—'}</TableCell>
+                            <TableCell className="text-sm">{r.phone || '—'}</TableCell>
+                            <TableCell className="text-sm">{r.role || '—'}{err && <span className="ml-2 text-xs text-destructive">{err}</span>}</TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+              </div>
+            )}
+
+            <DialogFooter>
+              <Button variant="outline" onClick={() => { setOpen(false); reset(); }} disabled={submitting}>Cancel</Button>
+              <Button onClick={submit} disabled={submitting || rows.length === 0 || (ctx.isSuperAdmin && !edirId)}>
+                {submitting && <Loader2 className="mr-1 h-4 w-4 animate-spin" />} Import{validCount > 0 ? ` ${validCount} user${validCount === 1 ? '' : 's'}` : ''}
+              </Button>
+            </DialogFooter>
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   );

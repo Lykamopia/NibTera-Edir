@@ -12,14 +12,11 @@ import { Loader2, Search, Download, ReceiptText, Ban, Receipt, Building2, CheckC
 import { Pagination } from '@/components/ui/pagination';
 import { DateRangeFilter, ALL_TIME, toParam, type DateRangeValue } from '@/components/ui/date-range-filter';
 import { getPaymentLogs, exportPaymentLogCsv, voidPayment } from '@/app/actions/payments';
+import { PAYMENT_LOG_STATUS_LABEL, PAYMENT_LOG_STATUS_TONE, paymentLogStatusLabel } from '@/lib/payment-log-status';
+import { downloadPaymentReceiptPdf } from '@/lib/receipt-pdf';
 import { usePrompt } from '@/components/ui/confirm-provider';
 
 const PAGE_SIZE = 25;
-
-const STATUS: Record<string, string> = {
-  SUCCESS: 'bg-green-100 text-green-800', PARTIAL: 'bg-amber-100 text-amber-800',
-  PENDING: 'bg-blue-100 text-blue-800', FAILED: 'bg-red-100 text-red-800', VOID: 'bg-gray-100 text-gray-700',
-};
 
 const BREAKDOWN_LABELS: Record<string, string> = {
   installment: 'Installment / Contribution', arrears: 'Overdue Amount', latePenalty: 'Late Penalty',
@@ -94,7 +91,7 @@ export default function PaymentLogClient() {
           <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All statuses</SelectItem>
-            {Object.keys(STATUS).map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+            {Object.keys(PAYMENT_LOG_STATUS_LABEL).map(s => <SelectItem key={s} value={s}>{PAYMENT_LOG_STATUS_LABEL[s]}</SelectItem>)}
           </SelectContent>
         </Select>
         <DateRangeFilter value={dateRange} onChange={setDateRange} className="w-44" />
@@ -116,16 +113,17 @@ export default function PaymentLogClient() {
           ) : (
             <Table>
               <TableHeader>
-                <TableRow><TableHead>Date</TableHead><TableHead>Member</TableHead><TableHead>Method</TableHead><TableHead>Transaction</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Amount</TableHead><TableHead></TableHead></TableRow>
+                <TableRow><TableHead>Date</TableHead><TableHead>Member</TableHead><TableHead>Member ID</TableHead><TableHead>Method</TableHead><TableHead>Transaction</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Amount</TableHead><TableHead></TableHead></TableRow>
               </TableHeader>
               <TableBody>
                 {items.map(l => (
                   <TableRow key={l.id} className="cursor-pointer" onClick={() => setReceipt(l)}>
                     <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{new Date(l.createdAt).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })}</TableCell>
                     <TableCell>{l.memberName ?? '—'}</TableCell>
+                    <TableCell className="font-mono text-xs text-muted-foreground">{l.memberCode ?? '—'}</TableCell>
                     <TableCell className="text-sm">{l.method}</TableCell>
                     <TableCell className="font-mono text-xs text-muted-foreground">{l.transactionId}</TableCell>
-                    <TableCell><Badge variant="outline" className={STATUS[l.status] ?? ''}>{l.status}</Badge></TableCell>
+                    <TableCell><Badge variant="outline" className={PAYMENT_LOG_STATUS_TONE[l.status] ?? ''}>{l.displayStatus ?? paymentLogStatusLabel(l.status)}</Badge></TableCell>
                     <TableCell className="text-right font-semibold">{l.amount.toLocaleString()}</TableCell>
                     <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center justify-end gap-1">
@@ -151,7 +149,7 @@ export default function PaymentLogClient() {
 function ReceiptModal({ log, onClose }: { log: any; onClose: () => void }) {
   let parsed: any = {};
   try { parsed = JSON.parse(log.description || '{}') || {}; } catch { parsed = {}; }
-  const coverage = parsed.coverage as { months: number; from: string; to: string } | undefined;
+  const cov = log.coverage as { months: number; from: string | null; to: string | null } | null;
   const breakdown = Object.entries(BREAKDOWN_LABELS)
     .map(([k, label]) => [label, Number(parsed[k]) || 0] as const)
     .filter(([, v]) => v > 0);
@@ -160,11 +158,42 @@ function ReceiptModal({ log, onClose }: { log: any; onClose: () => void }) {
   const failed = log.status === 'FAILED' || log.status === 'VOID';
   const Icon = ok ? CheckCircle2 : failed ? XCircle : Clock;
   const toneCls = ok ? 'bg-success/10 text-success' : failed ? 'bg-destructive/10 text-destructive' : 'bg-info/10 text-info';
+  const periodText = cov ? `${monthFmt(cov.from)}${cov.months > 1 && cov.to ? ` – ${monthFmt(cov.to)}` : ''}${cov.months ? ` (${cov.months} mo)` : ''}` : '—';
+
+  // Deterministic receipt number derived from the payment date + log id.
+  const receiptNo = `RCPT-${new Date(log.createdAt).toISOString().slice(0, 10).replace(/-/g, '')}-${String(log.id).slice(-6).toUpperCase()}`;
+  const onDownload = () => {
+    try {
+      downloadPaymentReceiptPdf({
+        receiptNo,
+        edirName: log.edirName ?? 'Edir',
+        memberName: log.memberName ?? '—',
+        memberCode: log.memberCode ?? null,
+        amount: Number(log.amount) || 0,
+        currency: 'ETB',
+        dateText: dateTime(log.createdAt),
+        method: log.method ?? '—',
+        reference: log.transactionId ?? '—',
+        hashId: log.bankRef ?? log.receiptUrl ?? null,
+        status: log.displayStatus ?? paymentLogStatusLabel(log.status),
+      });
+      toast.success('Receipt downloaded.');
+    } catch {
+      toast.error('Could not generate the receipt.');
+    }
+  };
 
   const Row = ({ label, value, mono }: { label: string; value: React.ReactNode; mono?: boolean }) => (
     <div className="flex items-start justify-between gap-3 py-1.5 text-sm">
       <span className="shrink-0 text-muted-foreground">{label}</span>
       <span className={`text-right ${mono ? 'break-all font-mono text-xs' : 'font-medium'}`}>{value}</span>
+    </div>
+  );
+
+  const Section = ({ title, children }: { title: string; children: React.ReactNode }) => (
+    <div className="rounded-lg border bg-muted/20 px-3">
+      <div className="mt-2.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{title}</div>
+      <div className="divide-y">{children}</div>
     </div>
   );
 
@@ -189,22 +218,42 @@ function ReceiptModal({ log, onClose }: { log: any; onClose: () => void }) {
             <div className="flex flex-col items-center gap-1.5 border-b pb-4 text-center">
               <span className={`flex h-12 w-12 items-center justify-center rounded-full ${toneCls}`}><Icon className="h-7 w-7" /></span>
               <div className="text-2xl font-bold">{money(log.amount)}</div>
-              <Badge variant="outline" className={STATUS[log.status] ?? ''}>{log.status}</Badge>
+              <Badge variant="outline" className={PAYMENT_LOG_STATUS_TONE[log.status] ?? ''}>{log.displayStatus ?? paymentLogStatusLabel(log.status)}</Badge>
             </div>
 
-            {/* Details */}
-            <div className="divide-y pt-1">
-              <Row label="Member" value={log.memberName ? `${log.memberName}${log.memberCode ? ` · ${log.memberCode}` : ''}` : '—'} />
-              {log.memberPhone && <Row label="Phone" value={log.memberPhone} />}
-              <Row label="Amount" value={money(log.amount)} />
-              {coverage && (
-                <Row label="Covers" value={`${monthFmt(coverage.from)}${coverage.months > 1 ? ` – ${monthFmt(coverage.to)}` : ''} (${coverage.months} mo)`} />
-              )}
-              <Row label="Date" value={dateTime(log.createdAt)} />
-              <Row label="Method" value={log.method} />
-              {log.verificationType && <Row label="Verification" value={log.verificationType}/>}
-              <Row label="Reference" value={log.transactionId} mono />
-              {log.receiptUrl && <Row label="Bank Reference" value={log.receiptUrl} mono />}
+            {/* Detailed record */}
+            <div className="space-y-2.5 pt-3">
+              <Section title="Member">
+                <Row label="Member ID" value={log.memberCode || '—'} mono />
+                <Row label="Member Name" value={log.memberName || '—'} />
+                <Row label="Membership Status" value={log.memberStatus ? <Badge variant="outline" className="font-normal">{log.memberStatus}</Badge> : '—'} />
+              </Section>
+
+              <Section title="Contribution">
+                <Row label="Contribution Period" value={periodText} />
+                <Row label="Contribution Amount" value={log.contributionAmount != null ? money(log.contributionAmount) : '—'} />
+                <Row label="Penalty Amount" value={log.penaltyAmount != null ? money(log.penaltyAmount) : '—'} />
+                <Row label="Due Date" value={log.dueDate ? monthFmt(log.dueDate) : '—'} />
+              </Section>
+
+              <Section title="Payment">
+                <Row label="Total Amount Paid" value={money(log.amount)} />
+                <Row label="Payment Method" value={log.method || '—'} />
+                <Row label="Date & Time" value={dateTime(log.createdAt)} />
+                <Row label="Payment Status" value={<Badge variant="outline" className={PAYMENT_LOG_STATUS_TONE[log.status] ?? ''}>{log.displayStatus ?? paymentLogStatusLabel(log.status)}</Badge>} />
+                {log.verificationType && <Row label="Verification" value={log.verificationType} />}
+              </Section>
+
+              <Section title="Payer">
+                <Row label="Payer Account Number" value={log.payerPhone || '—'} mono />
+                <Row label="Payer Account Name" value={log.payerName || '—'} />
+              </Section>
+
+              <Section title="Reference">
+                <Row label="Receipt No." value={receiptNo} mono />
+                <Row label="Transaction Reference" value={log.transactionId} mono />
+                <Row label="Bank Reference" value={log.bankRef || '—'} mono />
+              </Section>
             </div>
 
             {/* Breakdown, when present */}
@@ -223,8 +272,9 @@ function ReceiptModal({ log, onClose }: { log: any; onClose: () => void }) {
             )}
           </CardContent>
 
-          <div className="border-t p-3">
-            <Button variant="outline" className="w-full" onClick={onClose}>Close</Button>
+          <div className="flex gap-2 border-t p-3">
+            <Button variant="outline" className="flex-1" onClick={onClose}>Close</Button>
+            <Button className="flex-1" onClick={onDownload}><Download className="mr-1.5 h-4 w-4" /> Download Receipt</Button>
           </div>
         </Card>
       </div>

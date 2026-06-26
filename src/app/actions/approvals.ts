@@ -6,7 +6,7 @@ import { getActor, actorHasPermission, tenantWhere } from '@/lib/tenant-scope';
 import { MODULE_CHECKER_PERMISSION, MODULE_LABEL } from '@/lib/permissions';
 import {
   approveRequest, rejectRequest, returnRequest, commentOnRequest, resubmitRequest,
-  pendingApprovalCountForActor,
+  pendingApprovalCountForActor, eligibleModulesFor, pendingScopeWhere, canCheckRequest,
 } from '@/lib/approval-engine';
 import '@/lib/approval-modules';
 import { revalidatePath } from 'next/cache';
@@ -22,46 +22,46 @@ export interface ApprovalFilters {
   range?: DateRangeParam;
 }
 
-/** Modules the actor is allowed to check (resolved from their checker permissions). */
-function eligibleModulesFor(actor: Awaited<ReturnType<typeof getActor>>): ApprovalModule[] {
-  return (Object.keys(MODULE_CHECKER_PERMISSION) as ApprovalModule[])
-    .filter(m => actorHasPermission(actor, MODULE_CHECKER_PERMISSION[m]));
-}
-
-/** Build the tenant + tab + filter `where` clause shared by the list and export.
+/** Build the tab + filter `where` clause shared by the list and export.
  *  Returns null when the actor can act on nothing (so the caller returns empty). */
 function buildApprovalWhere(
   actor: Awaited<ReturnType<typeof getActor>>,
   tab: ApprovalTab,
   filters: ApprovalFilters,
 ): Prisma.ApprovalRequestWhereInput | null {
-  const eligibleModules = eligibleModulesFor(actor);
-  if (tab === 'pending' && eligibleModules.length === 0) return null;
+  const date = dateWhere('createdAt', filters.range);
+  const query: Prisma.ApprovalRequestWhereInput | null = filters.query?.trim()
+    ? { OR: [
+        { title: { contains: filters.query.trim(), mode: 'insensitive' } },
+        { summary: { contains: filters.query.trim(), mode: 'insensitive' } },
+      ] }
+    : null;
 
-  let where: Prisma.ApprovalRequestWhereInput = { ...tenantWhere(actor), ...dateWhere('createdAt', filters.range) };
   if (tab === 'pending') {
-    where = { ...where, status: 'PENDING', makerId: { not: actor.id }, module: { in: eligibleModules } };
-  } else if (tab === 'mine') {
-    where = { ...where, makerId: actor.id };
-  } else {
-    where = { ...where, status: { in: ['CLOSED', 'REJECTED'] }, makerId: actor.id };
-  }
-  if (filters.module && filters.module !== 'all') {
-    // On the pending tab, never widen beyond the modules the actor can check.
-    if (tab !== 'pending' || eligibleModules.includes(filters.module as ApprovalModule)) {
-      where.module = filters.module as ApprovalModule;
+    // Role/scope-aware visibility: narrow the actor's checkable modules to the UI
+    // filter first, then let pendingScopeWhere apply governance/operational scoping.
+    let eligible = eligibleModulesFor(actor);
+    if (filters.module && filters.module !== 'all') {
+      eligible = eligible.filter(m => m === (filters.module as ApprovalModule));
     }
+    const scope = pendingScopeWhere(actor, eligible);
+    if (scope === null) return null;
+    // Combine via AND so a scope OR-clause and the search OR-clause don't clobber.
+    return {
+      AND: query ? [scope, query] : [scope],
+      ...date,
+      status: 'PENDING',
+      makerId: { not: actor.id },
+    };
   }
-  if (filters.status && filters.status !== 'all' && tab !== 'pending') {
-    where.status = filters.status as any;
-  }
-  if (filters.query?.trim()) {
-    const q = filters.query.trim();
-    where.OR = [
-      { title: { contains: q, mode: 'insensitive' } },
-      { summary: { contains: q, mode: 'insensitive' } },
-    ];
-  }
+
+  // mine / history: the actor's own submissions, tenant-scoped.
+  const where: Prisma.ApprovalRequestWhereInput = {
+    ...tenantWhere(actor), ...date, ...(query ?? {}), makerId: actor.id,
+  };
+  if (tab === 'history') where.status = { in: ['CLOSED', 'REJECTED'] };
+  if (filters.module && filters.module !== 'all') where.module = filters.module as ApprovalModule;
+  if (filters.status && filters.status !== 'all') where.status = filters.status as any;
   return where;
 }
 
@@ -79,6 +79,70 @@ function serialize(r: any) {
     createdAt: r.createdAt,
     updatedAt: r.updatedAt,
   };
+}
+
+/** Resolved, human-readable entities referenced by an approval payload, so the
+ *  detail view can show real names/amounts/documents rather than raw IDs. Driven
+ *  by the payload's id keys, so it covers every module generically. Best-effort:
+ *  a failed lookup just omits that slice. */
+export interface ApprovalContext {
+  member?: { name: string; code: string; phone: string | null; photoUrl: string | null };
+  claim?: { memberName: string | null; memberCode: string | null; typeName: string | null; affectedPerson: string | null; description: string | null; date: string | null; approvedAmount: number | null };
+  document?: { title: string; fileName: string; fileUrl: string; fileType: string; category: string };
+  issuance?: { assetName: string | null; memberName: string | null; memberCode: string | null; issuedQty: number };
+  category?: { name: string; benefitEligible: boolean; emergencyEligible: boolean };
+  role?: { name: string };
+  edirName?: string | null;
+}
+
+async function resolveApprovalContext(edirId: string, rawPayload: unknown): Promise<ApprovalContext> {
+  const p = (rawPayload ?? {}) as Record<string, any>;
+  const ctx: ApprovalContext = {};
+  const safe = async (fn: () => Promise<void>) => { try { await fn(); } catch { /* best-effort enrichment */ } };
+
+  await Promise.all([
+    safe(async () => {
+      if (!p.memberId) return;
+      const m = await prisma.member.findUnique({ where: { id: p.memberId }, select: { name: true, memberId: true, phone: true, photoUrl: true } });
+      if (m) ctx.member = { name: m.name, code: m.memberId, phone: m.phone, photoUrl: m.photoUrl };
+    }),
+    safe(async () => {
+      if (!p.claimId) return;
+      const c = await prisma.emergencyClaim.findUnique({
+        where: { id: p.claimId },
+        select: { affectedPerson: true, description: true, date: true, approvedAmount: true, member: { select: { name: true, memberId: true } }, type: { select: { name: true } } },
+      });
+      if (c) ctx.claim = {
+        memberName: c.member?.name ?? null, memberCode: c.member?.memberId ?? null, typeName: c.type?.name ?? null,
+        affectedPerson: c.affectedPerson, description: c.description, date: c.date ? c.date.toISOString() : null,
+        approvedAmount: c.approvedAmount != null ? Number(c.approvedAmount) : null,
+      };
+    }),
+    safe(async () => {
+      if (!p.documentId) return;
+      const d = await prisma.dmsDocument.findUnique({ where: { id: p.documentId }, select: { title: true, fileName: true, fileUrl: true, fileType: true, category: true } });
+      if (d) ctx.document = d;
+    }),
+    safe(async () => {
+      if (!p.issuanceId) return;
+      const i = await prisma.assetIssuance.findUnique({ where: { id: p.issuanceId }, select: { issuedQty: true, asset: { select: { name: true } }, member: { select: { name: true, memberId: true } } } });
+      if (i) ctx.issuance = { assetName: i.asset?.name ?? null, memberName: i.member?.name ?? null, memberCode: i.member?.memberId ?? null, issuedQty: i.issuedQty };
+    }),
+    safe(async () => {
+      if (!p.categoryId) return;
+      const cat = await prisma.relationshipCategory.findUnique({ where: { id: p.categoryId }, select: { name: true, benefitEligible: true, emergencyEligible: true } });
+      if (cat) ctx.category = cat;
+    }),
+    safe(async () => {
+      if (!p.roleId) return;
+      const r = await prisma.role.findUnique({ where: { id: p.roleId }, select: { name: true } });
+      if (r) ctx.role = r;
+    }),
+    safe(async () => {
+      ctx.edirName = (await prisma.edir.findUnique({ where: { id: edirId }, select: { name: true } }))?.name ?? null;
+    }),
+  ]);
+  return ctx;
 }
 
 export async function getApprovals(tab: ApprovalTab, filters: ApprovalFilters = {}) {
@@ -99,12 +163,11 @@ export async function getApprovals(tab: ApprovalTab, filters: ApprovalFilters = 
 export async function getApprovalStats() {
   const actor = await getActor();
   const base = tenantWhere(actor);
-  const eligibleModules = eligibleModulesFor(actor);
+  // Pending count mirrors the Pending list's role/scope-aware visibility.
+  const pendingWhere = buildApprovalWhere(actor, 'pending', {});
 
   const [pending, mine, byStatus] = await Promise.all([
-    eligibleModules.length
-      ? prisma.approvalRequest.count({ where: { ...base, status: 'PENDING', makerId: { not: actor.id }, module: { in: eligibleModules } } })
-      : Promise.resolve(0),
+    pendingWhere ? prisma.approvalRequest.count({ where: pendingWhere }) : Promise.resolve(0),
     prisma.approvalRequest.count({ where: { ...base, makerId: actor.id } }),
     prisma.approvalRequest.groupBy({ by: ['status'], where: base, _count: { _all: true } }),
   ]);
@@ -153,34 +216,24 @@ export async function getApprovalDetail(id: string) {
     },
   });
   if (!request) return null;
-  
-  // Check tenant access first
-  if (!actor.isSuperAdmin) {
-    if (actor.accessibleEdirIds === null) {
-      // HEAD_OFFICE, allow all tenants
-    } else if (!actor.accessibleEdirIds.includes(request.edirId)) {
-      return null;
-    }
-  }
 
-  // Check if user is authorized to view this request:
-  // - Must be the maker OR
-  // - Must have the checker permission for this module (to view/pend) OR
-  // - Must be a super admin
+  // Authorized to view if: super-admin, the maker, OR a checker in scope for this
+  // module class (governance → org hierarchy; operational → the Edir's own users).
   const isMaker = request.makerId === actor.id;
   const checkerPerm = MODULE_CHECKER_PERMISSION[request.module];
-  const hasCheckerPermission = actorHasPermission(actor, checkerPerm);
-  
-  if (!actor.isSuperAdmin && !isMaker && !hasCheckerPermission) {
+  const inScope = actorHasPermission(actor, checkerPerm) && await canCheckRequest(actor, request);
+
+  if (!actor.isSuperAdmin && !isMaker && !inScope) {
     return null;
   }
 
-  const canCheck = !isMaker && request.status === 'PENDING' && hasCheckerPermission;
+  const canCheck = !isMaker && request.status === 'PENDING' && inScope;
   const canResubmit = isMaker && request.status === 'RETURNED';
 
   return {
     ...serialize(request),
     payload: request.payload,
+    context: await resolveApprovalContext(request.edirId, request.payload),
     timeline: request.events.map(e => ({
       id: e.id, type: e.type, comment: e.comment, createdAt: e.createdAt,
       actorName: e.actor?.name ?? e.actor?.email ?? 'Unknown',

@@ -11,6 +11,7 @@ import '@/lib/approval-modules';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
 import { dateWhere, type DateRangeParam } from '@/lib/date-range';
+import { paymentLogStatusLabel } from '@/lib/payment-log-status';
 
 // ─── Edir settings ───────────────────────────────────────────────────────────
 
@@ -325,42 +326,107 @@ export async function getPaymentLogs(params: { status?: string; query?: string; 
   const page = Math.max(1, params.page ?? 1);
   const pageSize = 25;
   const where = paymentLogWhere(actor, params);
-  const [items, total] = await Promise.all([
+  const [logs, total] = await Promise.all([
     prisma.paymentLog.findMany({
       where,
-      include: { member: { select: { name: true, memberId: true, phone: true } }, edir: { select: { name: true } } },
+      include: { member: { select: { name: true, memberId: true, phone: true, status: true } }, edir: { select: { name: true } } },
       orderBy: { createdAt: 'desc' }, skip: (page - 1) * pageSize, take: pageSize,
     }),
     prisma.paymentLog.count({ where }),
   ]);
+
+  // Resolve the payer's name from their phone (mini-app payments record the payer
+  // separately from the beneficiary). One batched lookup within the actor's scope.
+  const metas = logs.map(l => safeParse(l.description));
+  const payerNameByPhone = await resolvePayerNames(actor, metas);
+
   return {
-    items: items.map(l => ({
-      id: l.id,
-      transactionId: l.transactionId,
-      amount: Number(l.amount),
-      method: l.method,
-      status: l.status,
-      description: l.description,
-      receiptUrl: l.receiptUrl,
-      verificationType: l.verificationType,
-      createdAt: l.createdAt,
-      memberName: l.member?.name ?? null,
-      memberCode: l.member?.memberId ?? null,
-      memberPhone: l.member?.phone ?? null,
-      edirName: l.edir?.name ?? null,
-    })),
+    items: logs.map((l, i) => {
+      const meta = metas[i];
+      const cov = meta.coverage as { months?: number; from?: string; to?: string } | undefined;
+      const payerPhone = (meta.payerPhone as string) || null;
+      return {
+        id: l.id,
+        transactionId: l.transactionId,
+        amount: Number(l.amount),
+        method: l.method,
+        status: l.status,
+        displayStatus: paymentLogStatusLabel(l.status),
+        description: l.description,
+        receiptUrl: l.receiptUrl,
+        verificationType: l.verificationType,
+        createdAt: l.createdAt,
+        memberName: l.member?.name ?? null,
+        memberCode: l.member?.memberId ?? null,
+        memberPhone: l.member?.phone ?? null,
+        memberStatus: l.member?.status ?? null,
+        edirName: l.edir?.name ?? null,
+        // ── Detailed fields (present per source; null when not captured) ──
+        contributionAmount: meta.installment != null ? Number(meta.installment) : null,
+        penaltyAmount: meta.latePenalty != null ? Number(meta.latePenalty) : null,
+        coverage: cov ? { months: Number(cov.months ?? 0), from: cov.from ?? null, to: cov.to ?? null } : null,
+        dueDate: cov?.to ?? null,
+        payerPhone,
+        payerName: payerPhone ? (payerNameByPhone.get(payerPhone) ?? null) : null,
+        bankRef: l.receiptUrl ?? (meta.bankRef as string) ?? null,
+        failureReason: (meta.failureReason as string) ?? null,
+        voidReason: (meta.voidReason as string) ?? null,
+      };
+    }),
     total, page, pages: Math.ceil(total / pageSize),
   };
+}
+
+/** Batch-resolve payer phones found in payment descriptions to member names. */
+async function resolvePayerNames(actor: Awaited<ReturnType<typeof getActor>>, metas: Record<string, unknown>[]): Promise<Map<string, string>> {
+  const phones = Array.from(new Set(metas.map(m => (m.payerPhone as string) || '').filter(Boolean)));
+  if (phones.length === 0) return new Map();
+  const members = await prisma.member.findMany({
+    where: { phone: { in: phones }, ...tenantWhere(actor) },
+    select: { phone: true, name: true },
+  });
+  return new Map(members.filter(m => m.phone).map(m => [m.phone as string, m.name]));
 }
 
 export async function exportPaymentLogCsv(params: { status?: string; query?: string; from?: string; to?: string; range?: DateRangeParam } = {}) {
   const actor = await getActor();
   await assertPermission(actor, ['export_payments', 'view_payment_log']);
-  const logs = await prisma.paymentLog.findMany({ where: paymentLogWhere(actor, params), include: { member: true }, orderBy: { createdAt: 'desc' }, take: 5000 });
-  const header = ['Date', 'Transaction ID', 'Member', 'Method', 'Status', 'Amount'];
-  const rows = logs.map(l => [
-    l.createdAt.toISOString(), l.transactionId, l.member?.name ?? '', l.method, l.status, String(Number(l.amount)),
-  ]);
+  const logs = await prisma.paymentLog.findMany({
+    where: paymentLogWhere(actor, params),
+    include: { member: { select: { name: true, memberId: true, phone: true, status: true } } },
+    orderBy: { createdAt: 'desc' }, take: 5000,
+  });
+  const metas = logs.map(l => safeParse(l.description));
+  const payerNameByPhone = await resolvePayerNames(actor, metas);
+
+  const header = [
+    'Member ID', 'Member Name', 'Membership Status', 'Contribution Period', 'Contribution Amount', 'Penalty Amount',
+    'Total Amount Paid', 'Payment Date & Time', 'Payer Account Number', 'Payer Account Name',
+    'Transaction Reference', 'Bank Reference', 'Payment Method', 'Due Date', 'Payment Status',
+  ];
+  const rows = logs.map((l, i) => {
+    const meta = metas[i];
+    const cov = meta.coverage as { months?: number; from?: string; to?: string } | undefined;
+    const period = cov ? `${cov.from ?? ''}${cov.to ? ` - ${cov.to}` : ''}${cov.months ? ` (${cov.months} mo)` : ''}` : '';
+    const payerPhone = (meta.payerPhone as string) || '';
+    return [
+      l.member?.memberId ?? '',
+      l.member?.name ?? '',
+      l.member?.status ?? '',
+      period,
+      meta.installment != null ? String(Number(meta.installment)) : '',
+      meta.latePenalty != null ? String(Number(meta.latePenalty)) : '',
+      String(Number(l.amount)),
+      l.createdAt.toISOString(),
+      payerPhone,
+      payerPhone ? (payerNameByPhone.get(payerPhone) ?? '') : '',
+      l.transactionId,
+      l.receiptUrl ?? '',
+      l.method,
+      cov?.to ?? '',
+      paymentLogStatusLabel(l.status),
+    ];
+  });
   return [header, ...rows].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
 }
 

@@ -12,7 +12,10 @@ import { registerModule } from '@/lib/approval-engine';
 import { settlePaymentTx, type ManualPaymentPayload } from '@/lib/payment-settlement';
 import { Prisma } from '@prisma/client';
 import bcrypt from 'bcrypt';
+import crypto from 'crypto';
 import { generateTempPassword } from '@/lib/secure-random';
+import { sendVerificationEmail } from '@/lib/email';
+import { writeAudit } from '@/lib/audit';
 
 let registered = false;
 
@@ -339,7 +342,7 @@ export function ensureApprovalModules() {
 
   // ── Edir Registration (approve the registration → Edir becomes ACTIVE) ─────────
   registerModule('EDIR_REGISTRATION', {
-    async execute(payload: { edirId: string }, { tx }) {
+    async execute(payload: { edirId: string; admin?: { name: string; email: string; phone: string } }, { tx, actor }) {
       // Transition Edir from PENDING to ACTIVE upon approval
       const edir = await tx.edir.update({
         where: { id: payload.edirId },
@@ -384,6 +387,45 @@ export function ensureApprovalModules() {
         await tx.relationshipCategory.createMany({
           data: DEFAULT_CATEGORIES.map((c, i) => ({ edirId: edir.id, name: c.name, benefitEligible: c.benefitEligible, emergencyEligible: c.emergencyEligible, displayOrder: i })),
         });
+      }
+
+      // Provision the primary managing user (the Edir Admin login) captured at
+      // registration. Older PENDING registrations have no admin payload — skip then.
+      if (payload.admin?.email && payload.admin?.phone) {
+        const email = payload.admin.email.toLowerCase().trim();
+        const phone = payload.admin.phone;
+        // Re-check uniqueness — the email/phone may have been taken between submit
+        // and approval. On conflict, skip the user but still activate the Edir; the
+        // Super-Admin can invite the admin manually from the Users page.
+        const [emailTaken, phoneTaken] = await Promise.all([
+          tx.user.findUnique({ where: { email }, select: { id: true } }),
+          tx.user.findUnique({ where: { phone }, select: { id: true } }),
+        ]);
+        if (emailTaken || phoneTaken) {
+          await writeAudit({
+            edirId: edir.id, userId: actor.id, action: 'USER_INVITE_SKIPPED', targetType: 'Edir', targetId: edir.id,
+            details: `Managing admin not provisioned for ${edir.name} — ${emailTaken ? 'email' : 'phone'} already in use (${email}).`,
+          }, tx);
+        } else {
+          const adminRole = await tx.role.findFirst({ where: { edirId: edir.id, name: 'Edir Admin' }, select: { id: true } });
+          const user = await tx.user.create({
+            data: { name: payload.admin.name, email, phone, edirId: edir.id, roleId: adminRole?.id ?? null, status: 'INVITED', mustChangePassword: true },
+          });
+          // 48h single-use set-password token (reuses PasswordResetToken), mirroring inviteUser.
+          const token = crypto.randomBytes(32).toString('hex');
+          await tx.passwordResetToken.upsert({
+            where: { email },
+            update: { token, expires: new Date(Date.now() + 48 * 60 * 60 * 1000) },
+            create: { email, token, expires: new Date(Date.now() + 48 * 60 * 60 * 1000) },
+          });
+          // Best-effort "account created, set your password" email (non-blocking).
+          sendVerificationEmail({ to: email, name: payload.admin.name, token })
+            .catch(err => console.error('Failed to send Edir admin invite email:', err));
+          await writeAudit({
+            edirId: edir.id, userId: actor.id, action: 'USER_INVITED', targetType: 'User', targetId: user.id,
+            details: `Invited managing admin ${email} for ${edir.name}.`,
+          }, tx);
+        }
       }
     },
   });

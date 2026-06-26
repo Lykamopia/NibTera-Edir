@@ -14,8 +14,9 @@
 
 import prisma from '@/lib/prisma';
 import type { Prisma, ApprovalModule } from '@prisma/client';
-import { MODULE_CHECKER_PERMISSION, MODULE_LABEL } from '@/lib/permissions';
-import { getActor, actorHasPermission, usersWithPermission, type Actor } from '@/lib/tenant-scope';
+import type { Permission } from '@/lib/types';
+import { MODULE_CHECKER_PERMISSION, MODULE_LABEL, isOrgGovernanceModule } from '@/lib/permissions';
+import { getActor, actorHasPermission, usersWithPermission, assertSameTenant, parsePermissions, type Actor } from '@/lib/tenant-scope';
 import { AccessDeniedError, NotFoundError } from '@/lib/errors';
 import { writeAudit } from '@/lib/audit';
 import { createNotification, createNotifications } from '@/lib/notification-helpers';
@@ -44,6 +45,105 @@ export function registerModule(module: ApprovalModule, def: ModuleDef) {
 
 export function checkerPermissionFor(module: ApprovalModule) {
   return MODULE_CHECKER_PERMISSION[module];
+}
+
+// ─── Visibility / role-based segregation ──────────────────────────────────────
+// Two classes of approval (see ORG_GOVERNANCE_MODULES in permissions.ts):
+//  • Org-governance (Edir registration/update): routed UP the branch → district →
+//    head-office hierarchy. Any org user holding the checker permission whose org
+//    unit covers the Edir's branch may review it (covers PENDING Edirs).
+//  • Edir-operational (everything else): reviewable ONLY by the request's own Edir
+//    users holding the checker permission.
+
+/** Modules the actor may check, resolved from their checker permissions. */
+export function eligibleModulesFor(actor: Actor): ApprovalModule[] {
+  return (Object.keys(MODULE_CHECKER_PERMISSION) as ApprovalModule[])
+    .filter(m => actorHasPermission(actor, MODULE_CHECKER_PERMISSION[m]));
+}
+
+/** Prisma fragment limiting governance requests to the Edirs within the actor's
+ *  org unit. Includes PENDING Edirs (no status filter), unlike accessibleEdirIds. */
+function orgUnitEdirWhere(actor: Actor): Prisma.ApprovalRequestWhereInput {
+  if (actor.orgScope === 'BRANCH') return actor.branchId ? { edir: { branchId: actor.branchId } } : { id: '__none__' };
+  if (actor.orgScope === 'DISTRICT') return actor.districtId ? { edir: { branch: { districtId: actor.districtId } } } : { id: '__none__' };
+  return {}; // HEAD_OFFICE: all branches/districts
+}
+
+/**
+ * Scope fragment for the PENDING approvals the actor may review, enforcing the
+ * governance-vs-operational segregation. Returns null when the actor can review
+ * nothing (caller should short-circuit to an empty result).
+ */
+export function pendingScopeWhere(
+  actor: Actor,
+  eligible: ApprovalModule[] = eligibleModulesFor(actor),
+): Prisma.ApprovalRequestWhereInput | null {
+  if (actor.isSuperAdmin) return {};
+  const gov = eligible.filter(isOrgGovernanceModule);
+  const op = eligible.filter(m => !isOrgGovernanceModule(m));
+  const clauses: Prisma.ApprovalRequestWhereInput[] = [];
+  // Operational: only the actor's own Edir.
+  if (op.length && actor.orgScope === 'EDIR' && actor.edirId) {
+    clauses.push({ module: { in: op }, edirId: actor.edirId });
+  }
+  // Governance: org users only, scoped to their org unit.
+  if (gov.length && actor.orgScope !== 'EDIR') {
+    clauses.push({ module: { in: gov }, ...orgUnitEdirWhere(actor) });
+  }
+  if (clauses.length === 0) return null;
+  return clauses.length === 1 ? clauses[0] : { OR: clauses };
+}
+
+/**
+ * Assert the actor's org scope allows acting on a request given its module class
+ * (independent of the checker permission, checked separately). Throws on mismatch.
+ */
+export async function assertCanCheckRequest(actor: Actor, request: { module: ApprovalModule; edirId: string }): Promise<void> {
+  if (actor.isSuperAdmin) return;
+  if (isOrgGovernanceModule(request.module)) {
+    if (actor.orgScope === 'EDIR') {
+      throw new AccessDeniedError('Edir-lifecycle approvals are handled at branch, district, or head-office level.');
+    }
+    await assertSameTenant(actor, request.edirId); // branch/district membership (HEAD_OFFICE = all)
+    return;
+  }
+  // Edir-operational: only the request's own Edir users.
+  if (actor.orgScope !== 'EDIR' || actor.edirId !== request.edirId) {
+    throw new AccessDeniedError('This approval can only be handled by the Edir’s own users.');
+  }
+}
+
+/** Boolean variant of assertCanCheckRequest (for read-side visibility checks). */
+export async function canCheckRequest(actor: Actor, request: { module: ApprovalModule; edirId: string }): Promise<boolean> {
+  try { await assertCanCheckRequest(actor, request); return true; } catch { return false; }
+}
+
+/** Eligible checkers to notify when a request is submitted/resubmitted. Governance
+ *  modules notify org users up the hierarchy; operational modules notify the Edir. */
+export async function usersToNotifyForApproval(module: ApprovalModule, edirId: string, perm: Permission): Promise<{ id: string }[]> {
+  if (!isOrgGovernanceModule(module)) {
+    return usersWithPermission(edirId, perm);
+  }
+  const edir = await prisma.edir.findUnique({
+    where: { id: edirId },
+    select: { branchId: true, branch: { select: { districtId: true } } },
+  });
+  const districtId = edir?.branch?.districtId ?? null;
+  const candidates = await prisma.user.findMany({
+    where: {
+      status: 'ACTIVE', edirId: null, role: { isNot: null },
+      OR: [
+        ...(edir?.branchId ? [{ branchId: edir.branchId }] : []),  // branch users of that branch
+        ...(districtId ? [{ districtId, branchId: null }] : []),   // district users of that district
+        { branchId: null, districtId: null },                     // head-office users
+      ],
+    },
+    include: { role: true },
+  });
+  return candidates.filter(u => {
+    const perms = parsePermissions(u.role?.permissions);
+    return perms.includes('super_admin') || perms.includes(perm);
+  });
 }
 
 export interface SubmitInput {
@@ -85,9 +185,10 @@ export async function submitForApproval(actor: Actor, input: SubmitInput): Promi
     details: `${MODULE_LABEL[input.module]}: ${input.title}`,
   });
 
-  // Notify all eligible checkers (excluding the maker).
+  // Notify all eligible checkers (excluding the maker). Governance modules route
+  // to org users up the hierarchy; operational modules notify the Edir's users.
   const checkerPerm = MODULE_CHECKER_PERMISSION[input.module];
-  const checkers = (await usersWithPermission(input.edirId, checkerPerm)).filter(u => u.id !== actor.id);
+  const checkers = (await usersToNotifyForApproval(input.module, input.edirId, checkerPerm)).filter(u => u.id !== actor.id);
   if (checkers.length > 0) {
     await createNotifications(checkers.map(u => ({
       userId: u.id,
@@ -112,10 +213,7 @@ async function loadRequest(requestId: string) {
 }
 
 /** Guard: actor must be an eligible checker (not the maker) for a PENDING request. */
-function assertCanCheck(actor: Actor, request: { module: ApprovalModule; makerId: string; status: string; edirId: string }) {
-  if (!actor.isSuperAdmin && actor.edirId !== request.edirId) {
-    throw new AccessDeniedError('This request belongs to a different Edir.');
-  }
+async function assertCanCheck(actor: Actor, request: { module: ApprovalModule; makerId: string; status: string; edirId: string }) {
   if (request.status !== 'PENDING') {
     throw new AccessDeniedError('This request is not pending approval.');
   }
@@ -126,6 +224,9 @@ function assertCanCheck(actor: Actor, request: { module: ApprovalModule; makerId
   if (!actorHasPermission(actor, perm)) {
     throw new AccessDeniedError('You do not have permission to approve this module.');
   }
+  // Org-scope segregation: governance routes up the hierarchy; operational stays
+  // within the request's own Edir.
+  await assertCanCheckRequest(actor, request);
 }
 
 /**
@@ -135,7 +236,7 @@ function assertCanCheck(actor: Actor, request: { module: ApprovalModule; makerId
 export async function approveRequest(requestId: string, comment?: string): Promise<void> {
   const actor = await getActor();
   const request = await loadRequest(requestId);
-  assertCanCheck(actor, request);
+  await assertCanCheck(actor, request);
 
   const def = MODULE_REGISTRY[request.module];
 
@@ -184,7 +285,7 @@ export async function approveRequest(requestId: string, comment?: string): Promi
 export async function rejectRequest(requestId: string, comment?: string): Promise<void> {
   const actor = await getActor();
   const request = await loadRequest(requestId);
-  assertCanCheck(actor, request);
+  await assertCanCheck(actor, request);
 
   const def = MODULE_REGISTRY[request.module];
 
@@ -221,7 +322,7 @@ export async function rejectRequest(requestId: string, comment?: string): Promis
 export async function returnRequest(requestId: string, comment?: string): Promise<void> {
   const actor = await getActor();
   const request = await loadRequest(requestId);
-  assertCanCheck(actor, request);
+  await assertCanCheck(actor, request);
 
   await prisma.approvalRequest.update({
     where: { id: request.id },
@@ -273,7 +374,7 @@ export async function resubmitRequest(requestId: string, payload?: any, summary?
     targetType: 'ApprovalRequest', targetId: request.id, details: request.title,
   });
 
-  const checkers = (await usersWithPermission(request.edirId, MODULE_CHECKER_PERMISSION[request.module]))
+  const checkers = (await usersToNotifyForApproval(request.module, request.edirId, MODULE_CHECKER_PERMISSION[request.module]))
     .filter(u => u.id !== actor.id);
   await createNotifications(checkers.map(u => ({
     userId: u.id, type: 'approval' as const, priority: 'high' as const,
@@ -282,17 +383,12 @@ export async function resubmitRequest(requestId: string, payload?: any, summary?
   })));
 }
 
-/** Count of pending requests the actor is eligible to check (for the nav badge). */
+/** Count of pending requests the actor is eligible to check (for the nav badge).
+ *  Mirrors the Pending list visibility via pendingScopeWhere. */
 export async function pendingApprovalCountForActor(actor: Actor): Promise<number> {
-  const eligibleModules = (Object.keys(MODULE_CHECKER_PERMISSION) as ApprovalModule[])
-    .filter(m => actorHasPermission(actor, MODULE_CHECKER_PERMISSION[m]));
-  if (eligibleModules.length === 0) return 0;
+  const scope = pendingScopeWhere(actor);
+  if (scope === null) return 0;
   return prisma.approvalRequest.count({
-    where: {
-      status: 'PENDING',
-      module: { in: eligibleModules },
-      makerId: { not: actor.id },
-      ...(actor.isSuperAdmin ? {} : { edirId: actor.edirId ?? '__none__' }),
-    },
+    where: { ...scope, status: 'PENDING', makerId: { not: actor.id } },
   });
 }

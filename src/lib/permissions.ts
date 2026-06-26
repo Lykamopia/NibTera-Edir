@@ -279,6 +279,17 @@ export const MODULE_CHECKER_PERMISSION: Record<ApprovalModule, Permission> = {
   RELATIONSHIP_CATEGORY: 'manage_edir_settings',
 };
 
+// Approval modules that represent platform/org governance of an Edir's lifecycle
+// (registering a new Edir, updating its official profile). These are routed UP the
+// branch → district → head-office hierarchy: any org user with the checker
+// permission whose org unit covers the Edir's branch may review them. Every OTHER
+// module is Edir-operational and may be reviewed ONLY by the request's own Edir
+// users. See pendingScopeWhere / assertCanCheckRequest in approval-engine.ts.
+export const ORG_GOVERNANCE_MODULES: ApprovalModule[] = ['EDIR_REGISTRATION', 'EDIR_UPDATE'];
+export function isOrgGovernanceModule(m: ApprovalModule): boolean {
+  return ORG_GOVERNANCE_MODULES.includes(m);
+}
+
 export const MODULE_LABEL: Record<ApprovalModule, string> = {
   MANUAL_PAYMENT: 'Manual Payment',
   EMERGENCY_CLAIM: 'Emergency Claim',

@@ -177,6 +177,9 @@ function PayInner() {
                 {m?.contributionCoverage?.paidThrough && (
                   <div className="flex items-center justify-between text-sm"><span className="text-muted-foreground">{t('paidThrough')}</span><span className="font-semibold text-success">{monthFmt(m.contributionCoverage.paidThrough)}</span></div>
                 )}
+                {m?.contributionCoverage?.nextDue && (
+                  <div className="flex items-center justify-between text-sm"><span className="text-muted-foreground">{t('payAheadFor')}</span><span className="font-semibold">{monthFmt(m.contributionCoverage.nextDue)}</span></div>
+                )}
               </div>
             )}
           </div>
@@ -254,6 +257,15 @@ function MemberPanel({ member, payerPhone, amount, setAmount, paying, error, txn
   // configured payment account. The server re-enforces this in getPaymentToken.
   const canPay = m.canAcceptPayments !== false;
 
+  // Has this member already settled the CURRENT calendar month? `paidThrough` is
+  // the latest fully-paid month; if it's the current month (or later, i.e. paid
+  // ahead) they are up to date and the next payable month is `nextDue`.
+  const thisMonthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+  const cov = m.contributionCoverage || {};
+  const paidThrough = cov.paidThrough ? new Date(cov.paidThrough) : null;
+  const settledThisMonth = !!paidThrough && paidThrough >= thisMonthStart;
+  const nextDue = cov.nextDue ?? null;
+
   return (
     <>
       {/* Who you are paying for — explicit when it differs from your own number */}
@@ -304,6 +316,19 @@ function MemberPanel({ member, payerPhone, amount, setAmount, paying, error, txn
           <Stat label={t('contribution')} value={t(m.contributionStatus)} icon={CheckCircle2} tone={m.contributionStatus === 'PAID' ? 'ok' : 'warn'} />
         </CardContent>
       </Card>
+
+      {/* This-month settlement — clear confirmation + the next payable month */}
+      {settledThisMonth && (
+        <div className="page-enter flex items-start gap-2.5 rounded-xl border border-success/30 bg-success/10 p-3.5 text-success">
+          <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0" />
+          <div className="min-w-0">
+            <div className="text-sm font-semibold">{monthFmt(thisMonthStart)} {t('settledWord')} · {t('upToDateMsg')}</div>
+            <div className="mt-0.5 text-xs text-foreground/80">
+              {nextDue ? `${t('payAheadFor')} ${monthFmt(nextDue)}` : t('upToDate')}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Contribution coverage — which months are paid / being paid */}
       <CoverageCard member={member} amount={amount} />

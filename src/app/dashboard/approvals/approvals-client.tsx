@@ -23,6 +23,7 @@ import {
   approveAction, rejectAction, returnAction, resubmitAction, commentAction,
   type ApprovalTab,
 } from '@/app/actions/approvals';
+import { ApprovalView } from './approval-view';
 
 const STATUS: Record<string, { label: string; cls: string; icon: any }> = {
   PENDING: { label: 'Pending', cls: 'border-warning/30 bg-warning/10 text-warning', icon: Clock },
@@ -207,16 +208,8 @@ function DetailDialog({ id, onClose, onChanged }: { id: string; onClose: () => v
           <div className="flex h-40 items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
         ) : (
           <div className="space-y-4">
-            <div>
-              <div className="text-base font-semibold">{detail.title}</div>
-              {detail.summary && <div className="text-sm text-muted-foreground">{detail.summary}</div>}
-              <div className="mt-1 text-xs text-muted-foreground">Maker: {detail.makerName}{detail.checkerName ? ` · Checker: ${detail.checkerName}` : ''}</div>
-            </div>
-
-            <div>
-              <div className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Details</div>
-              <pre className="overflow-x-auto rounded-lg border bg-muted/40 p-3 text-xs">{JSON.stringify(detail.payload, null, 2)}</pre>
-            </div>
+            <ApprovalView detail={detail} />
+            <div className="text-xs text-muted-foreground">Maker: {detail.makerName}{detail.checkerName ? ` · Checker: ${detail.checkerName}` : ''}</div>
 
             <div>
               <div className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Approval Timeline</div>

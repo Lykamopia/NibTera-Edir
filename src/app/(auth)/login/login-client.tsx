@@ -17,7 +17,6 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { getUserLockoutStatus } from '@/app/actions/admin';
 import { normalizeNibEmail } from '@/lib/utils';
 import { getFirstAccessiblePage } from '@/app/actions/auth';
-import Link from 'next/link';
 import { motion, AnimatePresence } from 'framer-motion';
 import { getBackgroundImages } from '@/app/actions/settings';
 
@@ -461,14 +460,6 @@ export default function LoginClientPage() {
                                             {errors.password && (
                                                 <p className="text-xs text-destructive dark:text-red-400 mt-1 ml-1">{errors.password.message}</p>
                                             )}
-                                            <div className="flex justify-end">
-                                                <Link
-                                                    href="/forgot-password"
-                                                    className="text-xs text-muted-foreground hover:text-foreground dark:text-white/50 dark:hover:text-white/80 transition-colors"
-                                                >
-                                                    Forgot password?
-                                                </Link>
-                                            </div>
                                         </div>
                                         <Button
                                             type="submit" 

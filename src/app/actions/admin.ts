@@ -68,6 +68,36 @@ export async function getRoles() {
   return roles.map(r => ({ id: r.id, name: r.name, scope: r.scope, permissions: r.permissions, userCount: r._count.users, edirId: r.edirId, edirName: r.edir?.name ?? null }));
 }
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * Create one INVITED user: account → 48h set-password token → set-password email
+ * (non-blocking) → audit → best-effort membership. Assumes the caller has already
+ * validated and normalized the email (lowercased) and phone (E.164), and that both
+ * are unique. Shared by inviteUser (single) and bulkInviteUsers (CSV import).
+ */
+async function inviteOneUser(
+  actor: Actor,
+  data: { name: string; email: string; phone: string; roleId: string | null; edirId: string },
+): Promise<{ id: string }> {
+  const user = await prisma.user.create({
+    data: { name: data.name, email: data.email, phone: data.phone, edirId: data.edirId, roleId: data.roleId || null, status: 'INVITED', mustChangePassword: true },
+  });
+  // 48h single-use set-password token (reuses PasswordResetToken).
+  const token = crypto.randomBytes(32).toString('hex');
+  await prisma.passwordResetToken.upsert({
+    where: { email: data.email },
+    update: { token, expires: new Date(Date.now() + 48 * 60 * 60 * 1000) },
+    create: { email: data.email, token, expires: new Date(Date.now() + 48 * 60 * 60 * 1000) },
+  });
+  sendVerificationEmail({ to: data.email, name: data.name, token })
+    .catch(err => console.error('Failed to send invite email:', err));
+  await writeAudit({ edirId: data.edirId, userId: actor.id, action: 'USER_INVITED', targetType: 'User', targetId: user.id, details: `Invited ${data.email}.` });
+  // Invited users are also regular Edir members (obligations follow the bylaws, not the role).
+  try { await ensureMembershipForUser(user.id); } catch { /* non-fatal */ }
+  return user;
+}
+
 const inviteSchema = z.object({
   name: z.string().min(2),
   email: z.string().email(),
@@ -106,26 +136,106 @@ export async function inviteUser(input: z.infer<typeof inviteSchema>) {
       }
     }
 
-    const user = await prisma.user.create({
-      data: { name: data.name, email, phone, edirId, roleId: data.roleId || null, status: 'INVITED', mustChangePassword: true },
-    });
-
-    // 48h single-use set-password token (reuses PasswordResetToken).
-    const token = crypto.randomBytes(32).toString('hex');
-    await prisma.passwordResetToken.upsert({
-      where: { email },
-      update: { token, expires: new Date(Date.now() + 48 * 60 * 60 * 1000) },
-      create: { email, token, expires: new Date(Date.now() + 48 * 60 * 60 * 1000) },
-    });
-    // New account → "account created, set your password" email (not a reset).
-    sendVerificationEmail({ to: email, name: data.name, token })
-      .catch(err => console.error('Failed to send invite email:', err));
-
-    await writeAudit({ edirId, userId: actor.id, action: 'USER_INVITED', targetType: 'User', targetId: user.id, details: `Invited ${email}.` });
-    // Invited users are also regular Edir members (obligations follow the bylaws, not the role).
-    try { await ensureMembershipForUser(user.id); } catch { /* non-fatal */ }
+    const user = await inviteOneUser(actor, { name: data.name, email, phone, roleId: data.roleId || null, edirId });
     revalidatePath('/dashboard/admin/users');
     return { success: true as const, userId: user.id };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+// ─── Bulk user import (CSV) ────────────────────────────────────────────────────
+
+export interface BulkUserRow { name?: string; email?: string; phone?: string; role?: string }
+export interface BulkInviteResult {
+  success: true;
+  total: number;
+  created: number;
+  failed: { row: number; email?: string; error: string }[];
+}
+
+/**
+ * Import many users at once into a single target Edir. Each row is validated the
+ * same way inviteUser validates (name, unique valid email, unique valid Ethiopian
+ * phone, optional role that belongs to the Edir); valid rows are created as
+ * INVITED, and a per-row error list is returned for the rest. Row numbers are
+ * 1-based (matching the CSV data rows the caller previewed).
+ */
+export async function bulkInviteUsers(input: { edirId?: string | null; rows: BulkUserRow[] }) {
+  try {
+    const actor = await getActor();
+    await assertPermission(actor, 'manage_users');
+    if (actor.isSuperAdmin && !input.edirId) return { success: false as const, error: 'Select an Edir for the imported users.' };
+    const edirId = await resolveEdirId(actor, input.edirId);
+
+    const rows = Array.isArray(input.rows) ? input.rows : [];
+    if (rows.length === 0) return { success: false as const, error: 'No rows to import.' };
+    if (rows.length > 500) return { success: false as const, error: 'Import is limited to 500 rows at a time.' };
+
+    // Roles assignable in this Edir: its own roles + cross-Edir EDIR templates.
+    const roles = await prisma.role.findMany({
+      where: { OR: [{ edirId }, { scope: 'EDIR', edirId: null }] },
+      select: { id: true, name: true },
+    });
+    const roleByName = new Map(roles.map(r => [r.name.trim().toLowerCase(), r.id]));
+
+    type Norm = { idx: number; name: string; email: string; phone: string; roleId: string | null; error?: string };
+    const normalized: Norm[] = rows.map((r, i) => {
+      const name = (r.name ?? '').trim();
+      const email = (r.email ?? '').toLowerCase().trim();
+      const rawPhone = (r.phone ?? '').trim();
+      const roleName = (r.role ?? '').trim();
+      let error: string | undefined;
+      let roleId: string | null = null;
+      if (name.length < 2) error = 'Name is required.';
+      else if (!EMAIL_RE.test(email)) error = 'Invalid email.';
+      else if (!isValidEthiopianPhone(rawPhone)) error = 'Invalid phone number.';
+      else if (roleName) {
+        const id = roleByName.get(roleName.toLowerCase());
+        if (!id) error = `Unknown role "${roleName}".`;
+        else roleId = id;
+      }
+      return { idx: i, name, email, phone: error ? rawPhone : normalizeEthiopianPhone(rawPhone), roleId, error };
+    });
+
+    // Existing emails/phones in a single batch (only for rows that parsed cleanly).
+    const okRows = normalized.filter(n => !n.error);
+    const existing = okRows.length
+      ? await prisma.user.findMany({
+          where: { OR: [{ email: { in: okRows.map(n => n.email) } }, { phone: { in: okRows.map(n => n.phone) } }] },
+          select: { email: true, phone: true },
+        })
+      : [];
+    const takenEmails = new Set(existing.map(u => u.email).filter(Boolean) as string[]);
+    const takenPhones = new Set(existing.map(u => u.phone).filter(Boolean) as string[]);
+
+    const failed: { row: number; email?: string; error: string }[] = [];
+    const seenEmail = new Set<string>();
+    const seenPhone = new Set<string>();
+    const toCreate: Norm[] = [];
+    for (const n of normalized) {
+      const row = n.idx + 1;
+      if (n.error) { failed.push({ row, email: n.email || undefined, error: n.error }); continue; }
+      if (seenEmail.has(n.email) || seenPhone.has(n.phone)) { failed.push({ row, email: n.email, error: 'Duplicate row in file.' }); continue; }
+      if (takenEmails.has(n.email)) { failed.push({ row, email: n.email, error: 'A user with this email already exists.' }); continue; }
+      if (takenPhones.has(n.phone)) { failed.push({ row, email: n.email, error: 'A user with this phone already exists.' }); continue; }
+      seenEmail.add(n.email); seenPhone.add(n.phone);
+      toCreate.push(n);
+    }
+
+    let created = 0;
+    for (const n of toCreate) {
+      try {
+        await inviteOneUser(actor, { name: n.name, email: n.email, phone: n.phone, roleId: n.roleId, edirId });
+        created++;
+      } catch (e) {
+        failed.push({ row: n.idx + 1, email: n.email, error: e instanceof Error ? e.message : 'Failed to create.' });
+      }
+    }
+
+    if (created > 0) revalidatePath('/dashboard/people');
+    failed.sort((a, b) => a.row - b.row);
+    return { success: true as const, total: rows.length, created, failed };
   } catch (error) {
     return failure(error);
   }
