@@ -33,16 +33,19 @@ const uploadSchema = z.object({
 });
 
 async function loadRelative(relativeId: string) {
-  return prisma.relative.findUnique({ where: { id: relativeId }, include: { member: { select: { edirId: true, name: true } } } });
+  return prisma.relative.findUnique({ where: { id: relativeId }, include: { member: { select: { edirId: true, name: true, userId: true } } } });
 }
 
 /** Maker action: upload a relative/dependent document (or a new version). Lands PENDING until a Checker approves. */
 export async function submitRelativeDocument(relativeId: string, input: z.infer<typeof uploadSchema>) {
   try {
     const actor = await getActor();
-    await assertPermission(actor, [...MAKER_PERMS]);
     const rel = await loadRelative(relativeId);
     if (!rel) return { success: false as const, error: 'Relative not found.' };
+    // A member may upload a proof document for their OWN dependent (self-service);
+    // staff need a maker permission. Either path lands PENDING for Checker approval.
+    const isOwner = !!rel.member.userId && rel.member.userId === actor.id;
+    if (!isOwner) await assertPermission(actor, [...MAKER_PERMS]);
     await assertSameTenant(actor, rel.member.edirId);
     const data = uploadSchema.parse(input);
 

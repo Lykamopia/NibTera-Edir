@@ -14,6 +14,7 @@ import { sendPasswordResetEmail, sendVerificationEmail } from '@/lib/email';
 import { generateTempPassword } from '@/lib/temp-password';
 import bcrypt from 'bcrypt';
 import { ensureMembershipForUser } from '@/app/actions/members';
+import { resubmitRequest } from '@/lib/approval-engine';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
 import { dateWhere, type DateRangeParam } from '@/lib/date-range';
@@ -599,6 +600,17 @@ export async function saveEdir(input: SaveEdirInput) {
 
     if (input.id) {
       await prisma.edir.update({ where: { id: input.id }, data: { name, ...profile } });
+      // If this Edir's registration was RETURNED to its maker, saving the revision
+      // re-submits it to the checker (status → PENDING) so it reappears in the
+      // approval queue. Only the original maker's edit resubmits (engine enforces this).
+      const returned = await prisma.approvalRequest.findFirst({
+        where: { module: 'EDIR_REGISTRATION', targetId: input.id, status: 'RETURNED' },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true, makerId: true },
+      });
+      if (returned && returned.makerId === actor.id) {
+        await resubmitRequest(returned.id);
+      }
     } else {
       const edir = await prisma.edir.create({ data: { name, ...profile } });
       await prisma.edirSettings.create({ data: { edirId: edir.id } });

@@ -22,6 +22,7 @@ import { NotificationSettings } from '@/components/notification-settings';
 import { changePassword } from '@/app/actions/auth';
 import { getMyPortal } from '@/app/actions/account';
 import { getMyRequests, submitMemberRequest } from '@/app/actions/member-requests';
+import { submitRelativeDocument } from '@/app/actions/relative-documents';
 import { getActiveRelationshipCategories } from '@/app/actions/relationship-categories';
 import { toUserError } from '@/lib/errors';
 
@@ -46,6 +47,34 @@ async function uploadDoc(file: File): Promise<string | null> {
   const d = await r.json();
   if (!r.ok || !d.success) { toast.error(d.error || 'Upload failed.'); return null; }
   return d.path as string;
+}
+
+/** Self-service: a member uploads a proof-of-relationship for their own dependent.
+ *  The document lands PENDING and is approved by an Edir reviewer (Maker–Checker). */
+function RelativeProofUpload({ relativeId, onDone }: { relativeId: string; onDone: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const ref = useRef<HTMLInputElement>(null);
+  const onFile = async (file?: File) => {
+    if (!file) return;
+    setBusy(true);
+    const path = await uploadDoc(file);
+    if (!path) { setBusy(false); return; }
+    const res = await submitRelativeDocument(relativeId, {
+      fileUrl: path, fileName: file.name, documentName: file.name.replace(/\.[^.]+$/, ''),
+      category: 'Proof of Relationship',
+    });
+    setBusy(false);
+    if (res?.success) { toast.success('Proof submitted — pending Edir approval.'); onDone(); }
+    else toast.error(res?.error || 'Upload failed.');
+  };
+  return (
+    <>
+      <Button size="sm" variant="outline" className="mt-2 h-7 gap-1 text-xs" disabled={busy} onClick={() => ref.current?.click()}>
+        {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />} Upload proof
+      </Button>
+      <input ref={ref} type="file" accept="image/*,application/pdf" className="hidden" onChange={e => { onFile(e.target.files?.[0]); if (ref.current) ref.current.value = ''; }} />
+    </>
+  );
 }
 
 export default function AccountClient() {
@@ -255,6 +284,7 @@ export default function AccountClient() {
                     </div>
                     {r.phone && <div className="mt-0.5 text-xs text-muted-foreground">{r.phone}</div>}
                     {r.documents.length > 0 && <div className="mt-2 flex flex-wrap gap-1.5">{r.documents.map(d => <Badge key={d.id} variant="outline" className="text-[10px]">{d.fileName ?? 'Doc'} · {d.status}</Badge>)}</div>}
+                    <RelativeProofUpload relativeId={r.id} onDone={load} />
                   </CardContent></Card>
                 ))}
               </div>
