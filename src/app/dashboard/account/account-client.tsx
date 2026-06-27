@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -83,6 +84,7 @@ export default function AccountClient() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [requestType, setRequestType] = useState<string | null>(null);
+  const searchParams = useSearchParams();
 
   const load = useCallback(() => {
     setLoading(true); setError(false);
@@ -98,6 +100,12 @@ export default function AccountClient() {
   const cur = p.hasMembership ? p.payments.currency : 'ETB';
   const m = p.hasMembership ? p.member : null;
   const initials = (p.account.name || '?').split(' ').map(s => s[0]).slice(0, 2).join('').toUpperCase();
+
+  // Honour ?tab= deep-links (e.g. the user-menu "Change Password" → ?tab=security),
+  // but only for tabs visible to this user; otherwise fall back to a sensible default.
+  const visibleTabs = p.hasMembership ? ['overview', 'payments', 'relatives', 'requests', 'documents', 'security'] : ['security'];
+  const tabParam = searchParams.get('tab');
+  const defaultTab = tabParam && visibleTabs.includes(tabParam) ? tabParam : (p.hasMembership ? 'overview' : 'security');
 
   return (
     <div className="space-y-5">
@@ -134,7 +142,7 @@ export default function AccountClient() {
         </CardContent>
       </Card>
 
-      <Tabs defaultValue={p.hasMembership ? "overview" : "security"}>
+      <Tabs defaultValue={defaultTab}>
         <TabsList className="flex w-full flex-wrap justify-start">
           {p.hasMembership && <TabsTrigger value="overview"><CircleUser className="mr-1.5 h-4 w-4" /> Overview</TabsTrigger>}
           {p.hasMembership && <TabsTrigger value="payments"><CreditCard className="mr-1.5 h-4 w-4" /> Payments</TabsTrigger>}
