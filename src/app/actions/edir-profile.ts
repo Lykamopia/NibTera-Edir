@@ -32,7 +32,9 @@ export async function getEdirProfile(edirId: string) {
   const oversight = isOversight(actor);
   const ownEdir = actor.edirId === edirId;
   const allowed = oversight
-    || actorHasPermission(actor, ['approve_edir_registration', 'register_edir'])
+    // Any Edir-lifecycle permission (view/create/edit/revoke/delete) or a
+    // registration approver/maker may view an Edir's details.
+    || actorHasPermission(actor, ['view_edir', 'create_edir', 'edit_edir', 'revoke_edir', 'delete_edir', 'approve_edir_registration', 'approve_edir_update', 'register_edir'])
     || (ownEdir && actorHasPermission(actor, ['manage_edir_settings', 'view_members', 'view_dashboard']));
   if (!allowed) throw new AccessDeniedError();
   // Enforce tenant scope (head-office/super pass; branch/district/edir checked).
@@ -205,8 +207,9 @@ export async function getEdirProfile(edirId: string) {
       canViewSettings: oversight || has(['manage_edir_settings', 'manage_committee']),
       canViewAudit: oversight || has(['view_audit_log', 'view_payment_log']),
       // Recover a manager who can't sign in (e.g. their invite email failed): issue
-      // a temporary password to hand over manually. Gated on reset_password.
-      canResetPassword: has(['reset_password', 'super_admin']),
+      // a temporary password to hand over manually. Available to user managers
+      // (reset_password) and Edir managers (manage_edirs — they provisioned the admin).
+      canResetPassword: has(['reset_password', 'manage_edirs', 'super_admin']),
     },
   };
 }

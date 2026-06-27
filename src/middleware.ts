@@ -9,7 +9,7 @@ const FRAMABLE_PREFIXES = ["/pay", "/portal", "/api/nib-callback"];
 // stays in the edge runtime without importing the Prisma-backed permission
 // registry. Mirrors src/lib/permissions.ts `pagePermissions`; longest-match wins.
 const ROUTE_PERMISSIONS: { path: string; perms: string[] }[] = [
-  { path: '/dashboard/people', perms: ['view_members', 'manage_members', 'view_users', 'manage_users', 'manage_associations', 'super_admin'] },
+  { path: '/dashboard/people', perms: ['view_members', 'manage_members', 'view_users', 'manage_users', 'super_admin'] },
   { path: '/dashboard/members', perms: ['view_members', 'manage_members'] },
   { path: '/dashboard/payments', perms: ['view_payments', 'record_payment'] },
   { path: '/dashboard/approvals', perms: ['view_approvals', 'approve_payment', 'approve_member_removal', 'approve_penalty_waiver', 'approve_emergency_claim', 'approve_emergency_disbursement', 'approve_asset_issuance', 'approve_rule_change', 'approve_edir_registration', 'approve_edir_update', 'approve_user_creation', 'approve_document', 'review_member_documents'] },
@@ -28,10 +28,12 @@ const ROUTE_PERMISSIONS: { path: string; perms: string[] }[] = [
   { path: '/dashboard/system/districts', perms: ['view_districts', 'manage_districts', 'create_district', 'edit_district', 'delete_district', 'import_districts', 'super_admin'] },
   { path: '/dashboard/system/branches', perms: ['view_branches', 'manage_branches', 'create_branch', 'edit_branch', 'delete_branch', 'import_branches', 'manage_districts', 'super_admin'] },
   { path: '/dashboard/system/associations', perms: ['manage_associations', 'manage_edirs', 'super_admin'] },
-  { path: '/dashboard/edir-registration', perms: ['register_edir', 'approve_edir_registration', 'manage_edirs', 'super_admin'] },
+  // Any single Edir permission grants access to the Edirs page (mirrors the
+  // 'edir-registration' page definition in src/lib/permissions.ts).
+  { path: '/dashboard/edir-registration', perms: ['view_edir', 'register_edir', 'approve_edir_registration', 'approve_edir_update', 'manage_edirs', 'create_edir', 'edit_edir', 'revoke_edir', 'delete_edir', 'view_edir_reports', 'super_admin'] },
   // Edir profile (details) page — reachable by oversight roles and Edir admins; the
   // getEdirProfile action enforces precise tenant scope + per-tab visibility.
-  { path: '/dashboard/edirs', perms: ['manage_edirs', 'view_edir_reports', 'approve_edir_registration', 'register_edir', 'view_districts', 'manage_districts', 'view_branches', 'manage_branches', 'manage_edir_settings', 'view_members', 'super_admin'] },
+  { path: '/dashboard/edirs', perms: ['view_edir', 'manage_edirs', 'create_edir', 'edit_edir', 'revoke_edir', 'delete_edir', 'view_edir_reports', 'approve_edir_registration', 'approve_edir_update', 'register_edir', 'view_districts', 'manage_districts', 'view_branches', 'manage_branches', 'view_members', 'super_admin'] },
 ].sort((a, b) => b.path.length - a.path.length);
 
 // Trusted origins permitted to embed the framable (public pay/portal) routes.

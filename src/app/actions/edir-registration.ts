@@ -35,7 +35,7 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export async function submitEdirRegistration(input: EdirRegistrationInput) {
   try {
     const actor = await getActor();
-    await assertPermission(actor, ['register_edir', 'super_admin']);
+    await assertPermission(actor, ['register_edir', 'create_edir', 'manage_edirs', 'super_admin']);
 
     const name = input.name?.trim();
     if (!name) return { success: false as const, error: 'Edir name is required.' };
@@ -120,7 +120,7 @@ export async function submitEdirRegistration(input: EdirRegistrationInput) {
 export async function getEdirRegistrations(filters?: { status?: 'PENDING' | 'APPROVED' | 'REJECTED' | 'RETURNED'; page?: number }) {
   try {
     const actor = await getActor();
-    await assertPermission(actor, ['register_edir', 'approve_edir_registration', 'super_admin']);
+    await assertPermission(actor, ['register_edir', 'approve_edir_registration', 'create_edir', 'manage_edirs', 'super_admin']);
 
     const page = Math.max(1, filters?.page ?? 1);
     const limit = 25;
@@ -197,7 +197,7 @@ export async function getEdirRegistrations(filters?: { status?: 'PENDING' | 'APP
 export async function getEdirRegistration(edirId: string) {
   try {
     const actor = await getActor();
-    await assertPermission(actor, ['register_edir', 'approve_edir_registration', 'super_admin']);
+    await assertPermission(actor, ['register_edir', 'approve_edir_registration', 'create_edir', 'manage_edirs', 'super_admin']);
 
     const edir = await prisma.edir.findUnique({
       where: { id: edirId },

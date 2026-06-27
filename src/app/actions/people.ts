@@ -1,6 +1,7 @@
 'use server';
 
 import prisma from '@/lib/prisma';
+import { Prisma } from '@prisma/client';
 import { getActor, actorHasPermission, tenantWhere } from '@/lib/tenant-scope';
 import { AccessDeniedError } from '@/lib/errors';
 import { dateWhere, type DateRangeParam } from '@/lib/date-range';
@@ -45,7 +46,6 @@ export interface PeopleContext {
   canManageUsers: boolean;
   canLock: boolean;
   canResetPassword: boolean;
-  canManageAssociations: boolean;
   edirs: { id: string; name: string }[];
   roles: { id: string; name: string; scope: string; edirId: string | null }[];
 }
@@ -65,14 +65,10 @@ function buildCaps(actor: Awaited<ReturnType<typeof getActor>>): PeopleContext {
     isSuperAdmin,
     canMembers: isSuperAdmin || actorHasPermission(actor, ['view_members', 'manage_members']),
     canManageMembers: isSuperAdmin || actorHasPermission(actor, ['manage_members']),
-    // manage_associations folds in here: the standalone User Associations module was
-    // merged into People, so association managers must be able to manage users here.
-    canUsers: isSuperAdmin || actorHasPermission(actor, ['view_users', 'manage_users', 'manage_associations']),
-    canManageUsers: isSuperAdmin || actorHasPermission(actor, ['manage_users', 'manage_associations']),
+    canUsers: isSuperAdmin || actorHasPermission(actor, ['view_users', 'manage_users']),
+    canManageUsers: isSuperAdmin || actorHasPermission(actor, ['manage_users']),
     canLock: isSuperAdmin || actorHasPermission(actor, ['lock_user', 'unlock_user']),
     canResetPassword: isSuperAdmin || actorHasPermission(actor, ['reset_password']),
-    // Scope/association editing (move a user across Edir/branch/district/head-office).
-    canManageAssociations: isSuperAdmin || actorHasPermission(actor, ['manage_associations']),
     edirs: [],
     roles: [],
   };
@@ -200,12 +196,22 @@ export async function getPeopleDirectory(params: { edirId?: string; range?: Date
   const edirs = actor.isSuperAdmin
     ? await prisma.edir.findMany({ orderBy: { name: 'asc' }, select: { id: true, name: true } })
     : (actor.edirId ? await prisma.edir.findMany({ where: { id: actor.edirId }, select: { id: true, name: true } }) : []);
-  // Never expose the platform Super-Admin role as an assignable option — it must
-  // not be grantable through member/user management (privilege-escalation guard).
+  // Assignable roles for the People dropdowns. The list must contain only roles
+  // that belong to the Edir in context plus the global EDIR templates — never
+  // another Edir's roles (privilege/clutter guard). The platform Super-Admin role
+  // is never exposed (it must not be grantable via member/user management).
+  //   • Super-Admin + a specific Edir selected → that Edir's roles + global templates.
+  //   • Super-Admin + "all"/"none"            → every Edir's roles (each row's dropdown
+  //                                             is filtered to its own Edir client-side).
+  //   • Edir/Tenant user                      → their own Edir's roles + global templates.
+  const selectedEdirId = params.edirId && params.edirId !== 'all' && params.edirId !== 'none' ? params.edirId : null;
+  const roleWhere: Prisma.RoleWhereInput = actor.isSuperAdmin
+    ? (selectedEdirId
+        ? { scope: 'EDIR', OR: [{ edirId: selectedEdirId }, { edirId: null }] }
+        : { scope: { not: 'SUPER_ADMIN' } })
+    : { OR: [{ edirId: actor.edirId }, { scope: 'EDIR', edirId: null }] };
   const roles = await prisma.role.findMany({
-    where: actor.isSuperAdmin
-      ? { scope: { not: 'SUPER_ADMIN' } }
-      : { OR: [{ edirId: actor.edirId }, { scope: 'EDIR', edirId: null }] },
+    where: roleWhere,
     orderBy: { name: 'asc' },
     select: { id: true, name: true, scope: true, edirId: true },
   });

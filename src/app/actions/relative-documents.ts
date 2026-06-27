@@ -11,7 +11,10 @@ import { failure } from '@/lib/action-result';
 
 export const RELATIVE_DOC_CATEGORIES = ['National ID', 'Birth Certificate', 'Passport', 'Medical Certificate', 'Marriage Certificate', 'Proof of Relationship', 'Photo', 'Other'] as const;
 
-const MAKER_PERMS = ['manage_documents', 'manage_members'] as const;
+// Managing a dependent's documents is part of managing the dependent, so anyone who
+// can manage relatives (manage_relatives) may upload/edit/delete here too — it still
+// routes through Maker–Checker. manage_documents / manage_members also qualify.
+const MAKER_PERMS = ['manage_relatives', 'manage_documents', 'manage_members'] as const;
 
 function fileTypeOf(name: string | null | undefined): 'image' | 'pdf' | 'file' {
   const s = (name || '').toLowerCase();
@@ -204,7 +207,7 @@ function serializeDoc(d: any, names: Map<string, string | null>) {
 /** Document lines (latest version + history) for a relative, plus the actor's capabilities. */
 export async function getRelativeDocuments(relativeId: string) {
   const actor = await getActor();
-  await assertPermission(actor, ['view_members', 'manage_members', 'manage_documents', 'review_member_documents']);
+  await assertPermission(actor, ['view_members', 'manage_members', 'manage_relatives', 'manage_documents', 'review_member_documents']);
   const rel = await loadRelative(relativeId);
   if (!rel) return null;
   await assertSameTenant(actor, rel.member.edirId);

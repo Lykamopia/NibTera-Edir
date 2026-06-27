@@ -132,6 +132,7 @@ export type Permission =
   // System (Super Admin / platform)
   | 'manage_edirs'
   // Granular Edir operations (platform-scoped)
+  | 'view_edir'
   | 'create_edir'
   | 'edit_edir'
   | 'revoke_edir'

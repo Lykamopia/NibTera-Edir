@@ -339,12 +339,14 @@ export async function adminResetUserPassword(userId: string) {
  * email to a newly-activated Edir manager failed to send. The account is also
  * ACTIVATED so the user can sign in immediately (auth rejects non-ACTIVE accounts)
  * and is forced to change the password on first login. Existing sessions are
- * revoked. Restricted to `reset_password` (super_admin bypasses) and audited.
+ * revoked. Restricted to `reset_password` or `manage_edirs` (the Edir-provisioning
+ * umbrella — so whoever creates an Edir + its admin can also recover that admin);
+ * super_admin bypasses. Audited.
  */
 export async function adminGenerateTempPassword(userId: string) {
   try {
     const actor = await getActor();
-    await assertPermission(actor, 'reset_password');
+    await assertPermission(actor, ['reset_password', 'manage_edirs']);
     const user = await prisma.user.findUnique({ where: { id: userId }, include: { role: { select: { scope: true } } } });
     if (!user) return { success: false as const, error: 'User not found.' };
     if (user.role?.scope === 'SUPER_ADMIN') return { success: false as const, error: 'Platform Super-Admins cannot be reset here.' };
@@ -508,9 +510,15 @@ export async function ensureDefaultEdirRoles(edirId: string, client: Prisma.Tran
 
 export async function getEdirs(range?: DateRangeParam) {
   const actor = await getActor();
-  await assertPermission(actor, ['view_edir', 'register_edir', 'approve_edir_registration', 'approve_edir_update', 'manage_edirs', 'create_edir', 'edit_edir', 'revoke_edir', 'delete_edir', 'manage_edir_documents', 'manage_edir_settings', 'view_edir_reports', 'super_admin']);
+  await assertPermission(actor, ['view_edir', 'register_edir', 'approve_edir_registration', 'approve_edir_update', 'manage_edirs', 'create_edir', 'edit_edir', 'revoke_edir', 'delete_edir', 'view_edir_reports', 'super_admin']);
+  // Org scope: Branch/District users only see Edirs within their unit (mirrors
+  // getEdirRegistrations); Head Office / Super-Admin see all.
+  const where: Prisma.EdirWhereInput = { ...dateWhere('createdAt', range) };
+  if (actor.orgScope === 'BRANCH' && actor.branchId) where.branchId = actor.branchId;
+  else if (actor.orgScope === 'DISTRICT' && actor.districtId) where.branch = { districtId: actor.districtId };
+
   const edirs = await prisma.edir.findMany({
-    where: { ...dateWhere('createdAt', range) },
+    where,
     include: {
       _count: { select: { members: true, users: true } },
       branch: { select: { id: true, name: true, code: true, district: { select: { name: true } } } },
@@ -547,7 +555,7 @@ export async function getEdirAdminCapabilities() {
     canCreate: actorHasPermission(actor, ['create_edir', 'manage_edirs', 'super_admin']),
     canEdit: actorHasPermission(actor, ['edit_edir', 'manage_edirs', 'super_admin']),
     canRevoke: actorHasPermission(actor, ['revoke_edir', 'manage_edirs', 'super_admin']),
-    canDelete: actorHasPermission(actor, ['delete_edir', 'super_admin']),
+    canDelete: actorHasPermission(actor, ['delete_edir', 'manage_edirs', 'super_admin']),
     canApprove: actorHasPermission(actor, ['approve_edir_registration', 'approve_edir_update', 'super_admin']),
   };
 }
@@ -627,7 +635,7 @@ export async function revokeEdir(edirId: string, status: 'ACTIVE' | 'SUSPENDED' 
 export async function deleteEdir(edirId: string) {
   try {
     const actor = await getActor();
-    await assertPermission(actor, ['delete_edir', 'super_admin']);
+    await assertPermission(actor, ['delete_edir', 'manage_edirs', 'super_admin']);
     const edir = await prisma.edir.findUnique({ where: { id: edirId }, select: { id: true, name: true } });
     if (!edir) return { success: false as const, error: 'Edir not found.' };
 

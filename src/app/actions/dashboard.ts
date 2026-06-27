@@ -1,7 +1,7 @@
 'use server';
 
 import prisma from '@/lib/prisma';
-import { getActor, tenantWhere, actorHasPermission } from '@/lib/tenant-scope';
+import { getActor, tenantWhere, actorHasPermission, assertPermission } from '@/lib/tenant-scope';
 import { AccessDeniedError } from '@/lib/errors';
 import { pendingApprovalCountForActor } from '@/lib/approval-engine';
 import { dateWhere, type DateRangeParam } from '@/lib/date-range';
@@ -58,6 +58,72 @@ export async function getDashboardData(range?: DateRangeParam): Promise<Dashboar
       memberName: p.member?.name ?? null, createdAt: p.createdAt,
     })),
   };
+}
+
+// ─── Scoped (Branch / District) dashboards ────────────────────────────────────
+
+/** Core KPIs for a set of Edirs — reused by the branch dashboard and per branch
+ *  in the district dashboard. */
+async function scopedMetrics(edirIds: string[], range?: DateRangeParam) {
+  if (edirIds.length === 0) {
+    return { totalEdirs: 0, activeEdirs: 0, pendingRegistrations: 0, totalMembers: 0, newMembers: 0, collected: 0, outstanding: 0, pendingApprovals: 0 };
+  }
+  const inScope = { edirId: { in: edirIds } };
+  const edirWhere = { id: { in: edirIds } };
+  const txDate = dateWhere('createdAt', range);
+  const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+
+  const [totalEdirs, activeEdirs, pendingRegistrations, totalMembers, newMembers, collectedAgg, outstandingAgg, pendingApprovals] = await Promise.all([
+    prisma.edir.count({ where: edirWhere }),
+    prisma.edir.count({ where: { ...edirWhere, status: 'ACTIVE' } }),
+    prisma.edir.count({ where: { ...edirWhere, status: 'PENDING' } }),
+    prisma.member.count({ where: inScope }),
+    prisma.member.count({ where: { ...inScope, joinDate: { gte: monthStart } } }),
+    prisma.paymentLog.aggregate({ _sum: { amount: true }, where: { ...inScope, ...txDate, status: { in: ['SUCCESS', 'PARTIAL'] } } }),
+    prisma.paymentStatus.aggregate({ _sum: { balance: true }, where: { member: inScope } }),
+    prisma.approvalRequest.count({ where: { ...inScope, status: 'PENDING' } }),
+  ]);
+
+  return {
+    totalEdirs, activeEdirs, pendingRegistrations, totalMembers, newMembers,
+    collected: Number(collectedAgg._sum.amount ?? 0),
+    outstanding: Number(outstandingAgg._sum.balance ?? 0),
+    pendingApprovals,
+  };
+}
+
+/** Branch-scoped dashboard — analytics for the Edirs in the actor's branch. */
+export async function getBranchDashboard(range?: DateRangeParam) {
+  const actor = await getActor();
+  await assertPermission(actor, ['view_branch_dashboard', 'super_admin']);
+  const branchId = actor.branchId;
+  const [branch, edirs] = await Promise.all([
+    branchId ? prisma.branch.findUnique({ where: { id: branchId }, select: { name: true, code: true } }) : Promise.resolve(null),
+    branchId ? prisma.edir.findMany({ where: { branchId }, select: { id: true } }) : Promise.resolve([]),
+  ]);
+  const metrics = await scopedMetrics(edirs.map(e => e.id), range);
+  return { branchName: branch?.name ?? 'Branch', branchCode: branch?.code ?? null, ...metrics };
+}
+
+/** District-scoped dashboard — analytics summed across the district's branches,
+ *  plus a per-branch breakdown. */
+export async function getDistrictDashboard(range?: DateRangeParam) {
+  const actor = await getActor();
+  await assertPermission(actor, ['view_district_dashboard', 'super_admin']);
+  const districtId = actor.districtId;
+  const [district, branches, edirs] = await Promise.all([
+    districtId ? prisma.district.findUnique({ where: { id: districtId }, select: { name: true } }) : Promise.resolve(null),
+    districtId ? prisma.branch.findMany({ where: { districtId }, select: { id: true, name: true, code: true }, orderBy: { name: 'asc' } }) : Promise.resolve([]),
+    districtId ? prisma.edir.findMany({ where: { branch: { districtId } }, select: { id: true, branchId: true } }) : Promise.resolve([]),
+  ]);
+
+  const total = await scopedMetrics(edirs.map(e => e.id), range);
+  const perBranch = await Promise.all(branches.map(async b => {
+    const m = await scopedMetrics(edirs.filter(e => e.branchId === b.id).map(e => e.id), range);
+    return { id: b.id, name: b.name, code: b.code, edirs: m.totalEdirs, activeEdirs: m.activeEdirs, members: m.totalMembers, collected: m.collected };
+  }));
+
+  return { districtName: district?.name ?? 'District', totalBranches: branches.length, ...total, branches: perBranch };
 }
 
 /**

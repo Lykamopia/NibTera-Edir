@@ -36,7 +36,8 @@ async function provisionBranchRoles(branchId: string) {
 export async function getBranches(districtId?: string | null) {
   try {
     const actor = await getActor();
-    await assertPermission(actor, ['view_branches', 'manage_branches', 'create_branch', 'edit_branch', 'manage_districts', 'super_admin']);
+    // Edir registrars/managers also read branches to pick one when registering an Edir.
+    await assertPermission(actor, ['view_branches', 'manage_branches', 'create_branch', 'edit_branch', 'manage_districts', 'register_edir', 'approve_edir_registration', 'manage_edirs', 'create_edir', 'super_admin']);
 
     // District users can only see branches in their district
     const where: any = {};

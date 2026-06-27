@@ -257,7 +257,7 @@ export default function PeopleClient() {
           <DateRangeFilter value={dateRange} onChange={setDateRange} className="h-9" align="end" />
           <Button variant="outline" size="sm" onClick={onExport}><Download className="mr-1 h-4 w-4" /> Export</Button>
           {isSuper && <Button variant="outline" size="sm" onClick={() => setShowActivity(true)}><History className="mr-1 h-4 w-4" /> Activity</Button>}
-          {ctx?.canManageUsers && <Button size="sm" variant="outline" onClick={() => setAddUser(true)}><UserPlus className="mr-1 h-4 w-4" /> Add User</Button>}
+          {isSuper && <Button size="sm" variant="outline" onClick={() => setAddUser(true)}><UserPlus className="mr-1 h-4 w-4" /> Add User</Button>}
           {ctx?.canManageUsers && <BulkImportDialog ctx={ctx} onDone={load} />}
           {ctx?.canManageMembers && <AddMemberDialog ctx={ctx} onCreated={load} onCredentials={setCred} />}
         </div>
@@ -427,7 +427,7 @@ function RowActions({ r, ctx, isSuper, onView, onReassign, onRemoveMember, onRem
           </>
         )}
 
-        {(isSuper || ctx.canManageAssociations) && r.hasLogin && (
+        {isSuper && r.hasLogin && (
           <>
             <DropdownMenuSeparator />
             <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">Association</DropdownMenuLabel>
@@ -501,10 +501,10 @@ function PersonDetail({ r, ctx, isSuper, onClose, onReassign, onRemoveMember, on
           {r.hasLogin && ctx.canResetPassword && (
             <Button size="sm" variant="outline" onClick={() => act(() => adminResetUserPassword(r.userId!), 'Reset email sent.')}><KeyRound className="mr-1 h-4 w-4" /> Reset password</Button>
           )}
-          {(isSuper || ctx.canManageAssociations) && r.hasLogin && (
+          {isSuper && r.hasLogin && (
             <Button size="sm" variant="outline" onClick={onReassign}><ArrowRightLeft className="mr-1 h-4 w-4" /> Manage access</Button>
           )}
-          {(isSuper || ctx.canManageAssociations) && r.edirId && r.hasLogin && (
+          {isSuper && r.edirId && r.hasLogin && (
             <Button size="sm" variant="ghost" className="text-destructive" onClick={onRemoveFromEdir}><UserMinus className="mr-1 h-4 w-4" /> Remove from Edir</Button>
           )}
           {r.hasMembership && ctx.canManageMembers && (

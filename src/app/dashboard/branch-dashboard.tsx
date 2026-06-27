@@ -1,42 +1,27 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { type Actor } from '@/lib/tenant-scope';
-import { Users, Building2, DollarSign, Clock, AlertCircle } from 'lucide-react';
+import { Users, Building2, DollarSign, Clock, AlertCircle, ShieldAlert } from 'lucide-react';
+import { LoadingState } from '@/components/ui/states';
+import { getBranchDashboard } from '@/app/actions/dashboard';
+
+const money = (n: number) => `ETB ${Number(n || 0).toLocaleString()}`;
 
 export default function BranchDashboard({ actor }: { actor: Actor }) {
   const [stats, setStats] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [denied, setDenied] = useState(false);
 
-  useEffect(() => {
-    const loadStats = async () => {
-      try {
-        // Placeholder for actual stats loading
-        // In a real implementation, this would call a server action to fetch dashboard data
-        setStats({
-          totalEdirs: 8,
-          activeEdirs: 6,
-          pendingRegistrations: 2,
-          totalMembers: 245,
-          newMembersMonth: 12,
-          paymentsCollected: 15420,
-          outstandingAmount: 2850,
-          pendingApprovals: 3,
-        });
-      } catch (err) {
-        console.error('Failed to load stats:', err);
-      } finally {
-        setLoading(false);
-      }
-    };
-    loadStats();
-  }, [actor.branchId]);
-
-  if (loading) {
-    return <div className="text-center py-12 text-gray-500">Loading dashboard...</div>;
-  }
+  const load = useCallback(() => {
+    setLoading(true); setDenied(false);
+    getBranchDashboard()
+      .then(setStats)
+      .catch(() => setDenied(true))
+      .finally(() => setLoading(false));
+  }, []);
+  useEffect(() => { load(); }, [load, actor.branchId]);
 
   const StatCard = ({ icon: Icon, label, value, subtext, variant = 'default' }: any) => (
     <Card>
@@ -59,119 +44,98 @@ export default function BranchDashboard({ actor }: { actor: Actor }) {
     <div className="space-y-8">
       {/* Header */}
       <div>
-        <h1 className="text-3xl font-bold">Branch Dashboard</h1>
-        <p className="text-gray-600 mt-2">Overview of your branch's Edir registrations and operations</p>
+        <h1 className="text-3xl font-bold">{stats?.branchName ? `${stats.branchName} — Branch Dashboard` : 'Branch Dashboard'}</h1>
+        <p className="text-gray-600 mt-2">Overview of your branch&apos;s Edir registrations and operations</p>
       </div>
 
-      {/* KPI Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard icon={Building2} label="Total Edirs" value={stats.totalEdirs} variant="default" />
-        <StatCard icon={Building2} label="Active Edirs" value={stats.activeEdirs} subtext={`${stats.pendingRegistrations} pending`} variant="success" />
-        <StatCard icon={Users} label="Total Members" value={stats.totalMembers} subtext={`+${stats.newMembersMonth} this month`} variant="default" />
-        <StatCard icon={DollarSign} label="Collected" value={`ETB ${stats.paymentsCollected.toLocaleString()}`} subtext={`ETB ${stats.outstandingAmount} outstanding`} variant="warning" />
-      </div>
-
-      {/* Main Content Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Pending Approvals */}
+      {loading ? (
+        <LoadingState label="Loading dashboard…" />
+      ) : denied ? (
         <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Clock className="w-5 h-5" />
-              Pending Approvals
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold mb-2">{stats.pendingApprovals}</div>
-            <p className="text-sm text-gray-600">Items awaiting review</p>
-            <div className="mt-4 space-y-2">
-              <div className="flex items-center justify-between p-2 bg-yellow-50 rounded">
-                <span className="text-sm">2 Edir Registrations</span>
-                <Badge variant="outline" className="bg-yellow-100">Pending</Badge>
-              </div>
-              <div className="flex items-center justify-between p-2 bg-yellow-50 rounded">
-                <span className="text-sm">1 Member Removal</span>
-                <Badge variant="outline" className="bg-yellow-100">Pending</Badge>
-              </div>
-            </div>
+          <CardContent className="flex flex-col items-center gap-2 py-12 text-center">
+            <ShieldAlert className="h-8 w-8 text-muted-foreground" />
+            <p className="font-medium">Dashboard analytics unavailable</p>
+            <p className="max-w-sm text-sm text-muted-foreground">You need the <span className="font-medium">View Branch Dashboard</span> permission to see your branch&apos;s analytics. The quick links below are still available.</p>
           </CardContent>
         </Card>
+      ) : stats && (
+        <>
+          {/* KPI Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <StatCard icon={Building2} label="Total Edirs" value={stats.totalEdirs} variant="default" />
+            <StatCard icon={Building2} label="Active Edirs" value={stats.activeEdirs} subtext={`${stats.pendingRegistrations} pending`} variant="success" />
+            <StatCard icon={Users} label="Total Members" value={stats.totalMembers} subtext={`+${stats.newMembers} this month`} variant="default" />
+            <StatCard icon={DollarSign} label="Collected" value={money(stats.collected)} subtext={`${money(stats.outstanding)} outstanding`} variant="warning" />
+          </div>
 
-        {/* Registration Status */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Building2 className="w-5 h-5" />
-              Registration Status
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-sm">Active</span>
-              <span className="font-semibold">{stats.activeEdirs}</span>
-            </div>
-            <div className="w-full bg-gray-200 rounded-full h-2">
-              <div className="bg-green-600 h-2 rounded-full" style={{ width: `${(stats.activeEdirs / stats.totalEdirs) * 100}%` }}></div>
-            </div>
-            <div className="flex items-center justify-between pt-3 border-t">
-              <span className="text-sm">Pending</span>
-              <span className="font-semibold">{stats.pendingRegistrations}</span>
-            </div>
-            <div className="w-full bg-gray-200 rounded-full h-2">
-              <div className="bg-yellow-600 h-2 rounded-full" style={{ width: `${(stats.pendingRegistrations / stats.totalEdirs) * 100}%` }}></div>
-            </div>
-          </CardContent>
-        </Card>
+          {/* Main Content Grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Pending Approvals */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2"><Clock className="w-5 h-5" /> Pending Approvals</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-3xl font-bold mb-1">{stats.pendingApprovals}</div>
+                <p className="text-sm text-gray-600">Items awaiting review in your branch&apos;s Edirs</p>
+              </CardContent>
+            </Card>
 
-        {/* Quick Actions */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <AlertCircle className="w-5 h-5" />
-              Quick Links
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2">
-              <a href="/dashboard/edir-registration" className="block p-3 rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors text-sm font-medium text-blue-600">
-                Register New Edir
-              </a>
-              <a href="/dashboard/approvals" className="block p-3 rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors text-sm font-medium text-blue-600">
-                Review Approvals ({stats.pendingApprovals})
-              </a>
-              <a href="/dashboard/people" className="block p-3 rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors text-sm font-medium text-blue-600">
-                Manage Members
-              </a>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+            {/* Registration Status */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2"><Building2 className="w-5 h-5" /> Registration Status</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="flex items-center justify-between"><span className="text-sm">Active</span><span className="font-semibold">{stats.activeEdirs}</span></div>
+                <div className="w-full bg-gray-200 rounded-full h-2"><div className="bg-green-600 h-2 rounded-full" style={{ width: `${stats.totalEdirs ? (stats.activeEdirs / stats.totalEdirs) * 100 : 0}%` }} /></div>
+                <div className="flex items-center justify-between pt-3 border-t"><span className="text-sm">Pending</span><span className="font-semibold">{stats.pendingRegistrations}</span></div>
+                <div className="w-full bg-gray-200 rounded-full h-2"><div className="bg-yellow-600 h-2 rounded-full" style={{ width: `${stats.totalEdirs ? (stats.pendingRegistrations / stats.totalEdirs) * 100 : 0}%` }} /></div>
+              </CardContent>
+            </Card>
+          </div>
 
-      {/* Action Items — actionable work, not a passive activity log */}
+          {/* Action Items */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Action Items</CardTitle>
+              <CardDescription>Things that need your attention right now</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {(() => {
+                const items = [
+                  stats.pendingApprovals > 0 && { label: `${stats.pendingApprovals} item(s) awaiting your approval`, href: '/dashboard/approvals', tone: 'warning' as const },
+                  stats.pendingRegistrations > 0 && { label: `${stats.pendingRegistrations} Edir registration(s) pending review`, href: '/dashboard/edir-registration', tone: 'warning' as const },
+                  stats.outstanding > 0 && { label: `${money(stats.outstanding)} outstanding — follow up on collections`, href: '/dashboard/payments', tone: 'danger' as const },
+                ].filter(Boolean) as { label: string; href: string; tone: 'warning' | 'danger' }[];
+                if (items.length === 0) return <p className="py-6 text-center text-sm text-muted-foreground">You&apos;re all caught up — no pending items.</p>;
+                return (
+                  <div className="space-y-2">
+                    {items.map((it, i) => (
+                      <a key={i} href={it.href} className={`flex items-center justify-between gap-3 rounded-lg border p-3 text-sm transition-colors hover:bg-muted/50 ${it.tone === 'danger' ? 'border-red-200 bg-red-50' : 'border-yellow-200 bg-yellow-50'}`}>
+                        <span className="font-medium">{it.label}</span>
+                        <span className="shrink-0 text-primary">Resolve →</span>
+                      </a>
+                    ))}
+                  </div>
+                );
+              })()}
+            </CardContent>
+          </Card>
+        </>
+      )}
+
+      {/* Quick Links — always available */}
       <Card>
         <CardHeader>
-          <CardTitle>Action Items</CardTitle>
-          <CardDescription>Things that need your attention right now</CardDescription>
+          <CardTitle className="flex items-center gap-2"><AlertCircle className="w-5 h-5" /> Quick Links</CardTitle>
         </CardHeader>
         <CardContent>
-          {(() => {
-            const items = [
-              stats.pendingApprovals > 0 && { label: `${stats.pendingApprovals} item(s) awaiting your approval`, href: '/dashboard/approvals', tone: 'warning' as const },
-              stats.pendingRegistrations > 0 && { label: `${stats.pendingRegistrations} Edir registration(s) pending review`, href: '/dashboard/edir-registration', tone: 'warning' as const },
-              stats.outstandingAmount > 0 && { label: `ETB ${stats.outstandingAmount.toLocaleString()} outstanding — follow up on collections`, href: '/dashboard/payments', tone: 'danger' as const },
-            ].filter(Boolean) as { label: string; href: string; tone: 'warning' | 'danger' }[];
-            if (items.length === 0) return <p className="py-6 text-center text-sm text-muted-foreground">You’re all caught up — no pending items.</p>;
-            return (
-              <div className="space-y-2">
-                {items.map((it, i) => (
-                  <a key={i} href={it.href} className={`flex items-center justify-between gap-3 rounded-lg border p-3 text-sm transition-colors hover:bg-muted/50 ${it.tone === 'danger' ? 'border-red-200 bg-red-50' : 'border-yellow-200 bg-yellow-50'}`}>
-                    <span className="font-medium">{it.label}</span>
-                    <span className="shrink-0 text-primary">Resolve →</span>
-                  </a>
-                ))}
-              </div>
-            );
-          })()}
+          <div className="grid gap-2 sm:grid-cols-3">
+            <a href="/dashboard/edir-registration" className="block p-3 rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors text-sm font-medium text-blue-600">Register New Edir</a>
+            <a href="/dashboard/approvals" className="block p-3 rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors text-sm font-medium text-blue-600">Review Approvals</a>
+            <a href="/dashboard/people" className="block p-3 rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors text-sm font-medium text-blue-600">Manage Members</a>
+          </div>
         </CardContent>
       </Card>
     </div>
