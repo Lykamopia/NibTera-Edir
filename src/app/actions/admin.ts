@@ -236,7 +236,7 @@ export async function bulkInviteUsers(input: { edirId?: string | null; rows: Bul
       }
     }
 
-    if (created > 0) revalidatePath('/dashboard/people');
+    if (created > 0) revalidatePath('/dashboard/admin/users');
     failed.sort((a, b) => a.row - b.row);
     return { success: true as const, total: rows.length, created, failed };
   } catch (error) {

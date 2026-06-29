@@ -5,7 +5,7 @@ import type { Permission } from '@/lib/types';
 // dead links; deferred modules are added here as they are built.
 export const IMPLEMENTED_PAGES = new Set<string>([
   'dashboard',
-  'people', // unified Members + Users + Associations (adapts to role)
+  'members', // Edir Members — membership records (member-permission gated)
   'payments',
   'approvals',
   'edir-registration', // Unified Edir management: browse directory, register new, track submissions
@@ -18,11 +18,12 @@ export const IMPLEMENTED_PAGES = new Set<string>([
   'documents',
   'audit',
   'payment-log',
+  'admin-users', // Platform Users — system/operator accounts (user-permission gated)
   'admin-roles',
   'admin-settings',
   'system-districts', // District management (Super Admin / DISTRICT scope)
   'system-branches', // Branch management (Super Admin / DISTRICT scope)
-  // 'system-associations' retired — user creation/association now lives on the People page.
+  // 'system-associations' retired — user creation/association now lives on the Platform Users page.
 ]);
 
 export interface NavItem extends PagePermissionDef {}
@@ -38,7 +39,7 @@ export interface NavSection {
 // Edir-level permissions — the Super-Admin manages the platform, tenants, users,
 // roles and governance instead.
 export const SUPER_ADMIN_HIDDEN_PAGES = new Set<string>([
-  'people', 'payments', 'payment-log', 'approvals', 'member-requests',
+  'members', 'payments', 'payment-log', 'approvals', 'member-requests',
   'emergencies', 'events', 'assets', 'rules', 'committee', 'documents',
   'admin-settings',
 ]);

@@ -114,7 +114,7 @@ export async function createBranchUser(input: {
       details: `Created branch user: ${input.name} in ${branch.name}`,
     });
 
-    revalidatePath('/dashboard/people');
+    revalidatePath('/dashboard/admin/users');
     return {
       success: true as const,
       userId: user.id,
@@ -201,7 +201,7 @@ export async function createDistrictUser(input: {
       details: `Created district user: ${input.name} in ${district.name}`,
     });
 
-    revalidatePath('/dashboard/people');
+    revalidatePath('/dashboard/admin/users');
     return {
       success: true as const,
       userId: user.id,

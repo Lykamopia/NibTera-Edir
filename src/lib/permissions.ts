@@ -41,11 +41,6 @@ export const pagePermissions: PagePermissionDef[] = [
     ],
   },
   {
-    id: 'people', label: 'People', path: '/dashboard/people', icon: 'UsersRound', section: 'operations',
-    accessPermissions: ['view_members', 'manage_members', 'view_users', 'manage_users', 'super_admin'],
-    actions: [{ id: 'view_members', label: 'People Management', description: 'Unified members & users management (adapts to your role)', isAccess: true }],
-  },
-  {
     id: 'members', label: 'Members', path: '/dashboard/members', icon: 'Users', section: 'operations',
     accessPermissions: ['view_members', 'manage_members'],
     actions: [
@@ -203,8 +198,10 @@ export const pagePermissions: PagePermissionDef[] = [
   },
   // ── Administration (Edir-scoped) ─────────────────────────────────────────
   {
-    id: 'admin-users', label: 'Users', path: '/dashboard/admin/users', icon: 'UserCog', section: 'admin',
-    accessPermissions: ['view_users', 'manage_users'],
+    id: 'admin-users', label: 'Platform Users', path: '/dashboard/admin/users', icon: 'UserCog', section: 'admin',
+    // Account management (view/manage_users) OR cross-tenant user association
+    // (assign/transfer users, assign Edir Admins) both open this page.
+    accessPermissions: ['view_users', 'manage_users', 'manage_associations', 'manage_edir_associations', 'manage_edir_users'],
     actions: [
       { id: 'view_users', label: 'View Users', description: 'View user accounts', isAccess: true },
       { id: 'manage_users', label: 'Manage Users', description: 'Invite, edit, deactivate users' },
@@ -518,4 +515,22 @@ export function getPermissionGroupsForScope(scope: RoleScopeKind): PermissionGro
 export function filterPermissionsForScope(ids: string[], scope: RoleScopeKind): string[] {
   const valid = new Set(ALL_PERMISSION_IDS as string[]);
   return ids.filter(p => valid.has(p) && (scope === 'PLATFORM' ? PLATFORM_SET.has(p) : !PLATFORM_SET.has(p)));
+}
+
+// Baseline permissions a plain Edir member's login may hold. A role limited to
+// these (or none) is treated as a regular member, not a system/operator account.
+const MEMBER_BASELINE_PERMISSIONS = new Set<string>(['view_dashboard']);
+
+/** True if a user's login role designates a system/operator account (Super Admin,
+ *  Head Office, District, Branch, an Edir Administrator, Committee/oversight, or
+ *  any custom elevated Edir role) rather than a plain Edir member. Used to scope
+ *  the Platform Users directory — plain member logins and unassigned (null-role)
+ *  accounts are excluded there and live on the Members page instead. A non-EDIR
+ *  scope is always a system account; an EDIR-scoped role qualifies when it grants
+ *  any capability beyond the baseline member permissions. */
+export function isSystemUserRole(role: { scope: string; permissions?: string | null } | null): boolean {
+  if (!role) return false; // unassigned / no role → not a system user
+  if (role.scope !== 'EDIR') return true; // SUPER_ADMIN / PLATFORM / HEAD_OFFICE / DISTRICT / BRANCH
+  const perms = (role.permissions ?? '').split(',').map(s => s.trim()).filter(Boolean);
+  return perms.some(p => !MEMBER_BASELINE_PERMISSIONS.has(p));
 }

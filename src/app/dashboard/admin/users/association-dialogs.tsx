@@ -1,8 +1,8 @@
 'use client';
 
 /**
- * Shared user-association dialogs, surfaced on the People page (the unified user
- * management hub). These replace the retired standalone "User Associations" module:
+ * Shared user-association dialogs, surfaced on the Platform Users page (the system
+ * user / account management hub). These replace the retired "User Associations" module:
  *  • CreateUserDialog — create an Edir user OR a platform (Head-Office/District/
  *    Branch) operator with scope-aware roles; returns one-time credentials.
  *  • EditAssociationDialog — change a user's org scope, placement, role, and status

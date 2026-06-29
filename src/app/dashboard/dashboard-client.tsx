@@ -57,8 +57,8 @@ export default function DashboardClient() {
       />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-        <StatCard title="Total Members" value={kpis.totalMembers} icon={Users} href="/dashboard/people" accent="primary" />
-        <StatCard title="Active Members" value={kpis.activeMembers} icon={UserCheck} href="/dashboard/people" accent="success" />
+        <StatCard title="Total Members" value={kpis.totalMembers} icon={Users} href="/dashboard/members" accent="primary" />
+        <StatCard title="Active Members" value={kpis.activeMembers} icon={UserCheck} href="/dashboard/members" accent="success" />
         <StatCard title="Total Balance" value={money(kpis.totalBalance)} icon={Wallet} accent="info" />
         <StatCard title="Total Disbursed" value={money(kpis.totalDisbursed)} icon={HandCoins} accent="warning" />
         <StatCard title="Active Emergencies" value={kpis.activeEmergencies} icon={Siren} href="/dashboard/emergencies" accent="destructive" />

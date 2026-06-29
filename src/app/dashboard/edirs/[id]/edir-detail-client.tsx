@@ -186,7 +186,7 @@ export default function EdirDetailClient({ profile: p }: { profile: EdirProfile 
             <StatCard title="Active" value={p.stats.activeMembers} icon={CheckCircle2} accent="success" />
             <StatCard title="Inactive / Other" value={Math.max(0, p.stats.members - p.stats.activeMembers)} icon={UserCircle} accent="warning" />
           </div>
-          <DeepLink href="/dashboard/people" icon={Users} label="Open full Member Management" note="View, add, and manage every member in this Edir." />
+          <DeepLink href="/dashboard/members" icon={Users} label="Open full Member Management" note="View, add, and manage every member in this Edir." />
         </TabsContent>
 
         {/* PAYMENTS */}

@@ -9,7 +9,9 @@ import { writeAudit } from '@/lib/audit';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
 
-export const RELATIVE_DOC_CATEGORIES = ['National ID', 'Birth Certificate', 'Passport', 'Medical Certificate', 'Marriage Certificate', 'Proof of Relationship', 'Photo', 'Other'] as const;
+// Module-local only — a "use server" file may export *only* async functions, so
+// this constant must not be exported (Next throws "can only export async functions").
+const RELATIVE_DOC_CATEGORIES = ['National ID', 'Birth Certificate', 'Passport', 'Medical Certificate', 'Marriage Certificate', 'Proof of Relationship', 'Photo', 'Other'] as const;
 
 // Managing a dependent's documents is part of managing the dependent, so anyone who
 // can manage relatives (manage_relatives) may upload/edit/delete here too — it still

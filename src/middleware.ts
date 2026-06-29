@@ -22,7 +22,7 @@ const ROUTE_PERMISSIONS: { path: string; perms: string[] }[] = [
   { path: '/dashboard/oversight', perms: ['view_committee_oversight'] },
   { path: '/dashboard/audit', perms: ['view_audit_log', 'manage_audit_log'] },
   { path: '/dashboard/payment-log', perms: ['view_payment_log'] },
-  { path: '/dashboard/admin/users', perms: ['view_users', 'manage_users'] },
+  { path: '/dashboard/admin/users', perms: ['view_users', 'manage_users', 'manage_associations', 'manage_edir_associations', 'manage_edir_users'] },
   { path: '/dashboard/admin/roles', perms: ['view_roles', 'manage_roles'] },
   { path: '/dashboard/admin/settings', perms: ['manage_edir_settings', 'manage_committee'] },
   { path: '/dashboard/system/districts', perms: ['view_districts', 'manage_districts', 'create_district', 'edit_district', 'delete_district', 'import_districts', 'super_admin'] },

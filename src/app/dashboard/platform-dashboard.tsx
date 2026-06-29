@@ -74,7 +74,7 @@ export default function PlatformDashboard() {
           <div className="flex items-center gap-1 rounded-lg border p-0.5" title="Trend chart window">
             {RANGES.map(r => <button key={r.n} onClick={() => setRange(r.n)} className={`rounded-md px-2.5 py-1 text-xs font-medium ${range === r.n ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}`}>{r.label}</button>)}
           </div>
-          <Link href="/dashboard/people"><Button size="sm" variant="outline"><Network className="mr-1.5 h-4 w-4" /> User Management</Button></Link>
+          <Link href="/dashboard/admin/users"><Button size="sm" variant="outline"><Network className="mr-1.5 h-4 w-4" /> User Management</Button></Link>
         </div>
       </div>
 

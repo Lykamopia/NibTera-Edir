@@ -1,6 +1,9 @@
-import { redirect } from 'next/navigation';
+import UsersClient from './users-client';
 
-// User management lives on the unified People page; this legacy route redirects there.
+// Platform Users management surface — system/operator login accounts only (Super
+// Admins, Head Office, District, Branch users and Edir Administrators). The client
+// fetches its own data and capabilities (getUsersDirectory), which enforce
+// per-actor scope and user permissions; this page is a thin shell.
 export default function UsersPage() {
-  redirect('/dashboard/people');
+  return <UsersClient />;
 }

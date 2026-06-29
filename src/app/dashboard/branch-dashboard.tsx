@@ -134,7 +134,7 @@ export default function BranchDashboard({ actor }: { actor: Actor }) {
           <div className="grid gap-2 sm:grid-cols-3">
             <a href="/dashboard/edir-registration" className="block p-3 rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors text-sm font-medium text-blue-600">Register New Edir</a>
             <a href="/dashboard/approvals" className="block p-3 rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors text-sm font-medium text-blue-600">Review Approvals</a>
-            <a href="/dashboard/people" className="block p-3 rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors text-sm font-medium text-blue-600">Manage Members</a>
+            <a href="/dashboard/members" className="block p-3 rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors text-sm font-medium text-blue-600">Manage Members</a>
           </div>
         </CardContent>
       </Card>
