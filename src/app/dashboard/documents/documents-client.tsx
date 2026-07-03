@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -16,14 +17,15 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import {
   Loader2, Search, FolderArchive, FileText, FileImage, FileType2, Upload, Eye, Folder, Files,
   CheckCircle2, XCircle, Clock, Archive, Trash2, Share2, Tag, Shield, Download, History, FolderOpen, X,
-  FileSpreadsheet, FileArchive, FileCode,
+  FileSpreadsheet, FileArchive, FileCode, Users, User, ExternalLink, Check, Ban,
 } from 'lucide-react';
 import { PageHeader, LoadingState, ErrorState, EmptyState, StatCard } from '@/components/ui/states';
 import { DateRangeFilter, ALL_TIME, toParam, type DateRangeValue } from '@/components/ui/date-range-filter';
 import { useConfirm, usePrompt } from '@/components/ui/confirm-provider';
 import { uploadFile } from '@/lib/upload';
+import { listRepositoryDocuments, reviewRepositoryDocument } from '@/app/actions/documents';
 import {
-  listDmsDocuments, getDmsDocumentDetail, createDmsDocument, submitDocumentAction,
+  getDmsDocumentDetail, createDmsDocument, submitDocumentAction,
   approveDmsDocument, rejectDmsDocument,
 } from '@/app/actions/dms-documents';
 
@@ -35,6 +37,21 @@ const STATUS: Record<string, { label: string; cls: string; icon: any }> = {
   ARCHIVED: { label: 'Archived', cls: 'border-slate-300 bg-slate-100 text-slate-600', icon: Archive },
 };
 const VIS_LABEL: Record<string, string> = { staff: 'Staff only', committee: 'Committee', all: 'All members' };
+
+// Where a document originates. Drives the source chip and how it is reviewed.
+const SOURCE: Record<string, { label: string; cls: string; icon: any }> = {
+  DMS: { label: 'Repository', cls: 'border-primary/30 bg-primary/10 text-primary', icon: FolderArchive },
+  MEMBER: { label: 'Member', cls: 'border-blue-300 bg-blue-50 text-blue-700', icon: User },
+  RELATIVE: { label: 'Dependent', cls: 'border-violet-300 bg-violet-50 text-violet-700', icon: Users },
+  REQUEST: { label: 'Request', cls: 'border-amber-300 bg-amber-50 text-amber-700', icon: FileText },
+};
+const SOURCE_FILTERS = [
+  { value: 'all', label: 'All sources' },
+  { value: 'DMS', label: 'Repository' },
+  { value: 'MEMBER', label: 'Member documents' },
+  { value: 'RELATIVE', label: 'Dependent documents' },
+  { value: 'REQUEST', label: 'Request attachments' },
+];
 
 /** Resolve a file's extension into a label, icon, and accent for non-image previews. */
 function fileFormat(fileName?: string, fileType?: string) {
@@ -73,37 +90,67 @@ function StatusBadge({ status, pending }: { status: string; pending?: string | n
   );
 }
 
+function SourceBadge({ source }: { source: string }) {
+  const s = SOURCE[source] ?? SOURCE.DMS;
+  return <Badge variant="outline" className={cn('gap-1 whitespace-nowrap', s.cls)}><s.icon className="h-3 w-3" /> {s.label}</Badge>;
+}
+
 export default function DocumentsClient() {
   const [data, setData] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState('all');
+  const [source, setSource] = useState('all');
   const [status, setStatus] = useState('all');
   const [tag, setTag] = useState('all');
   const [visibility, setVisibility] = useState('all');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [detailId, setDetailId] = useState<string | null>(null);
+  const [sourceDetail, setSourceDetail] = useState<any | null>(null);
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [busyKey, setBusyKey] = useState<string | null>(null);
   const [range, setRange] = useState<DateRangeValue>(ALL_TIME);
   const confirm = useConfirm();
+  const prompt = usePrompt();
   const rangeKey = `${range.preset}:${range.from?.toISOString() ?? ''}:${range.to?.toISOString() ?? ''}`;
 
   const load = useCallback(() => {
     setLoading(true); setError(false);
-    listDmsDocuments({ query, category, status, tag: tag === 'all' ? undefined : tag, visibility, range: toParam(range) })
+    listRepositoryDocuments({ query, source, category, status, tag: tag === 'all' ? undefined : tag, visibility, range: toParam(range) })
       .then((r: any) => { if (r?.success) setData(r); else setError(true); })
       .catch(() => setError(true)).finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, category, status, tag, visibility, rangeKey]);
+  }, [query, source, category, status, tag, visibility, rangeKey]);
   useEffect(() => { load(); }, [load]);
 
   const items: any[] = data?.items ?? [];
   const isStaff = data?.isStaff ?? false;
   const canUpload = data?.canUpload ?? false;
 
+  // Bulk archive/delete only applies to repository (DMS) documents.
+  const dmsItems = items.filter(i => i.source === 'DMS');
   const toggleSel = (id: string) => setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  const allSel = items.length > 0 && items.every(i => selected.has(i.id));
+  const allSel = dmsItems.length > 0 && dmsItems.every(i => selected.has(i.id));
+
+  const openDetail = (d: any) => { if (d.source === 'DMS') setDetailId(d.id); else setSourceDetail(d); };
+
+  // Approve/reject a member or dependent document in place — dispatched to that
+  // module's own workflow, so the decision shows everywhere the record appears.
+  const review = async (item: any, decision: 'APPROVED' | 'REJECTED') => {
+    let reason: string | undefined;
+    if (decision === 'REJECTED') {
+      const r = await prompt({ title: 'Reject document', label: 'Reason (shared with the uploader)', multiline: true, required: true, confirmText: 'Reject' });
+      if (!r) return; reason = r;
+    } else if (!(await confirm({ title: 'Approve this document?', description: 'It is marked approved and the status updates everywhere it appears.', confirmText: 'Approve' }))) {
+      return;
+    }
+    setBusyKey(item.key);
+    const res = await reviewRepositoryDocument({ source: item.source, id: item.id, decision, reason });
+    setBusyKey(null);
+    if (res?.success) { toast.success(decision === 'APPROVED' ? 'Document approved.' : 'Document rejected.'); load(); }
+    else toast.error(res?.error || 'Action failed.');
+  };
 
   const bulk = async (action: 'archive' | 'delete') => {
     const ids = Array.from(selected);
@@ -120,7 +167,7 @@ export default function DocumentsClient() {
       <PageHeader
         icon={FolderArchive}
         title="Documents"
-        description="Enterprise document repository with a maker–checker workflow — every action stays pending until a checker approves."
+        description="Central repository for every uploaded document — repository files, member documents, dependent documents and request attachments — with in-place approval."
         actions={canUpload ? <Button onClick={() => setUploadOpen(true)} className="gap-2"><Upload className="h-4 w-4" /> Upload Document</Button> : undefined}
       />
 
@@ -161,8 +208,14 @@ export default function DocumentsClient() {
           <div className="flex flex-wrap items-center gap-2">
             <div className="relative min-w-48 flex-1">
               <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input className="pl-8" placeholder="Search title, file, tag, purpose…" value={query} onChange={e => setQuery(e.target.value)} />
+              <Input className="pl-8" placeholder="Search title, file, owner, tag…" value={query} onChange={e => setQuery(e.target.value)} />
             </div>
+            <Select value={source} onValueChange={setSource}>
+              <SelectTrigger className="w-44"><SelectValue placeholder="Source" /></SelectTrigger>
+              <SelectContent>
+                {SOURCE_FILTERS.map(s => <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
             <Select value={status} onValueChange={setStatus}>
               <SelectTrigger className="w-44"><SelectValue placeholder="Status" /></SelectTrigger>
               <SelectContent>
@@ -196,7 +249,7 @@ export default function DocumentsClient() {
           {isStaff && selected.size > 0 && (
             <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-primary/5 px-3 py-2 text-sm">
               <span className="font-medium">{selected.size} selected</span>
-              <span className="text-muted-foreground">— bulk actions are submitted for approval</span>
+              <span className="text-muted-foreground">— repository documents · bulk actions are submitted for approval</span>
               <div className="ml-auto flex gap-1.5">
                 <Button size="sm" variant="outline" onClick={() => bulk('archive')}><Archive className="mr-1 h-4 w-4" /> Archive</Button>
                 <Button size="sm" variant="outline" className="text-destructive" onClick={() => bulk('delete')}><Trash2 className="mr-1 h-4 w-4" /> Delete</Button>
@@ -212,47 +265,71 @@ export default function DocumentsClient() {
                 : error ? <ErrorState onRetry={load} />
                 : items.length === 0 ? (
                   <EmptyState icon={FolderArchive} title="No documents found"
-                    description={canUpload ? 'Upload a document to get started — it stays pending until a checker approves.' : 'Approved documents shared with members will appear here.'}
+                    description={canUpload ? 'Upload a document, or documents from member/dependent pages will appear here as they are added.' : 'Approved documents shared with members will appear here.'}
                     action={canUpload ? <Button variant="outline" className="gap-2" onClick={() => setUploadOpen(true)}><Upload className="h-4 w-4" /> Upload</Button> : undefined} />
                 ) : (
+                  <div className="overflow-x-auto">
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        {isStaff && <TableHead className="w-8"><Checkbox checked={allSel} onCheckedChange={(c) => setSelected(c === true ? new Set(items.map(i => i.id)) : new Set())} /></TableHead>}
+                        {isStaff && <TableHead className="w-8"><Checkbox checked={allSel} onCheckedChange={(c) => setSelected(c === true ? new Set(dmsItems.map(i => i.id)) : new Set())} /></TableHead>}
                         <TableHead>Document</TableHead>
-                        <TableHead>Category</TableHead>
+                        <TableHead>Source</TableHead>
+                        <TableHead>Owner / Related</TableHead>
                         <TableHead>Status</TableHead>
-                        <TableHead>Uploaded by</TableHead>
                         <TableHead className="text-right">Updated</TableHead>
                         <TableHead></TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {items.map(d => (
-                        <TableRow key={d.id} className={cn('cursor-pointer', selected.has(d.id) && 'bg-primary/5')} onClick={() => setDetailId(d.id)}>
-                          {isStaff && <TableCell onClick={e => e.stopPropagation()}><Checkbox checked={selected.has(d.id)} onCheckedChange={() => toggleSel(d.id)} /></TableCell>}
+                      {items.map(d => {
+                        const canReviewInline = d.canReview && (d.source === 'MEMBER' || d.source === 'RELATIVE');
+                        return (
+                        <TableRow key={d.key} className={cn('cursor-pointer', d.source === 'DMS' && selected.has(d.id) && 'bg-primary/5')} onClick={() => openDetail(d)}>
+                          {isStaff && (
+                            <TableCell onClick={e => e.stopPropagation()}>
+                              {d.source === 'DMS'
+                                ? <Checkbox checked={selected.has(d.id)} onCheckedChange={() => toggleSel(d.id)} />
+                                : null}
+                            </TableCell>
+                          )}
                           <TableCell>
                             <div className="flex items-center gap-2.5">
                               <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground"><TypeIcon t={d.fileType} className="h-4 w-4" /></span>
                               <div className="min-w-0">
                                 <div className="truncate font-medium">{d.title}</div>
-                                <div className="flex flex-wrap items-center gap-1">
-                                  {d.tags.slice(0, 3).map((t: string) => <span key={t} className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{t}</span>)}
-                                </div>
+                                <div className="truncate text-xs text-muted-foreground">{d.category}{d.tags.length > 0 ? ` · ${d.tags.slice(0, 3).join(', ')}` : ''}</div>
                               </div>
                             </div>
                           </TableCell>
-                          <TableCell className="text-sm text-muted-foreground">{d.category}</TableCell>
+                          <TableCell><SourceBadge source={d.source} /></TableCell>
+                          <TableCell className="text-sm">
+                            {d.owner ? (
+                              <Link href={d.relatedHref} onClick={e => e.stopPropagation()} className="inline-flex items-center gap-1 text-foreground hover:text-primary hover:underline">
+                                <span className="truncate">{d.owner.name}</span>
+                                <span className="text-xs text-muted-foreground">{d.owner.code}</span>
+                                <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" />
+                              </Link>
+                            ) : <span className="text-muted-foreground">{d.relatedLabel}</span>}
+                          </TableCell>
                           <TableCell><StatusBadge status={d.status} pending={d.pendingAction && d.pendingAction !== 'upload' ? d.pendingAction : null} /></TableCell>
-                          <TableCell className="text-sm text-muted-foreground">{d.uploadedBy ?? '—'}</TableCell>
                           <TableCell className="text-right text-xs text-muted-foreground">{fmt(d.approvedAt ?? d.createdAt)}</TableCell>
                           <TableCell className="text-right" onClick={e => e.stopPropagation()}>
-                            <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => setDetailId(d.id)}><Eye className="h-4 w-4" /></Button>
+                            {canReviewInline ? (
+                              <div className="flex items-center justify-end gap-1">
+                                <Button size="sm" variant="ghost" className="h-8 gap-1 px-2 text-xs text-success" disabled={busyKey === d.key} onClick={() => review(d, 'APPROVED')}>{busyKey === d.key ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />} Approve</Button>
+                                <Button size="sm" variant="ghost" className="h-8 gap-1 px-2 text-xs text-destructive" disabled={busyKey === d.key} onClick={() => review(d, 'REJECTED')}><Ban className="h-3.5 w-3.5" /> Reject</Button>
+                              </div>
+                            ) : (
+                              <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => openDetail(d)}><Eye className="h-4 w-4" /></Button>
+                            )}
                           </TableCell>
                         </TableRow>
-                      ))}
+                        );
+                      })}
                     </TableBody>
                   </Table>
+                  </div>
                 )}
             </CardContent>
           </Card>
@@ -261,7 +338,70 @@ export default function DocumentsClient() {
 
       {uploadOpen && <UploadDialog categories={data?.categories ?? []} onClose={() => setUploadOpen(false)} onDone={() => { setUploadOpen(false); load(); }} />}
       {detailId && <DetailDialog id={detailId} isStaff={isStaff} onClose={() => setDetailId(null)} onChanged={load} />}
+      {sourceDetail && <SourceDetailDialog item={sourceDetail} onReview={review} busyKey={busyKey} onClose={() => setSourceDetail(null)} />}
     </div>
+  );
+}
+
+// ─── Non-DMS detail (member / dependent / request) ───────────────────────────
+
+function SourceDetailDialog({ item, onReview, busyKey, onClose }: { item: any; onReview: (item: any, decision: 'APPROVED' | 'REJECTED') => void; busyKey: string | null; onClose: () => void }) {
+  const isImage = item.fileType === 'image';
+  const isPdf = item.fileType === 'pdf' || (item.fileName || '').toLowerCase().endsWith('.pdf');
+  const canReviewInline = item.canReview && (item.source === 'MEMBER' || item.source === 'RELATIVE');
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex flex-wrap items-center gap-2">{item.title} <SourceBadge source={item.source} /> <StatusBadge status={item.status} pending={item.pendingAction && item.pendingAction !== 'upload' ? item.pendingAction : null} /></DialogTitle>
+          <DialogDescription>{item.sourceLabel}{item.category ? ` · ${item.category}` : ''}</DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-3">
+          <div className="flex min-h-48 items-center justify-center overflow-hidden rounded-lg border bg-muted/30">
+            {isImage ? (
+              <img src={item.fileUrl} alt={item.fileName} className="max-h-72 w-full object-contain" />
+            ) : isPdf ? (
+              <iframe src={item.fileUrl} title={item.title || item.fileName} className="h-[60vh] w-full" />
+            ) : (() => {
+              const f = fileFormat(item.fileName, item.fileType);
+              return (
+                <div className="flex flex-col items-center gap-2 p-8 text-center">
+                  <f.Icon className={cn('h-16 w-16', f.cls)} />
+                  <span className={cn('rounded-md border bg-background px-2 py-0.5 text-xs font-semibold', f.cls)}>{f.label}</span>
+                  <span className="max-w-[16rem] truncate text-sm text-muted-foreground">{item.fileName}</span>
+                </div>
+              );
+            })()}
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <a href={item.fileUrl} target="_blank" rel="noopener noreferrer"><Button variant="outline" size="sm"><Download className="mr-1 h-4 w-4" /> Open file</Button></a>
+            <Link href={item.relatedHref}><Button variant="outline" size="sm"><ExternalLink className="mr-1 h-4 w-4" /> Go to source</Button></Link>
+          </div>
+
+          <div className="grid grid-cols-2 gap-x-6 gap-y-2 rounded-lg border p-3 text-sm">
+            {item.owner && <Meta label="Owner" value={`${item.owner.name} · ${item.owner.code}`} />}
+            <Meta label="Related" value={item.relatedLabel} />
+            <Meta label="Uploaded" value={`${item.uploadedBy ? `${item.uploadedBy} · ` : ''}${fmt(item.createdAt)}`} />
+            {item.approvedAt && <Meta label="Approved" value={fmt(item.approvedAt)} />}
+            {item.notes && <div className="col-span-2"><Meta label="Notes" value={item.notes} /></div>}
+            {item.rejectionReason && <div className="col-span-2"><Meta label="Rejection reason" value={item.rejectionReason} /></div>}
+          </div>
+        </div>
+
+        {canReviewInline && (
+          <DialogFooter className="border-t pt-3">
+            <Button size="sm" variant="destructive" disabled={busyKey === item.key} onClick={() => onReview(item, 'REJECTED')}><XCircle className="mr-1 h-4 w-4" /> Reject</Button>
+            <Button size="sm" className="bg-success hover:bg-success/90" disabled={busyKey === item.key} onClick={() => onReview(item, 'APPROVED')}>{busyKey === item.key ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-1 h-4 w-4" />} Approve</Button>
+          </DialogFooter>
+        )}
+        {item.source === 'REQUEST' && (
+          <p className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">This attachment belongs to a member request — it is approved from the <Link href="/dashboard/requests" className="font-medium text-primary hover:underline">Requests</Link> workflow.</p>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -345,7 +485,7 @@ function UploadDialog({ categories, onClose, onDone }: { categories: string[]; o
   );
 }
 
-// ─── Detail / preview / timeline ─────────────────────────────────────────────
+// ─── DMS detail / preview / timeline ─────────────────────────────────────────
 
 function DetailDialog({ id, isStaff, onClose, onChanged }: { id: string; isStaff: boolean; onClose: () => void; onChanged: () => void }) {
   const [d, setD] = useState<any | null>(null);
