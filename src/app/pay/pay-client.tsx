@@ -79,7 +79,10 @@ function PayInner() {
     if (res.status === 'success' && res.member) {
       setMember(res.member);
       if (res.token) setToken(res.token);
-      setAmount(String(Number(res.member.totalOutstanding) + Number(res.member.monthlyFee)));
+      // Default the payable amount to the outstanding balance + this month's fee +
+      // any late penalty (which already folds in the daily accrual), so the penalty
+      // shown in the charges card is actually included in what the member pays.
+      setAmount(String(Number(res.member.totalOutstanding) + Number(res.member.monthlyFee) + Number((res.member as any).penalty?.amount ?? 0)));
     } else {
       setError(t(`err_${res.status}`));
     }
@@ -97,7 +100,7 @@ function PayInner() {
     setPaidAmount(amt); setPrevOutstanding(Number(member.totalOutstanding));
     const memberPhone = member.phone || '';
 
-    const res = await getPaymentToken(amt, token || '', member.id, member.edirId, { source: 'mini-app', outstanding: member.totalOutstanding, monthlyFee: member.monthlyFee });
+    const res = await getPaymentToken(amt, token || '', member.id, member.edirId, { source: 'mini-app', outstanding: member.totalOutstanding, monthlyFee: member.monthlyFee, latePenalty: Number((member as any).penalty?.amount ?? 0) });
     payLog('client/pay', 'getPaymentToken result', { status: res.status, transactionId: res.transactionId, paymentToken: maskToken((res as any).paymentToken) });
     if (res.status !== 'success' || !res.transactionId) { setPaying(false); setError(res.message || t('err_startFailed')); return; }
     setTxn(res.transactionId);

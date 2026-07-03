@@ -274,6 +274,24 @@ export function ensureApprovalModules() {
     async execute(payload: any, { tx, request, actor }) {
       const edirId = request.edirId;
 
+      // Bulk Edir-settings change submitted from the Rule Configuration Center
+      // (e.g. by an Edir admin). Applies the full reviewed settings payload.
+      if (payload.kind === 'SETTINGS_BULK') {
+        const { buildEdirSettingsUpdate } = await import('@/lib/edir-settings');
+        const update = buildEdirSettingsUpdate(payload.data);
+        await tx.edirSettings.upsert({ where: { edirId }, update, create: { edirId, ...update } });
+        const changes = Array.isArray(payload.changes) ? payload.changes : [];
+        if (changes.length > 0) {
+          await tx.ruleChangeLog.createMany({
+            data: changes.map((c: any) => ({
+              edirId, field: c.field, previousValue: String(c.previous), newValue: String(c.current),
+              changedById: actor.id, comment: payload.reason ?? null,
+            })),
+          });
+        }
+        return;
+      }
+
       if (payload.kind === 'SETTING') {
         const value = payload.fieldKind === 'money' ? new Prisma.Decimal(payload.newValue) : Number(payload.newValue);
         await tx.edirSettings.update({ where: { edirId }, data: { [payload.field]: value } as any });

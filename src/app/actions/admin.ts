@@ -14,7 +14,7 @@ import { sendPasswordResetEmail, sendVerificationEmail } from '@/lib/email';
 import { generateTempPassword } from '@/lib/temp-password';
 import bcrypt from 'bcrypt';
 import { ensureMembershipForUser } from '@/app/actions/members';
-import { resubmitRequest } from '@/lib/approval-engine';
+import { resubmitRequest, submitForApproval } from '@/lib/approval-engine';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
 import { dateWhere, type DateRangeParam } from '@/lib/date-range';
@@ -599,17 +599,61 @@ export async function saveEdir(input: SaveEdirInput) {
     };
 
     if (input.id) {
-      await prisma.edir.update({ where: { id: input.id }, data: { name, ...profile } });
-      // If this Edir's registration was RETURNED to its maker, saving the revision
-      // re-submits it to the checker (status → PENDING) so it reappears in the
-      // approval queue. Only the original maker's edit resubmits (engine enforces this).
+      // A RETURNED registration being revised by its original maker resubmits the
+      // registration (that Edir isn't live yet) — this path always applies directly.
       const returned = await prisma.approvalRequest.findFirst({
         where: { module: 'EDIR_REGISTRATION', targetId: input.id, status: 'RETURNED' },
         orderBy: { createdAt: 'desc' },
         select: { id: true, makerId: true },
       });
-      if (returned && returned.makerId === actor.id) {
-        await resubmitRequest(returned.id);
+      const resubmittingReturned = !!returned && returned.makerId === actor.id;
+
+      // Editing a LIVE Edir's information is sensitive, so anyone below head office
+      // (branch/district/edir makers) routes the change through the EDIR_UPDATE
+      // maker–checker workflow instead of applying it directly. Head office and
+      // super admins (the checkers / top authority) apply immediately.
+      const mustApprove = !actor.isSuperAdmin && actor.orgScope !== 'HEAD_OFFICE' && !resubmittingReturned;
+
+      if (mustApprove) {
+        const current = await prisma.edir.findUnique({ where: { id: input.id } });
+        if (!current) return { success: false as const, error: 'Edir not found.' };
+        // Only fields the EDIR_UPDATE executor is allowed to apply (branch
+        // reassignment is a head-office action, deliberately excluded).
+        const editable: Record<string, any> = { name, ...profile };
+        delete editable.branchId;
+        const changes: Record<string, any> = {};
+        for (const [k, v] of Object.entries(editable)) {
+          if ((current as any)[k] !== v) changes[k] = v;
+        }
+        if (Object.keys(changes).length === 0) return { success: true as const, message: 'No changes to submit.' };
+
+        const pending = await prisma.approvalRequest.findFirst({
+          where: { module: 'EDIR_UPDATE', targetId: input.id, status: { in: ['PENDING', 'RETURNED'] } },
+          select: { id: true },
+        });
+        if (pending) return { success: false as const, error: 'This Edir already has a pending update awaiting approval.' };
+
+        await submitForApproval(actor, {
+          edirId: input.id,
+          module: 'EDIR_UPDATE',
+          title: `Edir update: ${name}`,
+          summary: `${Object.keys(changes).length} field(s) changed`,
+          payload: { edirId: input.id, changes },
+          targetType: 'Edir',
+          targetId: input.id,
+        });
+        await writeAudit({ edirId: input.id, userId: actor.id, action: 'EDIR_UPDATE_SUBMITTED', targetType: 'Edir', targetId: input.id, details: `Update submitted for approval: ${Object.keys(changes).join(', ')}.` });
+        revalidatePath('/dashboard/edir-registration');
+        revalidatePath('/dashboard/approvals');
+        return { success: true as const, pendingApproval: true, message: 'Edir update submitted for approval.' };
+      }
+
+      await prisma.edir.update({ where: { id: input.id }, data: { name, ...profile } });
+      // If this Edir's registration was RETURNED to its maker, saving the revision
+      // re-submits it to the checker (status → PENDING) so it reappears in the
+      // approval queue. Only the original maker's edit resubmits (engine enforces this).
+      if (resubmittingReturned) {
+        await resubmitRequest(returned!.id);
       }
     } else {
       const edir = await prisma.edir.create({ data: { name, ...profile } });

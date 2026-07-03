@@ -2,9 +2,10 @@
 
 import { z } from 'zod';
 import prisma from '@/lib/prisma';
-import { Prisma } from '@prisma/client';
 import { requireActor, getActor, assertPermission, resolveEdirId } from '@/lib/tenant-scope';
 import { writeAudit } from '@/lib/audit';
+import { submitForApproval } from '@/lib/approval-engine';
+import { buildEdirSettingsUpdate, DEFAULT_MEMBER_ROLES, type EdirSettingsData } from '@/lib/edir-settings';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
 
@@ -49,8 +50,6 @@ const configSchema = z.object({
   // Optional reason captured for the change log
   reason: z.string().optional().nullable(),
 });
-
-const DEFAULT_MEMBER_ROLES = ['Member', 'Chairperson', 'Vice Chairperson', 'Secretary', 'Treasurer', 'Auditor', 'Committee Member'];
 
 export type RuleConfigInput = z.infer<typeof configSchema>;
 
@@ -156,30 +155,27 @@ export async function saveRuleConfig(input: RuleConfigInput) {
       if (t.type === 'PERCENT' && t.value > 100) return { success: false as const, error: 'Percentage penalties cannot exceed 100%.' };
       if (t.toDays != null && t.toDays < t.fromDays) return { success: false as const, error: 'A penalty tier’s "to" day cannot be before its "from" day.' };
     }
+    // Reject overlapping day ranges — the penalty engine picks a single tier per
+    // overdue-day count, so overlaps make the applied penalty ambiguous. Sort by
+    // start day and ensure each tier's end is before the next tier's start. An
+    // open-ended tier (no "to" day) must be the last/highest range.
+    const sortedTiers = [...data.penaltyTiers].sort((a, b) => a.fromDays - b.fromDays);
+    for (let i = 0; i < sortedTiers.length - 1; i++) {
+      const cur = sortedTiers[i];
+      const next = sortedTiers[i + 1];
+      const curTo = cur.toDays == null ? Infinity : cur.toDays;
+      if (curTo >= next.fromDays) {
+        const curLabel = cur.label || `${cur.fromDays}${cur.toDays == null ? '+' : `–${cur.toDays}`} days`;
+        const nextLabel = next.label || `${next.fromDays}${next.toDays == null ? '+' : `–${next.toDays}`} days`;
+        return { success: false as const, error: `Penalty tiers "${curLabel}" and "${nextLabel}" overlap. Each tier must cover a distinct day range (an open-ended tier must be the last one).` };
+      }
+    }
 
     const existing = await prisma.edirSettings.findUnique({ where: { edirId } });
 
-    const next = {
-      monthlyFee: new Prisma.Decimal(data.monthlyFee),
-      registrationFee: new Prisma.Decimal(data.registrationFee),
-      currency: data.currency,
-      dueDay: data.dueDay,
-      gracePeriodDays: data.gracePeriodDays,
-      penaltyTiers: data.penaltyTiers as unknown as Prisma.InputJsonValue,
-      dailyPenaltyEnabled: data.dailyPenaltyEnabled,
-      dailyPenaltyType: data.dailyPenaltyType,
-      dailyPenaltyValue: new Prisma.Decimal(data.dailyPenaltyValue),
-      dailyPenaltyMaxDays: data.dailyPenaltyMaxDays,
-      autoSuspendMonths: data.autoSuspendMonths,
-      autoTerminateMonths: data.autoTerminateMonths,
-      minMembershipMonths: data.minMembershipMonths,
-      reinstatementFee: new Prisma.Decimal(data.reinstatementFee),
-      autoSuspendEnabled: data.autoSuspendEnabled,
-      autoTerminateEnabled: data.autoTerminateEnabled,
-      autoReminderEnabled: data.autoReminderEnabled,
-      reminderDaysBefore: data.reminderDaysBefore as unknown as Prisma.InputJsonValue,
-      memberRoles: (data.memberRoles.length ? data.memberRoles : DEFAULT_MEMBER_ROLES) as unknown as Prisma.InputJsonValue,
-    };
+    // Single source of truth for the update object (shared with the RULE_CHANGE
+    // approval executor so an approved change applies exactly what was reviewed).
+    const next = buildEdirSettingsUpdate(data as EdirSettingsData);
 
     // Diff scalar fields against current values for the change log.
     const changes: { field: string; previous: string; current: string }[] = [];
@@ -215,6 +211,38 @@ export async function saveRuleConfig(input: RuleConfigInput) {
       if (JSON.stringify(prevRoles) !== JSON.stringify(data.memberRoles) && data.memberRoles.length) {
         changes.push({ field: 'memberRoles', previous: prevRoles.join(', ') || '—', current: data.memberRoles.join(', ') });
       }
+    }
+
+    if (changes.length === 0) return { success: true as const, changed: 0, message: 'No changes to save.' };
+
+    // Changing Edir settings is sensitive, so anyone below head office — including
+    // the Edir admin — routes the change through the RULE_CHANGE maker–checker
+    // workflow instead of applying it directly. Head office / super admins (the
+    // checkers / top authority) apply immediately.
+    const mustApprove = !actor.isSuperAdmin && actor.orgScope !== 'HEAD_OFFICE';
+    if (mustApprove) {
+      const pending = await prisma.approvalRequest.findFirst({
+        where: { edirId, module: 'RULE_CHANGE', status: { in: ['PENDING', 'RETURNED'] }, targetType: 'EdirSettings' },
+        select: { id: true },
+      });
+      if (pending) return { success: false as const, error: 'There is already a pending settings change awaiting approval.' };
+
+      // Pre-label the diff so the change log + approval view read cleanly without
+      // needing FIELD_LABELS at approval time.
+      const labeledChanges = changes.map(c => ({ field: FIELD_LABELS[c.field] ?? c.field, previous: c.previous, current: c.current }));
+      await submitForApproval(actor, {
+        edirId,
+        module: 'RULE_CHANGE',
+        title: 'Edir settings update',
+        summary: `${changes.length} setting(s) changed`,
+        payload: { kind: 'SETTINGS_BULK', data, changes: labeledChanges, reason: data.reason || null },
+        targetType: 'EdirSettings',
+        targetId: edirId,
+      });
+      await writeAudit({ edirId, userId: actor.id, action: 'RULE_CONFIG_SUBMITTED', targetType: 'EdirSettings', targetId: edirId, details: `${changes.length} setting(s) submitted for approval.` });
+      revalidatePath('/dashboard/admin/settings');
+      revalidatePath('/dashboard/approvals');
+      return { success: true as const, changed: changes.length, pendingApproval: true, message: 'Settings changes submitted for approval.' };
     }
 
     await prisma.$transaction(async (tx) => {

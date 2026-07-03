@@ -515,8 +515,22 @@ function ValuationTab() {
   if (error) return <ErrorState onRetry={load} />;
 
   const t = data.totals;
+  const exportCsv = () => {
+    const header = ['Asset', 'Category', 'Quantity', 'Purchase Value (unit)', 'Current Value (unit)', 'Total Purchase', 'Total Current', 'Depreciation', 'Depreciation %'];
+    const rows = data.rows.map((r: any) => [
+      r.name, r.categoryName, r.quantity, r.purchaseValue, r.currentValue, r.totalPurchase, r.totalCurrent, r.depreciation, `${r.depreciationPct}%`,
+    ]);
+    const totalsRow = ['TOTAL', '', '', '', '', t.purchase, t.current, t.depreciation, ''];
+    const csv = [header, ...rows, totalsRow].map(r => r.map((x: any) => `"${String(x).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+    const el = document.createElement('a'); el.href = url; el.download = `valuation-report-${new Date().toISOString().slice(0, 10)}.csv`; el.click(); URL.revokeObjectURL(url);
+  };
   return (
     <div className="space-y-4">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-sm text-muted-foreground">Asset valuation &amp; depreciation across your scope.</p>
+        <Button variant="outline" size="sm" onClick={exportCsv} disabled={data.rows.length === 0}><Download className="mr-1.5 h-4 w-4" /> Export</Button>
+      </div>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <StatCard title="Total Purchase Value" value={t.purchase.toLocaleString()} icon={Wallet} accent="info" />
         <StatCard title="Total Current Value" value={t.current.toLocaleString()} icon={Wallet} accent="success" />

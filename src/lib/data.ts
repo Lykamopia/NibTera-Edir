@@ -94,7 +94,13 @@ export async function fetchDetailedMemberByPhone(phone: string): Promise<Detaile
   const balance = Number(member.paymentStatus?.balance ?? 0);
   const currency = settings?.currency ?? 'ETB';
   const gracePeriodDays = settings?.gracePeriodDays ?? 0;
-  const monthsBehind = monthlyFee > 0 ? Math.floor(balance / monthlyFee) : 0;
+  const dueDay = settings?.dueDay ?? 1;
+  const monthsPaid = member.paymentStatus?.monthsPaid ?? 0;
+  // "Months behind" is a CONTRIBUTION concept: derive it from the contribution
+  // ledger (months due since join vs months paid), NOT from paymentStatus.balance —
+  // that balance holds registration fees, absence penalties and asset compensation,
+  // never monthly contributions, so balance/monthlyFee is not months-behind.
+  const { monthsBehind, arrears: contributionArrears } = computeContributionArrears({ joinDate: member.joinDate, dueDay, monthsPaid, monthlyFee, now });
 
   // ── Installments: full summary across all plans ──────────────────────────────
   const allInstallments = member.installmentPlans.flatMap(p => p.installments.map(i => ({ ...i, planType: p.type })));
@@ -123,12 +129,10 @@ export async function fetchDetailedMemberByPhone(phone: string): Promise<Detaile
     .filter(l => l.status === 'SUCCESS' || l.status === 'PARTIAL')
     .reduce((s, l) => { try { return s + (Number(JSON.parse(l.description || '{}').latePenalty) || 0); } catch { return s; } }, 0);
 
-  const dueDay = settings?.dueDay ?? 1;
   const nextDue = new Date(now.getFullYear(), now.getMonth(), dueDay);
   if (nextDue < now) nextDue.setMonth(nextDue.getMonth() + 1);
 
   // ── Contribution coverage by calendar month (indexed from the join month) ─────
-  const monthsPaid = member.paymentStatus?.monthsPaid ?? 0;
   const joinMonth = new Date(member.joinDate.getFullYear(), member.joinDate.getMonth(), 1);
   const monthFromJoin = (n: number) => new Date(joinMonth.getFullYear(), joinMonth.getMonth() + n, 1);
   const contributionCoverage = {
@@ -139,7 +143,7 @@ export async function fetchDetailedMemberByPhone(phone: string): Promise<Detaile
 
   // ── Compute the applicable late-payment penalty from the Edir's penalty tiers ─
   const penalty = computePenalty({
-    monthsBehind, balance, dueDay, gracePeriodDays, currency, tiers: settings?.penaltyTiers, now,
+    monthsBehind, arrears: contributionArrears, dueDay, gracePeriodDays, currency, tiers: settings?.penaltyTiers, now,
     daily: {
       enabled: !!settings?.dailyPenaltyEnabled,
       type: settings?.dailyPenaltyType === 'PERCENT' ? 'PERCENT' : 'FIXED',
@@ -188,12 +192,46 @@ export async function fetchDetailedMemberByPhone(phone: string): Promise<Detaile
   };
 }
 
+/**
+ * Contribution arrears derived from the contribution ledger — the authoritative
+ * source of "how far behind on monthly contributions" a member is. Uses the count
+ * of contribution cycles that have come due since the member joined versus the
+ * months already paid (`monthsPaid`). Deliberately independent of
+ * paymentStatus.balance, which mixes registration fees, absence penalties and
+ * asset compensation and therefore cannot represent contribution arrears.
+ */
+export function computeContributionArrears(opts: { joinDate: Date; dueDay: number; monthsPaid: number; monthlyFee: number; now?: Date }): { monthsBehind: number; arrears: number } {
+  const { joinDate, monthsPaid, monthlyFee } = opts;
+  const now = opts.now ?? new Date();
+  if (monthlyFee <= 0) return { monthsBehind: 0, arrears: 0 };
+  const dueDay = Math.min(Math.max(1, Number(opts.dueDay) || 1), 28);
+  const join = new Date(joinDate);
+
+  // First contribution due date = the first `dueDay` on/after the join date
+  // (if the due day already passed in the join month, it rolls to the next month).
+  const firstDue = new Date(join.getFullYear(), join.getMonth(), dueDay);
+  if (firstDue < join) firstDue.setMonth(firstDue.getMonth() + 1);
+
+  // Number of monthly due dates that have occurred from firstDue through now.
+  let dueMonths = 0;
+  if (now >= firstDue) {
+    const monthsBetween = (now.getFullYear() - firstDue.getFullYear()) * 12 + (now.getMonth() - firstDue.getMonth());
+    dueMonths = monthsBetween + (now.getDate() >= dueDay ? 1 : 0);
+  }
+
+  const monthsBehind = Math.max(0, dueMonths - Math.max(0, monthsPaid));
+  return { monthsBehind, arrears: monthsBehind * monthlyFee };
+}
+
 /** Resolve the applicable late-payment penalty tier and explain the calculation. */
 interface DailyPenaltyConfig { enabled: boolean; type: 'FIXED' | 'PERCENT'; value: number; maxDays: number }
 
-function computePenalty(opts: { monthsBehind: number; balance: number; dueDay: number; gracePeriodDays: number; currency: string; tiers: unknown; now: Date; daily?: DailyPenaltyConfig }): PenaltyBreakdown | null {
-  const { monthsBehind, balance, dueDay, gracePeriodDays, currency, tiers, now, daily } = opts;
-  if (monthsBehind <= 0 || balance <= 0) return null;
+export function computePenalty(opts: { monthsBehind: number; arrears: number; dueDay: number; gracePeriodDays: number; currency: string; tiers: unknown; now: Date; daily?: DailyPenaltyConfig }): PenaltyBreakdown | null {
+  const { monthsBehind, arrears, dueDay, gracePeriodDays, currency, tiers, now, daily } = opts;
+  // No contribution arrears → no late-contribution penalty. `arrears` is the
+  // overdue contribution amount (monthsBehind × monthlyFee), the correct base for
+  // percentage penalties — never the pooled balance.
+  if (monthsBehind <= 0 || arrears <= 0) return null;
 
   // Days overdue since the most recent unpaid due date, beyond the grace window.
   const cycleDue = new Date(now.getFullYear(), now.getMonth(), dueDay);
@@ -203,11 +241,15 @@ function computePenalty(opts: { monthsBehind: number; balance: number; dueDay: n
   if (overdueDays <= 0) return null;
 
   // ── Tier penalty (optional) ──────────────────────────────────────────────
-  const tier = Array.isArray(tiers) ? (tiers as any[]).find(t => {
+  // Sort by fromDays so selection is deterministic regardless of stored order.
+  const sortedTiers = Array.isArray(tiers)
+    ? [...(tiers as any[])].sort((a, b) => Number(a.fromDays ?? 0) - Number(b.fromDays ?? 0))
+    : [];
+  const tier = sortedTiers.find(t => {
     const from = Number(t.fromDays ?? 0);
     const to = t.toDays == null ? Infinity : Number(t.toDays);
     return overdueDays >= from && overdueDays <= to;
-  }) : null;
+  });
 
   let tierAmount = 0;
   let type: 'FIXED' | 'PERCENT' = 'FIXED';
@@ -217,24 +259,24 @@ function computePenalty(opts: { monthsBehind: number; balance: number; dueDay: n
   if (tier) {
     type = tier.type === 'PERCENT' ? 'PERCENT' : 'FIXED';
     value = Number(tier.value ?? 0);
-    tierAmount = type === 'FIXED' ? value : Math.round((balance * value) / 100);
+    tierAmount = type === 'FIXED' ? value : Math.round((arrears * value) / 100);
     rule = tier.label || `${tier.fromDays}${tier.toDays == null ? '+' : `–${tier.toDays}`} days late`;
     calculation = type === 'FIXED'
       ? `Fixed charge of ${value.toLocaleString()} ${currency} for the "${rule}" tier.`
-      : `${value}% of ${balance.toLocaleString()} ${currency} outstanding = ${tierAmount.toLocaleString()} ${currency}.`;
+      : `${value}% of ${arrears.toLocaleString()} ${currency} overdue contributions = ${tierAmount.toLocaleString()} ${currency}.`;
   }
 
   // ── Daily accrual (optional) ─────────────────────────────────────────────
   let dailyAccrual: PenaltyBreakdown['dailyAccrual'] = null;
   if (daily?.enabled && daily.value > 0) {
     const days = daily.maxDays > 0 ? Math.min(overdueDays, daily.maxDays) : overdueDays;
-    const perDay = daily.type === 'FIXED' ? daily.value : Math.round((balance * daily.value) / 100);
+    const perDay = daily.type === 'FIXED' ? daily.value : Math.round((arrears * daily.value) / 100);
     const dailyAmount = perDay * days;
     if (dailyAmount > 0) {
       dailyAccrual = { days, perDay, type: daily.type, amount: dailyAmount };
       const dailyExpl = daily.type === 'FIXED'
         ? `${daily.value.toLocaleString()} ${currency}/day × ${days} day(s) = ${dailyAmount.toLocaleString()} ${currency}`
-        : `${daily.value}%/day of ${balance.toLocaleString()} ${currency} × ${days} day(s) = ${dailyAmount.toLocaleString()} ${currency}`;
+        : `${daily.value}%/day of ${arrears.toLocaleString()} ${currency} × ${days} day(s) = ${dailyAmount.toLocaleString()} ${currency}`;
       calculation = calculation ? `${calculation} Plus daily accrual: ${dailyExpl}.` : `Daily accrual: ${dailyExpl}.`;
       if (!rule) rule = `Daily accrual (${days} day${days === 1 ? '' : 's'} past grace)`;
     }

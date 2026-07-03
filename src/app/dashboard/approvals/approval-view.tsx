@@ -37,6 +37,7 @@ interface DocRef { title: string; fileName: string; fileUrl: string; fileType: s
 interface ViewModel {
   icon: Icon; accent: Accent;
   subject?: Subject; facts: Fact[]; changes?: Change[]; blocks?: Block[]; document?: DocRef;
+  documents?: (DocRef & { status?: string; version?: number })[]; documentsLabel?: string;
 }
 
 function changesFrom(obj: Record<string, any> | undefined | null): Change[] | undefined {
@@ -107,6 +108,17 @@ function buildView(detail: any): ViewModel {
         blocks: detail.summary ? [{ label: 'Reason', text: detail.summary }] : undefined,
       };
     case 'RULE_CHANGE': {
+      if (p.kind === 'SETTINGS_BULK') {
+        const changes: Change[] = Array.isArray(p.changes)
+          ? p.changes.map((c: any) => ({ label: String(c.field), before: String(c.previous ?? '—'), after: String(c.current ?? '—') }))
+          : [];
+        return {
+          icon: Scale, accent: 'primary',
+          facts: [{ label: 'Change', value: 'Edir settings update', emphasis: true }, { label: 'Fields', value: String(changes.length) }],
+          changes,
+          blocks: p.reason ? [{ label: 'Note', text: p.reason }] : undefined,
+        };
+      }
       if (p.kind === 'SETTING') {
         const fmt = (v: any) => (p.fieldKind === 'money' && v != null && v !== '' && !isNaN(Number(v)) ? money(Number(v)) : String(v ?? '—'));
         return {
@@ -154,8 +166,25 @@ function buildView(detail: any): ViewModel {
       if (ctx.edirName) facts.push({ label: 'Edir', value: ctx.edirName });
       return { icon: UserPlus, accent: 'primary', facts };
     }
-    case 'DOCUMENT_ACTION':
     case 'RELATIVE_DOCUMENT_ACTION': {
+      const d = ctx.document as DocRef | undefined;
+      const rel = ctx.relative as any | undefined;
+      const facts: Fact[] = [];
+      if (p.action) facts.push({ label: 'Action', value: titleCase(String(p.action)), emphasis: true });
+      if (rel?.relationship) facts.push({ label: 'Relationship', value: titleCase(String(rel.relationship)) });
+      if (d?.category) facts.push({ label: 'Category', value: d.category });
+      if (rel?.phone) facts.push({ label: 'Phone', value: rel.phone });
+      if (rel?.dateOfBirth) facts.push({ label: 'Date of birth', value: new Date(rel.dateOfBirth).toLocaleDateString() });
+      if (rel) facts.push({ label: 'Role', value: [rel.isDependent ? 'Dependent' : null, rel.isBeneficiary ? 'Beneficiary' : null].filter(Boolean).join(' · ') || '—' });
+      const subject: Subject | undefined = rel
+        ? { icon: User, title: rel.name, subtitle: [rel.relationship ? titleCase(String(rel.relationship)) : null, rel.memberName ? `of ${rel.memberName}` : null].filter(Boolean).join(' · ') }
+        : member;
+      // Every supporting document on file for the dependent (the one under review is
+      // shown as the primary document; the rest give the checker full context).
+      const supporting = Array.isArray(ctx.relativeDocuments) ? (ctx.relativeDocuments as any[]) : [];
+      return { icon: FileText, accent: 'info', subject, facts, changes: changesFrom(p.changes), document: d, documents: supporting, documentsLabel: 'Supporting documents on file' };
+    }
+    case 'DOCUMENT_ACTION': {
       const d = ctx.document as DocRef | undefined;
       const facts: Fact[] = [];
       if (p.action) facts.push({ label: 'Action', value: titleCase(String(p.action)), emphasis: true });
@@ -261,6 +290,27 @@ export function ApprovalView({ detail }: { detail: any }) {
       )}
 
       {v.document && <DocumentCard doc={v.document} />}
+
+      {v.documents && v.documents.length > 0 && (
+        <div className="space-y-2">
+          <SectionLabel>{v.documentsLabel ?? 'Documents'} ({v.documents.length})</SectionLabel>
+          <div className="space-y-2">
+            {v.documents.map((doc, i) => (
+              <a key={i} href={doc.fileUrl} target="_blank" rel="noopener noreferrer"
+                 className="flex items-center gap-3 rounded-lg border p-2.5 transition-colors hover:bg-muted/40">
+                {doc.fileType === 'image'
+                  ? <img src={doc.fileUrl} alt="" className="h-10 w-10 shrink-0 rounded-md border object-cover" />
+                  : <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground"><FileText className="h-5 w-5" /></span>}
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-medium">{doc.title}{doc.version && doc.version > 1 ? ` · v${doc.version}` : ''}</div>
+                  <div className="truncate text-xs text-muted-foreground">{doc.category}{doc.status ? ` · ${titleCase(String(doc.status))}` : ''}</div>
+                </div>
+                <ExternalLink className="ml-auto h-4 w-4 shrink-0 text-muted-foreground" />
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
 
       {v.blocks?.map((b, i) => (
         <div key={i} className="space-y-1.5">

@@ -767,7 +767,7 @@ function EditEdirDialog({ edir, branches, onClose, onDone }: { edir: EdirItem; b
       agreementDocUrl: form.agreementDocUrl,
     });
     setSaving(false);
-    if (res?.success) { toast.success('Edir updated.'); onDone(); }
+    if (res?.success) { toast.success((res as any).message || 'Edir updated.'); onDone(); }
     else toast.error(res?.error || 'Failed to save.');
   };
 

@@ -245,8 +245,14 @@ function ReceiptModal({ log, onClose }: { log: any; onClose: () => void }) {
               </Section>
 
               <Section title="Payer">
-                <Row label="Payer Account Number" value={log.payerPhone || '—'} mono />
+                <Row label="Payer Account Number" value={log.payerAccount || '—'} mono />
                 <Row label="Payer Account Name" value={log.payerName || '—'} />
+                <Row label="Payer Phone" value={log.payerPhone || '—'} mono />
+              </Section>
+
+              <Section title="Paid To (Edir Account)">
+                <Row label="Edir" value={log.edirName || '—'} />
+                <Row label="Account Number" value={log.edirAccount || '—'} mono />
               </Section>
 
               <Section title="Reference">

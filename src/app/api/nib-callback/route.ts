@@ -142,11 +142,40 @@ export async function POST(request: NextRequest) {
       select: { name: true, memberId: true, phone: true },
     });
 
+    // ── Parties + destination account, captured from the mini-app payment ────────
+    //  • PAYER  — account number the bank debited (paidByNumber) + resolved name.
+    //  • PAID TO — the credited Edir account number + the Edir's name.
+    // Persisted on the PaymentLog so the payment log shows who paid (name/account)
+    // and which Edir account received the funds.
+    const payerAccount = (paidByNumber && String(paidByNumber).trim()) || null;
+    let payerName: string | null = null;
+    if (payerPhone) {
+      const pm = await prisma.member.findFirst({ where: { phone: payerPhone }, select: { name: true } });
+      payerName = pm?.name
+        ?? (await prisma.user.findFirst({ where: { phone: payerPhone }, select: { name: true } }))?.name
+        ?? null;
+    }
+    const settlementMeta = {
+      payerPhone, beneficiaryPhone,
+      payerName, payerAccount,
+      edirAccount: expectedAccount ?? bodyAcct ?? claimAcct ?? null,
+      edirName: expected.companyName ?? null,
+      bankRef: transactionId ?? null,
+    };
+
     // A payment initiated for a larger amount than was paid → partial. Prefer the
     // existing record's amount, then the intent's initiated amount, else assume full.
     const expectedAmount = existing ? Number(existing.amount) : (intent ? Number(intent.amount) : paidAmount);
     const partial = paidAmount + 0.0001 < expectedAmount;
-    payLog('callback', 'settling payment', { ourRef, bankRef: transactionId, paidAmount, expectedAmount, partial, selfHealed: !existing });
+    payLog('callback', 'settling payment', { ourRef, bankRef: transactionId, paidAmount, expectedAmount, partial, selfHealed: !existing, payerAccount, edirAccount: settlementMeta.edirAccount });
+
+    // The originating breakdown (incl. any latePenalty) carries into settlement so
+    // the penalty portion doesn't pay down contribution balance or credit months.
+    // Skip it on partials, where the initiated line amounts no longer hold.
+    let settleBreakdown: any = undefined;
+    if (intent?.breakdown && !partial) {
+      try { settleBreakdown = JSON.parse(intent.breakdown); } catch { settleBreakdown = undefined; }
+    }
 
     await prisma.$transaction(async (tx) => {
       // The record is created (when self-healing) INSIDE the transaction and
@@ -154,7 +183,12 @@ export async function POST(request: NextRequest) {
       // PENDING state — it is born and settled atomically, or rolled back.
       let paymentLogId: string;
       if (existing) {
-        await tx.paymentLog.update({ where: { id: existing.id }, data: { receiptUrl: transactionId ?? existing.receiptUrl } });
+        let prevDesc: any = {};
+        try { prevDesc = JSON.parse(existing.description || '{}') || {}; } catch { prevDesc = {}; }
+        await tx.paymentLog.update({
+          where: { id: existing.id },
+          data: { receiptUrl: transactionId ?? existing.receiptUrl, description: JSON.stringify({ ...prevDesc, ...settlementMeta }) },
+        });
         paymentLogId = existing.id;
       } else {
         const created = await tx.paymentLog.create({
@@ -162,7 +196,7 @@ export async function POST(request: NextRequest) {
             edirId: logEdirId!, memberId: memberId!,
             amount: new Prisma.Decimal(paidAmount), method: 'NIBTERA_MINI_APP',
             status: 'PENDING', transactionId: ourRef, receiptUrl: transactionId ?? null, verificationType: 'AUTOMATIC',
-            description: JSON.stringify({ selfHealed: !existing, bankRef: transactionId, payerPhone, beneficiaryPhone }),
+            description: JSON.stringify({ selfHealed: !existing, ...settlementMeta }),
           },
         });
         paymentLogId = created.id;
@@ -175,6 +209,7 @@ export async function POST(request: NextRequest) {
         memberId: memberId!,
         paymentLogId,
         total: new Prisma.Decimal(paidAmount),
+        breakdown: settleBreakdown,
         method: 'NIBTERA_MINI_APP',
         partial,
       });
@@ -185,10 +220,13 @@ export async function POST(request: NextRequest) {
       const benLabel = beneficiary
         ? `${beneficiary.name} (${beneficiary.memberId}, ${beneficiary.phone ?? beneficiaryPhone ?? 'n/a'})`
         : (beneficiaryPhone ?? memberId!);
+      const payerLabel = payerName
+        ? `${payerName}${payerAccount ? ` (${payerAccount})` : payerPhone ? ` (${payerPhone})` : ''}`
+        : (payerAccount ?? payerPhone ?? 'unknown payer');
       await writeAudit({
         edirId: logEdirId!, action: 'NIB_PAYMENT_SETTLED',
         targetType: 'PaymentLog', targetId: paymentLogId,
-        details: `Settled ${paidAmount} via NIB for beneficiary ${benLabel}; paid by ${payerPhone ?? 'unknown payer'} (ref ${ourRef}, bank ${transactionId})${partial ? ' [partial]' : ''}.`,
+        details: `Settled ${paidAmount} via NIB into ${settlementMeta.edirName ?? 'Edir'} account ${settlementMeta.edirAccount ?? 'n/a'} for beneficiary ${benLabel}; paid by ${payerLabel} (ref ${ourRef}, bank ${transactionId})${partial ? ' [partial]' : ''}.`,
       }, tx);
     });
 

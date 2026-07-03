@@ -92,15 +92,48 @@ export interface ApprovalContext {
   issuance?: { assetName: string | null; memberName: string | null; memberCode: string | null; issuedQty: number };
   category?: { name: string; benefitEligible: boolean; emergencyEligible: boolean };
   role?: { name: string };
+  // Dependent/relative context — so a checker can see who the document belongs to
+  // and every supporting document on file before approving a relative-document action.
+  relative?: { name: string; relationship: string; phone: string | null; dateOfBirth: string | null; isBeneficiary: boolean; isDependent: boolean; memberName: string | null; memberCode: string | null };
+  relativeDocuments?: { title: string; fileName: string; fileUrl: string; fileType: string; category: string; status: string; version: number }[];
   edirName?: string | null;
 }
 
-async function resolveApprovalContext(edirId: string, rawPayload: unknown): Promise<ApprovalContext> {
+async function resolveApprovalContext(edirId: string, module: string, rawPayload: unknown): Promise<ApprovalContext> {
   const p = (rawPayload ?? {}) as Record<string, any>;
   const ctx: ApprovalContext = {};
   const safe = async (fn: () => Promise<void>) => { try { await fn(); } catch { /* best-effort enrichment */ } };
 
   await Promise.all([
+    safe(async () => {
+      // Relative/dependent document approval: the checker should see the dependent's
+      // details AND every supporting document already on file before deciding.
+      if (module !== 'RELATIVE_DOCUMENT_ACTION' || !p.documentId) return;
+      const doc = await prisma.relativeDocument.findUnique({
+        where: { id: p.documentId },
+        include: {
+          relative: {
+            include: {
+              member: { select: { name: true, memberId: true } },
+              documents: { orderBy: [{ createdAt: 'desc' }], select: { documentName: true, fileName: true, fileUrl: true, fileType: true, category: true, status: true, version: true } },
+            },
+          },
+        },
+      });
+      if (!doc) return;
+      const rel = doc.relative;
+      ctx.document = { title: doc.documentName || doc.fileName || 'Document', fileName: doc.fileName || 'Document', fileUrl: doc.fileUrl, fileType: doc.fileType || 'file', category: doc.category };
+      ctx.relative = {
+        name: rel.name, relationship: rel.relationship, phone: rel.phone,
+        dateOfBirth: rel.dateOfBirth ? rel.dateOfBirth.toISOString() : null,
+        isBeneficiary: rel.isBeneficiary, isDependent: rel.isDependent,
+        memberName: rel.member?.name ?? null, memberCode: rel.member?.memberId ?? null,
+      };
+      ctx.relativeDocuments = rel.documents.map(d => ({
+        title: d.documentName || d.fileName || 'Document', fileName: d.fileName || 'Document',
+        fileUrl: d.fileUrl, fileType: d.fileType || 'file', category: d.category, status: d.status as string, version: d.version,
+      }));
+    }),
     safe(async () => {
       if (!p.memberId) return;
       const m = await prisma.member.findUnique({ where: { id: p.memberId }, select: { name: true, memberId: true, phone: true, photoUrl: true } });
@@ -119,7 +152,7 @@ async function resolveApprovalContext(edirId: string, rawPayload: unknown): Prom
       };
     }),
     safe(async () => {
-      if (!p.documentId) return;
+      if (module !== 'DOCUMENT_ACTION' || !p.documentId) return;
       const d = await prisma.dmsDocument.findUnique({ where: { id: p.documentId }, select: { title: true, fileName: true, fileUrl: true, fileType: true, category: true } });
       if (d) ctx.document = d;
     }),
@@ -233,7 +266,7 @@ export async function getApprovalDetail(id: string) {
   return {
     ...serialize(request),
     payload: request.payload,
-    context: await resolveApprovalContext(request.edirId, request.payload),
+    context: await resolveApprovalContext(request.edirId, request.module, request.payload),
     timeline: request.events.map(e => ({
       id: e.id, type: e.type, comment: e.comment, createdAt: e.createdAt,
       actorName: e.actor?.name ?? e.actor?.email ?? 'Unknown',

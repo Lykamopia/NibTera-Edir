@@ -81,7 +81,7 @@ function EdirDialog({ mode, edir, onClose, onDone }: { mode: 'create' | 'edit'; 
     setSaving(true);
     const res = await saveEdir({ id: mode === 'edit' ? edir?.id : undefined, name: form.name.trim(), description: form.description.trim() || undefined });
     setSaving(false);
-    if (res?.success) { toast.success(mode === 'edit' ? 'Edir updated.' : 'Edir created.'); onDone(); }
+    if (res?.success) { toast.success((res as any).message || (mode === 'edit' ? 'Edir updated.' : 'Edir created.')); onDone(); }
     else toast.error(res?.error || 'Failed to save.');
   };
   return (

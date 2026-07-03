@@ -121,7 +121,7 @@ export default function RuleConfigClient() {
     const res = await saveRuleConfig({ ...cfg, penaltyTiers: tiers, reason: reason || null } as any);
     setSaving(false);
     if (res?.success) {
-      toast.success(res.changed > 0 ? `Saved — ${res.changed} rule(s) updated.` : 'Saved. No changes detected.');
+      toast.success((res as any).pendingApproval ? ((res as any).message || 'Settings changes submitted for approval.') : res.changed > 0 ? `Saved — ${res.changed} rule(s) updated.` : 'Saved. No changes detected.');
       setReason('');
       load();
     } else toast.error(res?.error || 'Failed to save rules.');

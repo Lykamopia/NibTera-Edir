@@ -139,6 +139,29 @@ export async function getPaymentToken(amount: number, token: string, memberId: s
   const beneficiaryPhone = beneficiary?.phone ?? null;
   payLog('getPaymentToken', 'STEP 3 START', { amount, memberId, edirId: resolvedEdirId, beneficiaryPhone, payerPhone, transactionId, transactionTime, token: maskToken(token) });
 
+  // ── Strict duplicate prevention ──────────────────────────────────────────────
+  // A payment for this member+amount that was initiated moments ago and hasn't
+  // settled yet is treated as an in-flight duplicate (double-tap / re-submit), so
+  // we don't ask NIB to debit the payer twice. The bank callback clears settledAt
+  // on completion, and after the short window a genuine retry is allowed.
+  try {
+    const recent = await prisma.paymentIntent.findFirst({
+      where: {
+        memberId,
+        amount: new Prisma.Decimal(amount),
+        settledAt: null,
+        createdAt: { gte: new Date(Date.now() - 2 * 60 * 1000) },
+      },
+      select: { id: true },
+    });
+    if (recent) {
+      payLog('getPaymentToken', 'BLOCKED — duplicate in-flight payment', { memberId, amount });
+      return { status: 'error', message: 'A payment for this amount was just started and is still processing. Please wait a moment before trying again.', transactionId };
+    }
+  } catch (e) {
+    payLog('getPaymentToken', 'duplicate-check skipped', String(e));
+  }
+
   // Multi-tenant payment destination: resolve the BENEFICIARY's Edir account and
   // refuse to proceed unless that Edir is ACTIVE with a real account configured.
   // This routes funds to the correct Edir (never a shared/hard-coded account) and

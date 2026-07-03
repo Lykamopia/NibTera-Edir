@@ -60,7 +60,14 @@ export async function settlePaymentTx(tx: Prisma.TransactionClient, input: Settl
   const monthlyFee = settings?.edir?.settings?.monthlyFee ?? D(0);
   const prevMonthsPaid = status?.monthsPaid ?? 0;
 
-  let remaining = D(input.total);
+  // The late-penalty portion of a payment is NOT part of the member's balance
+  // (late penalties are computed on the fly, never added to paymentStatus.balance)
+  // and is not a contribution. So it must not pay down the balance, settle
+  // installments, or credit contribution months — only the remainder does.
+  const latePenalty = D(input.breakdown?.latePenalty ?? 0);
+  const contributionPaid = Prisma.Decimal.max(D(0), D(input.total).minus(latePenalty));
+
+  let remaining = contributionPaid;
 
   // 1. Penalties / non-installment lines already represented in balance — they
   //    are simply paid down via the balance decrement below. We settle dues here:
@@ -78,14 +85,15 @@ export async function settlePaymentTx(tx: Prisma.TransactionClient, input: Settl
     }
   }
 
-  // 3. Monthly fee coverage — how many whole months this payment covers.
+  // 3. Monthly fee coverage — how many whole months the contribution portion covers.
   const monthsCovered = monthlyFee.greaterThan(0)
-    ? Math.floor(Number(D(input.total).dividedBy(monthlyFee)))
+    ? Math.floor(Number(contributionPaid.dividedBy(monthlyFee)))
     : 0;
 
-  // Update aggregate PaymentStatus.
+  // Update aggregate PaymentStatus. Balance decrements by the contribution portion
+  // only; totalPaid still reflects the full cash received (incl. the penalty).
   const prevBalance = status?.balance ?? D(0);
-  const newBalance = Prisma.Decimal.max(D(0), prevBalance.minus(input.total));
+  const newBalance = Prisma.Decimal.max(D(0), prevBalance.minus(contributionPaid));
   const newTotalPaid = (status?.totalPaid ?? D(0)).plus(input.total);
   const newMonthsPaid = (status?.monthsPaid ?? 0) + monthsCovered;
 

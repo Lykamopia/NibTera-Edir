@@ -2,6 +2,22 @@
 
 import prisma from "@/lib/prisma"
 import { createNotification, createNotifications } from "@/lib/notification-helpers"
+import { computeContributionArrears } from "@/lib/data"
+
+/** Months behind on CONTRIBUTIONS (months due since join vs months paid). Never
+ *  derive this from paymentStatus.balance — that balance holds fees/penalties, not
+ *  monthly contributions, so balance/monthlyFee is not months-behind. */
+function contributionMonthsBehind(member: any, settings: any): number {
+  const monthlyFee = Number(settings?.monthlyFee ?? 0)
+  if (monthlyFee <= 0) return 0
+  const { monthsBehind } = computeContributionArrears({
+    joinDate: member.joinDate,
+    dueDay: settings?.dueDay ?? 1,
+    monthsPaid: member.paymentStatus?.monthsPaid ?? 0,
+    monthlyFee,
+  })
+  return monthsBehind
+}
 
 /**
  * Runs daily scheduled tasks:
@@ -64,7 +80,7 @@ async function sendPaymentReminders(edir: any, today: Date) {
 
   // Get all active members with pending payments
   const activeMembers = edir.members.filter((m: any) =>
-    m.status === "ACTIVE" && m.paymentStatus?.balance > 0 && m.user
+    m.status === "ACTIVE" && Number(m.paymentStatus?.balance ?? 0) > 0 && m.user
   )
 
   for (const member of activeMembers) {
@@ -102,9 +118,8 @@ async function autoSuspendMembers(edir: any, today: Date) {
 
   const membersToSuspend = edir.members.filter((m: any) =>
     m.status === "ACTIVE" &&
-    m.paymentStatus?.balance > 0 &&
-    settings.monthlyFee > 0 &&
-    Math.floor(m.paymentStatus.balance / settings.monthlyFee) >= settings.autoSuspendMonths
+    Number(settings.monthlyFee) > 0 &&
+    contributionMonthsBehind(m, settings) >= settings.autoSuspendMonths
   )
 
   for (const member of membersToSuspend) {
@@ -132,9 +147,9 @@ async function autoTerminateMembers(edir: any, today: Date) {
 
   const membersToTerminate = edir.members.filter((m: any) =>
     m.status !== "TERMINATED" &&
-    m.paymentStatus?.balance > 0 &&
-    settings.monthlyFee > 0 &&
-    Math.floor(m.paymentStatus.balance / settings.monthlyFee) >= settings.autoTerminateMonths
+    m.status !== "CANCELLED" &&
+    Number(settings.monthlyFee) > 0 &&
+    contributionMonthsBehind(m, settings) >= settings.autoTerminateMonths
   )
 
   for (const member of membersToTerminate) {
@@ -176,19 +191,26 @@ async function markReminderSent(member: any, dueDate: Date, settings: any) {
     dueDate: dueDate.toISOString(),
     sentAt: new Date().toISOString()
   }
+  const updated = [...sentDates, newEntry]
 
   await prisma.edirSettings.update({
     where: { edirId: member.edirId },
-    data: {
-      reminderSentDates: [...sentDates, newEntry]
-    }
+    data: { reminderSentDates: updated }
   })
+  // Keep the in-memory settings in sync so subsequent members in this same run
+  // don't overwrite each other's entries (each write was previously built off the
+  // stale base array, dropping earlier members' reminders).
+  settings.reminderSentDates = updated
 }
 
 /**
- * Manually triggers the daily tasks (for testing or admin use)
+ * Manually triggers the daily tasks. Restricted to platform admins so it cannot be
+ * abused to mass-suspend/terminate members. The unattended path is the cron route
+ * (/api/cron/daily-tasks), authenticated by CRON_SECRET.
  */
 export async function triggerDailyTasks() {
-  // Add permission check here if needed
+  const { getActor, assertPermission } = await import("@/lib/tenant-scope")
+  const actor = await getActor()
+  await assertPermission(actor, ["super_admin", "manage_edir_settings"])
   return await runDailyTasks()
 }

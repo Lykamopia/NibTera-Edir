@@ -12,6 +12,7 @@ import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
 import { dateWhere, type DateRangeParam } from '@/lib/date-range';
 import { paymentLogStatusLabel } from '@/lib/payment-log-status';
+import { computePenalty, computeContributionArrears } from '@/lib/data';
 
 // ─── Edir settings ───────────────────────────────────────────────────────────
 
@@ -74,12 +75,26 @@ export async function getMemberOutstanding(memberId: string) {
   const balance = Number(member.paymentStatus?.balance ?? 0);
   const monthlyFee = Number(settings?.monthlyFee ?? 0);
   const gracePeriodDays = settings?.gracePeriodDays ?? 0;
-  const monthsBehind = monthlyFee > 0 ? Math.floor(balance / monthlyFee) : 0;
+  const dueDay = settings?.dueDay ?? 1;
+  const monthsPaid = member.paymentStatus?.monthsPaid ?? 0;
+  // Contribution arrears (months due since join vs months paid) — the correct
+  // basis for the late penalty, independent of the pooled balance.
+  const { monthsBehind, arrears: contributionArrears } = computeContributionArrears({ joinDate: member.joinDate, dueDay, monthsPaid, monthlyFee });
 
   // ── Auto-calculate the suggested payment ─────────────────────────────────────
   // Split the outstanding into an installment line (when a plan installment is
-  // due) and arrears, then add the applicable late penalty from the Edir tiers.
-  const penalty = computeOutstandingPenalty(balance, monthsBehind, settings, gracePeriodDays);
+  // due) and arrears, then add the applicable late penalty computed from the
+  // Edir tiers on the overdue contribution amount (shared engine in lib/data).
+  const penalty = computePenalty({
+    monthsBehind, arrears: contributionArrears, dueDay, gracePeriodDays,
+    currency: settings?.currency ?? 'ETB', tiers: settings?.penaltyTiers, now: new Date(),
+    daily: {
+      enabled: !!settings?.dailyPenaltyEnabled,
+      type: settings?.dailyPenaltyType === 'PERCENT' ? 'PERCENT' : 'FIXED',
+      value: Number(settings?.dailyPenaltyValue ?? 0),
+      maxDays: Number(settings?.dailyPenaltyMaxDays ?? 0),
+    },
+  });
   const installmentLine = nextInstallment && balance >= Number(nextInstallment.amount) ? Number(nextInstallment.amount) : 0;
   const arrears = Math.max(0, balance - installmentLine);
 
@@ -103,43 +118,6 @@ export async function getMemberOutstanding(memberId: string) {
     },
     dueInstallmentCount: dueInstallments.length,
   };
-}
-
-/** Late-payment penalty for the manual-payment auto-calculation (mirrors the public computePenalty). */
-function computeOutstandingPenalty(balance: number, monthsBehind: number, settings: any, gracePeriodDays: number) {
-  if (monthsBehind <= 0 || balance <= 0) return null;
-  const tiers = Array.isArray(settings?.penaltyTiers) ? settings.penaltyTiers : [];
-  const now = new Date();
-  const dueDay = settings?.dueDay ?? 1;
-  const cycleDue = new Date(now.getFullYear(), now.getMonth(), dueDay);
-  const ref = now >= cycleDue ? cycleDue : new Date(now.getFullYear(), now.getMonth() - 1, dueDay);
-  const overdueDays = Math.max(0, Math.floor((now.getTime() - ref.getTime()) / 86400000) - gracePeriodDays) + Math.max(0, monthsBehind - 1) * 30;
-  if (overdueDays <= 0) return null;
-
-  const tier = tiers.find((t: any) => overdueDays >= Number(t.fromDays ?? 0) && (t.toDays == null || overdueDays <= Number(t.toDays)));
-  let amount = 0;
-  let rule = '';
-  if (tier) {
-    const value = Number(tier.value ?? 0);
-    amount = tier.type === 'PERCENT' ? Math.round((balance * value) / 100) : value;
-    rule = tier.label || `${tier.fromDays}${tier.toDays == null ? '+' : `–${tier.toDays}`} days late`;
-  }
-
-  // Daily accrual (optional), consistent with computePenalty in lib/data.
-  if (settings?.dailyPenaltyEnabled && Number(settings?.dailyPenaltyValue ?? 0) > 0) {
-    const maxDays = Number(settings?.dailyPenaltyMaxDays ?? 0);
-    const days = maxDays > 0 ? Math.min(overdueDays, maxDays) : overdueDays;
-    const dailyVal = Number(settings.dailyPenaltyValue);
-    const perDay = settings.dailyPenaltyType === 'PERCENT' ? Math.round((balance * dailyVal) / 100) : dailyVal;
-    const dailyAmount = perDay * days;
-    if (dailyAmount > 0) {
-      amount += dailyAmount;
-      rule = rule ? `${rule} + daily accrual` : `Daily accrual (${days} day${days === 1 ? '' : 's'})`;
-    }
-  }
-
-  if (amount <= 0) return null;
-  return { amount, rule, overdueDays };
 }
 
 // ─── Per-member payment history (detail view) ────────────────────────────────
@@ -269,6 +247,27 @@ export async function recordManualPayment(memberId: string, breakdownInput: z.in
     const total = Object.values(breakdown).reduce((a, b) => a + b, 0);
     if (total <= 0) return { success: false as const, error: 'Total must be greater than zero.' };
 
+    // ── Strict duplicate prevention ──────────────────────────────────────────
+    // Block an identical payment for the same member that is already awaiting
+    // approval or was just recorded — guards against double-clicks and repeated
+    // submissions creating duplicate pending payments/approvals.
+    const dupWindow = new Date(Date.now() - 5 * 60 * 1000);
+    const duplicate = await prisma.paymentLog.findFirst({
+      where: {
+        memberId: member.id,
+        method: 'MANUAL',
+        amount: new Prisma.Decimal(total),
+        status: { in: ['PENDING', 'SUCCESS', 'PARTIAL'] },
+        createdAt: { gte: dupWindow },
+      },
+      select: { id: true, status: true },
+    });
+    if (duplicate) {
+      return { success: false as const, error: duplicate.status === 'PENDING'
+        ? 'An identical payment for this member is already awaiting approval. Avoid recording it twice.'
+        : 'An identical payment for this member was just recorded. Avoid recording it twice.' };
+    }
+
     const transactionId = crypto.randomUUID();
     // Create the PaymentLog in an awaiting-approval holding state.
     const log = await prisma.paymentLog.create({
@@ -367,7 +366,9 @@ export async function getPaymentLogs(params: { status?: string; query?: string; 
         coverage: cov ? { months: Number(cov.months ?? 0), from: cov.from ?? null, to: cov.to ?? null } : null,
         dueDate: cov?.to ?? null,
         payerPhone,
-        payerName: payerPhone ? (payerNameByPhone.get(payerPhone) ?? null) : null,
+        payerName: (meta.payerName as string) ?? (payerPhone ? (payerNameByPhone.get(payerPhone) ?? null) : null),
+        payerAccount: (meta.payerAccount as string) ?? null,
+        edirAccount: (meta.edirAccount as string) ?? null,
         bankRef: l.receiptUrl ?? (meta.bankRef as string) ?? null,
         failureReason: (meta.failureReason as string) ?? null,
         voidReason: (meta.voidReason as string) ?? null,
@@ -418,8 +419,8 @@ export async function exportPaymentLogCsv(params: { status?: string; query?: str
       meta.latePenalty != null ? String(Number(meta.latePenalty)) : '',
       String(Number(l.amount)),
       l.createdAt.toISOString(),
-      payerPhone,
-      payerPhone ? (payerNameByPhone.get(payerPhone) ?? '') : '',
+      (meta.payerAccount as string) || payerPhone,
+      (meta.payerName as string) || (payerPhone ? (payerNameByPhone.get(payerPhone) ?? '') : ''),
       l.transactionId,
       l.receiptUrl ?? '',
       l.method,

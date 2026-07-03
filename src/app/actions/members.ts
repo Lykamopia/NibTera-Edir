@@ -13,6 +13,7 @@ import bcrypt from 'bcrypt';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
 import { dateWhere, type DateRangeParam } from '@/lib/date-range';
+import { computeContributionArrears } from '@/lib/data';
 
 const memberSchema = z.object({
   name: z.string().min(2, 'Name is required'),
@@ -190,7 +191,9 @@ export async function getMemberProfile(id: string) {
   const monthlyFee = num(settings?.monthlyFee);
   const balance = num(member.paymentStatus?.balance);
   const tenureMonths = Math.max(0, Math.floor((Date.now() - new Date(member.joinDate).getTime()) / (1000 * 60 * 60 * 24 * 30.4)));
-  const monthsBehind = monthlyFee > 0 ? Math.floor(balance / monthlyFee) : 0;
+  // Months behind is a contribution metric (months due vs months paid), not
+  // balance/monthlyFee — balance holds fees/penalties, not monthly contributions.
+  const { monthsBehind } = computeContributionArrears({ joinDate: member.joinDate, dueDay: settings?.dueDay ?? 1, monthsPaid: member.paymentStatus?.monthsPaid ?? 0, monthlyFee });
 
   const totalDisbursed = member.emergencyClaims.reduce((s, c) => s + num(c.disbursedAmount), 0);
   const penaltyPaid = member.paymentLogs
