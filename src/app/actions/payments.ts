@@ -133,7 +133,7 @@ export async function getMemberPaymentHistory(memberId: string) {
     where: { id: memberId },
     include: {
       paymentStatus: true,
-      edir: { select: { settings: { select: { monthlyFee: true, currency: true } } } },
+      edir: { select: { name: true, accountNumber: true, logoUrl: true, settings: { select: { monthlyFee: true, currency: true } } } },
     },
   });
   if (!member) return null;
@@ -145,22 +145,45 @@ export async function getMemberPaymentHistory(memberId: string) {
     take: 200,
   });
 
-  const parse = (d: string | null) => { try { return d ? JSON.parse(d) : {}; } catch { return {}; } };
-  const payments = logs.map(l => {
-    const meta = parse(l.description);
-    const cov = meta.coverage ?? null;
+  // Resolve payer names for any mini-app payments (payer recorded separately from
+  // the member), so each row's receipt shows who actually paid.
+  const metas = logs.map(l => safeParse(l.description));
+  const payerNameByPhone = await resolvePayerNames(actor, metas);
+  const edirName = member.edir?.name ?? null;
+  const edirAccountDefault = member.edir?.accountNumber ?? null;
+
+  const payments = logs.map((l, i) => {
+    const meta = metas[i];
+    const cov = meta.coverage as { months?: number; from?: string; to?: string } | undefined;
+    const payerPhone = (meta.payerPhone as string) || null;
     return {
       id: l.id,
       transactionId: l.transactionId,
       amount: Number(l.amount),
       method: l.method,
       status: l.status,
+      displayStatus: paymentLogStatusLabel(l.status),
       verificationType: l.verificationType,
       receiptUrl: l.receiptUrl,
       createdAt: l.createdAt,
+      description: l.description,
       coverage: cov ? { months: Number(cov.months ?? 0), from: cov.from ?? null, to: cov.to ?? null } : null,
-      breakdown: BREAKDOWN_KEYS.map(k => ({ key: k, value: Number(meta[k] ?? 0) })).filter(b => b.value > 0),
-      note: meta.failureReason ?? null,
+      breakdown: BREAKDOWN_KEYS.map(k => ({ key: k, value: Number((meta as any)[k] ?? 0) })).filter(b => b.value > 0),
+      note: (meta.failureReason as string) ?? null,
+      // ── Receipt fields (mirror getPaymentLogs) ──
+      memberName: member.name,
+      memberCode: member.memberId,
+      memberStatus: member.status,
+      edirName,
+      edirLogoUrl: member.edir?.logoUrl ?? null,
+      edirAccount: (meta.edirAccount as string) ?? edirAccountDefault,
+      payerName: (meta.payerName as string) ?? (payerPhone ? (payerNameByPhone.get(payerPhone) ?? null) : null),
+      payerAccount: (meta.payerAccount as string) ?? null,
+      payerPhone,
+      bankRef: l.receiptUrl ?? (meta.bankRef as string) ?? null,
+      contributionAmount: meta.installment != null ? Number(meta.installment) : null,
+      penaltyAmount: meta.latePenalty != null ? Number(meta.latePenalty) : null,
+      dueDate: cov?.to ?? null,
     };
   });
 

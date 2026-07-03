@@ -6,6 +6,7 @@
     "dev": "next dev --turbopack -p 3020",
     "build": "next build",
     "start": "next start -p 3020",
+    "cron": "node scripts/cron-service.cjs",
     "lint": "next lint",
     "typecheck": "tsc --noEmit"
   },

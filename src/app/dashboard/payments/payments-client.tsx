@@ -19,6 +19,7 @@ import { PageHeader, StatCard, LoadingState, ErrorState, EmptyState } from '@/co
 import { DateRangeFilter, ALL_TIME, toParam, dateRangeLabel, type DateRangeValue } from '@/components/ui/date-range-filter';
 import { Pagination, usePagination } from '@/components/ui/pagination';
 import { ReceiptUpload, type ReceiptFile } from '@/components/ui/receipt-upload';
+import { PaymentReceiptModal } from '@/components/payment-receipt-modal';
 import { getMembers } from '@/app/actions/members';
 import { getMemberOutstanding, recordManualPayment, getPaymentsSummary, getMemberPaymentHistory } from '@/app/actions/payments';
 
@@ -171,6 +172,7 @@ function HistoryDialog({ member, onClose, onRecord }: { member: any; onClose: ()
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [statusFilter, setStatusFilter] = useState<'all' | 'SUCCESS' | 'PENDING' | 'FAILED'>('all');
+  const [receipt, setReceipt] = useState<any | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -250,7 +252,8 @@ function HistoryDialog({ member, onClose, onRecord }: { member: any; onClose: ()
                     const meta = STATUS_META[p.status] ?? STATUS_META.PENDING;
                     const Icon = meta.icon;
                     return (
-                      <li key={p.id} className="relative rounded-xl border bg-card p-3.5 pl-4">
+                      <li key={p.id} onClick={() => setReceipt(p)} title="View receipt"
+                        className="relative cursor-pointer rounded-xl border bg-card p-3.5 pl-4 transition-colors hover:border-primary/40 hover:bg-muted/30">
                         <span className={`absolute left-0 top-3.5 bottom-3.5 w-1 rounded-full ${meta.dot}`} />
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0 space-y-1.5">
@@ -275,7 +278,8 @@ function HistoryDialog({ member, onClose, onRecord }: { member: any; onClose: ()
                             {p.note && <p className="text-[11px] text-destructive">{p.note}</p>}
                             <div className="flex items-center gap-2 pt-0.5">
                               <span className="font-mono text-[10px] text-muted-foreground/70">{p.transactionId}</span>
-                              {p.receiptUrl && /^(\/|https?:)/.test(p.receiptUrl) && <a href={p.receiptUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[11px] text-primary hover:underline"><FileText className="h-3 w-3" /> Receipt</a>}
+                              <span className="inline-flex items-center gap-1 text-[11px] text-primary"><Receipt className="h-3 w-3" /> View receipt</span>
+                              {p.receiptUrl && /^(\/|https?:)/.test(p.receiptUrl) && <a href={p.receiptUrl} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-primary hover:underline"><FileText className="h-3 w-3" /> Evidence</a>}
                             </div>
                           </div>
                           <div className="shrink-0 text-right">
@@ -296,6 +300,7 @@ function HistoryDialog({ member, onClose, onRecord }: { member: any; onClose: ()
           <Button onClick={onRecord} className="gap-1.5"><CreditCard className="h-4 w-4" /> Record Payment</Button>
         </DialogFooter>
       </DialogContent>
+      {receipt && <PaymentReceiptModal log={receipt} currency={cur} onClose={() => setReceipt(null)} />}
     </Dialog>
   );
 }
