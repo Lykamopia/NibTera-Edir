@@ -30,6 +30,7 @@ import RelationshipCategoriesManager from './relationship-categories-manager';
 type Tier = { id: string; label?: string | null; fromDays: number; toDays: number | null; type: 'FIXED' | 'PERCENT'; value: number };
 type Cfg = {
   monthlyFee: number; registrationFee: number; currency: string; dueDay: number; gracePeriodDays: number;
+  nextPaymentDelayDays: number;
   autoSuspendMonths: number; autoTerminateMonths: number; minMembershipMonths: number; reinstatementFee: number;
   autoSuspendEnabled: boolean; autoTerminateEnabled: boolean; autoReminderEnabled: boolean; memberRoles: string[];
   dailyPenaltyEnabled: boolean; dailyPenaltyType: 'FIXED' | 'PERCENT'; dailyPenaltyValue: number; dailyPenaltyMaxDays: number;
@@ -97,12 +98,13 @@ export default function RuleConfigClient() {
     setLoading(true); setError(false); setNeedsEdir(false);
     getRuleConfig().then(r => {
       if ((r as any).needsEdir) { setNeedsEdir(true); return; }
-      const s = r.settings ?? { 
-        monthlyFee: 0, registrationFee: 0, currency: 'ETB', dueDay: 1, gracePeriodDays: 5, 
-        autoSuspendMonths: 3, autoTerminateMonths: 6, minMembershipMonths: 0, reinstatementFee: 0, 
-        autoSuspendEnabled: true, autoTerminateEnabled: true, autoReminderEnabled: true, 
-        memberRoles: [], penaltyTiers: [], dailyPenaltyEnabled: false, dailyPenaltyType: 'FIXED', 
-        dailyPenaltyValue: 0, dailyPenaltyMaxDays: 0, reminderDaysBefore: [1, 3, 7] 
+      const s = r.settings ?? {
+        monthlyFee: 0, registrationFee: 0, currency: 'ETB', dueDay: 1, gracePeriodDays: 5,
+        nextPaymentDelayDays: 0,
+        autoSuspendMonths: 3, autoTerminateMonths: 6, minMembershipMonths: 0, reinstatementFee: 0,
+        autoSuspendEnabled: true, autoTerminateEnabled: true, autoReminderEnabled: true,
+        memberRoles: [], penaltyTiers: [], dailyPenaltyEnabled: false, dailyPenaltyType: 'FIXED',
+        dailyPenaltyValue: 0, dailyPenaltyMaxDays: 0, reminderDaysBefore: [1, 3, 7]
       };
       const { penaltyTiers, ...scalar } = s as any;
       setCfg(scalar);
@@ -182,6 +184,13 @@ export default function RuleConfigClient() {
               </FieldRow>
               <FieldRow label="Grace Period (days)" hint="Number of days after the due date before late-payment penalties begin to apply.">
                 <Input type="number" min={0} max={90} value={cfg.gracePeriodDays} onChange={e => set('gracePeriodDays', Number(e.target.value) || 0)} />
+              </FieldRow>
+              <FieldRow
+                label="Next-Payment Delay (days)"
+                hint="After a member settles their monthly contribution, the NEXT month's payment only opens this many days after that payment. Until then the pay page shows the settled status with no pay option. Members who still owe anything are never blocked."
+                description="0 = members can pay ahead at any time."
+              >
+                <Input type="number" min={0} max={28} value={cfg.nextPaymentDelayDays} onChange={e => set('nextPaymentDelayDays', Number(e.target.value) || 0)} />
               </FieldRow>
             </CardContent>
           </Card>

@@ -52,6 +52,13 @@ export interface DetailedMember {
   monthsPaid: number;
   // Contribution coverage in calendar months (indexed from the member's join month).
   contributionCoverage: { monthsPaid: number; paidThrough: Date | null; nextDue: Date | null };
+  /**
+   * Advance-payment window (Edir setting `nextPaymentDelayDays`): once a member is
+   * fully settled, the NEXT month's contribution only becomes payable this many
+   * days after their last settling payment. While `blocked` is true the pay UI
+   * shows the settled state with no pay option; `availableAt` is when it reopens.
+   */
+  payWindow: { blocked: boolean; availableAt: Date | null; delayDays: number; lastPayment: Date | null };
   paymentHistory: {
     transactionId: string; amount: number; status: string; method: string; receiptUrl: string | null; createdAt: Date;
     coverage: { months: number; from: string; to: string } | null;
@@ -152,6 +159,19 @@ export async function fetchDetailedMemberByPhone(phone: string): Promise<Detaile
     },
   });
 
+  // ── Advance-payment window (nextPaymentDelayDays) ────────────────────────────
+  // Only gates a member with NOTHING due: contributions covered, zero balance, no
+  // pending installments, no penalty, no reinstatement fee. Anyone who still owes
+  // something can always pay.
+  const nothingDue = monthsBehind <= 0 && balance <= 0 && !penalty
+    && pendingInstallments.length === 0 && reinstatementFee <= 0;
+  const payWindow = computePayWindow({
+    delayDays: Number(settings?.nextPaymentDelayDays ?? 0),
+    lastPayment: member.paymentStatus?.lastPayment ?? null,
+    nothingDue,
+    now,
+  });
+
   return {
     id: member.id,
     edirId: member.edirId,
@@ -182,6 +202,7 @@ export async function fetchDetailedMemberByPhone(phone: string): Promise<Detaile
     dueInstallments,
     monthsPaid,
     contributionCoverage,
+    payWindow,
     paymentHistory: member.paymentLogs.map(l => {
       let coverage: { months: number; from: string; to: string } | null = null;
       try { coverage = JSON.parse(l.description || '{}')?.coverage ?? null; } catch { coverage = null; }
@@ -190,6 +211,61 @@ export async function fetchDetailedMemberByPhone(phone: string): Promise<Detaile
       };
     }),
   };
+}
+
+/**
+ * Advance-payment window from the `nextPaymentDelayDays` Edir setting: after a
+ * settling payment, a fully-settled member may only pay the NEXT month once the
+ * configured number of days has passed. Pure helper shared by the pay page's
+ * member payload and the server-side gate in getPaymentToken.
+ */
+export function computePayWindow(opts: { delayDays: number; lastPayment: Date | null; nothingDue: boolean; now?: Date }): {
+  blocked: boolean; availableAt: Date | null; delayDays: number; lastPayment: Date | null;
+} {
+  const now = opts.now ?? new Date();
+  const delayDays = Math.max(0, Math.floor(Number(opts.delayDays) || 0));
+  const base = { blocked: false, availableAt: null, delayDays, lastPayment: opts.lastPayment };
+  if (delayDays <= 0 || !opts.lastPayment || !opts.nothingDue) return base;
+  const availableAt = new Date(opts.lastPayment);
+  availableAt.setDate(availableAt.getDate() + delayDays);
+  if (now >= availableAt) return base;
+  return { blocked: true, availableAt, delayDays, lastPayment: opts.lastPayment };
+}
+
+/**
+ * Lean server-side check of the advance-payment window for one member — used by
+ * the payment-initiation gate (getPaymentToken) so a crafted request cannot pay
+ * ahead of the window even if the UI is bypassed.
+ */
+export async function computeMemberPayWindow(memberId: string, now = new Date()): Promise<{ blocked: boolean; availableAt: Date | null; delayDays: number }> {
+  const member = await prisma.member.findUnique({
+    where: { id: memberId },
+    include: {
+      paymentStatus: true,
+      edir: { select: { settings: true } },
+      installmentPlans: { select: { installments: { where: { status: 'PENDING' }, select: { id: true }, take: 1 } } },
+    },
+  });
+  if (!member) return { blocked: false, availableAt: null, delayDays: 0 };
+  const settings = member.edir?.settings;
+  const delayDays = Number(settings?.nextPaymentDelayDays ?? 0);
+  const lastPayment = member.paymentStatus?.lastPayment ?? null;
+  if (delayDays <= 0 || !lastPayment) return { blocked: false, availableAt: null, delayDays };
+
+  const balance = Number(member.paymentStatus?.balance ?? 0);
+  const { monthsBehind } = computeContributionArrears({
+    joinDate: member.joinDate,
+    dueDay: settings?.dueDay ?? 1,
+    monthsPaid: member.paymentStatus?.monthsPaid ?? 0,
+    monthlyFee: Number(settings?.monthlyFee ?? 0),
+    now,
+  });
+  const hasPendingInstallment = member.installmentPlans.some(p => p.installments.length > 0);
+  const reinstatementFee = (member.status === 'SUSPENDED' || member.status === 'TERMINATED') ? Number(settings?.reinstatementFee ?? 0) : 0;
+  // A penalty only exists when monthsBehind > 0, so it is covered by that check.
+  const nothingDue = monthsBehind <= 0 && balance <= 0 && !hasPendingInstallment && reinstatementFee <= 0;
+  const w = computePayWindow({ delayDays, lastPayment, nothingDue, now });
+  return { blocked: w.blocked, availableAt: w.availableAt, delayDays: w.delayDays };
 }
 
 /**

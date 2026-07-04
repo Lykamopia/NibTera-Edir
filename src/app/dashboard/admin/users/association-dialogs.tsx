@@ -10,23 +10,36 @@
  * All server actions live in @/app/actions/associations and are unchanged.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Badge } from '@/components/ui/badge';
+import { cn } from '@/lib/utils';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Loader2, Crown } from 'lucide-react';
+import {
+  Loader2, Crown, Landmark, MapPin, Building2, Building, ShieldCheck, ArrowRight,
+  CheckCircle2, PauseCircle, Ban, AlertTriangle,
+} from 'lucide-react';
 import { type Credentials } from '@/components/credentials-dialog';
 import {
   getEdirRolesForAssociation, getOrgUnitsForAssociation, getScopedRolesForAssociation,
   getUserAssociationDetail, updateUserAssociation, createPlatformUser, createPlatformAdmin,
 } from '@/app/actions/associations';
 
-const SCOPES: { id: 'HEAD_OFFICE' | 'DISTRICT' | 'BRANCH' | 'EDIR'; label: string }[] = [
-  { id: 'HEAD_OFFICE', label: 'Head Office' }, { id: 'DISTRICT', label: 'District' },
-  { id: 'BRANCH', label: 'Branch' }, { id: 'EDIR', label: 'Edir' },
+const SCOPES: { id: 'HEAD_OFFICE' | 'DISTRICT' | 'BRANCH' | 'EDIR'; label: string; icon: any; hint: string }[] = [
+  { id: 'HEAD_OFFICE', label: 'Head Office', icon: Landmark, hint: 'Platform-wide operator, no unit binding' },
+  { id: 'DISTRICT', label: 'District', icon: MapPin, hint: 'Oversees all branches in one district' },
+  { id: 'BRANCH', label: 'Branch', icon: Building, hint: 'Operates a single branch and its Edirs' },
+  { id: 'EDIR', label: 'Edir', icon: Building2, hint: 'Works inside one Edir (e.g. Edir Admin)' },
+];
+
+const STATUSES: { id: 'ACTIVE' | 'INACTIVE' | 'SUSPENDED'; label: string; icon: any; hint: string; tone: string }[] = [
+  { id: 'ACTIVE', label: 'Active', icon: CheckCircle2, hint: 'Can sign in and work', tone: 'text-success' },
+  { id: 'INACTIVE', label: 'Inactive', icon: PauseCircle, hint: 'Sign-in disabled, reversible', tone: 'text-muted-foreground' },
+  { id: 'SUSPENDED', label: 'Suspended', icon: Ban, hint: 'Blocked pending review', tone: 'text-warning' },
 ];
 
 export function EditAssociationDialog({ userId, userLabel, edirs, onClose, onDone }: { userId: string; userLabel: string; edirs: any[]; onClose: () => void; onDone: () => void }) {
@@ -34,6 +47,7 @@ export function EditAssociationDialog({ userId, userLabel, edirs, onClose, onDon
   const [saving, setSaving] = useState(false);
   const [orgUnits, setOrgUnits] = useState<any[]>([]);
   const [roles, setRoles] = useState<any[]>([]);
+  const [detail, setDetail] = useState<any | null>(null);
   const [form, setForm] = useState({
     scope: 'HEAD_OFFICE' as 'HEAD_OFFICE' | 'DISTRICT' | 'BRANCH' | 'EDIR',
     edirId: '', districtId: '', branchId: '', roleId: '', status: 'ACTIVE' as 'ACTIVE' | 'INACTIVE' | 'SUSPENDED',
@@ -42,14 +56,15 @@ export function EditAssociationDialog({ userId, userLabel, edirs, onClose, onDon
 
   useEffect(() => {
     Promise.all([getUserAssociationDetail(userId), getOrgUnitsForAssociation().catch(() => [])])
-      .then(([detail, units]) => {
+      .then(([d, units]) => {
         setOrgUnits(units as any[]);
-        if (!detail) { setBlocked('User not found.'); return; }
-        if (detail.isSuperAdmin) { setBlocked('Platform Super-Admins cannot be edited here.'); return; }
+        if (!d) { setBlocked('User not found.'); return; }
+        if (d.isSuperAdmin) { setBlocked('Platform Super-Admins cannot be edited here.'); return; }
+        setDetail(d);
         setForm({
-          scope: detail.scope,
-          edirId: detail.edirId ?? '', districtId: detail.districtId ?? '', branchId: detail.branchId ?? '',
-          roleId: detail.roleId ?? '', status: (detail.status as any) ?? 'ACTIVE',
+          scope: d.scope,
+          edirId: d.edirId ?? '', districtId: d.districtId ?? '', branchId: d.branchId ?? '',
+          roleId: d.roleId ?? '', status: (d.status as any) ?? 'ACTIVE',
         });
       })
       .finally(() => setLoading(false));
@@ -72,6 +87,32 @@ export function EditAssociationDialog({ userId, userLabel, edirs, onClose, onDon
   const branchesForDistrict: any[] = orgUnits.find(d => d.id === form.districtId)?.branches ?? [];
   const setScope = (scope: typeof form.scope) => setForm(f => ({ ...f, scope, edirId: '', districtId: '', branchId: '', roleId: '' }));
 
+  // Human labels for the current selections (drives the review panel).
+  const placementLabel = (scope: typeof form.scope, edirId: string, districtId: string, branchId: string) => {
+    if (scope === 'HEAD_OFFICE') return 'Head Office';
+    if (scope === 'EDIR') return edirs.find((e: any) => e.id === edirId)?.name ? `Edir · ${edirs.find((e: any) => e.id === edirId)!.name}` : 'Edir · (choose one)';
+    const district = orgUnits.find((d: any) => d.id === districtId);
+    if (scope === 'DISTRICT') return district ? `District · ${district.name}` : 'District · (choose one)';
+    const branch = district?.branches?.find((b: any) => b.id === branchId);
+    return branch ? `Branch · ${branch.name}` : 'Branch · (choose one)';
+  };
+
+  const currentPlacement = detail ? placementLabel(detail.scope, detail.edirId ?? '', detail.districtId ?? '', detail.branchId ?? '') : '';
+  const nextPlacement = placementLabel(form.scope, form.edirId, form.districtId, form.branchId);
+  const nextRoleName = form.roleId ? (roles.find((r: any) => r.id === form.roleId)?.name ?? detail?.roleName ?? '—') : 'No role';
+
+  const changes = useMemo(() => {
+    if (!detail) return [];
+    const list: { label: string; before: string; after: string }[] = [];
+    const placementChanged = detail.scope !== form.scope || (detail.edirId ?? '') !== form.edirId || (detail.districtId ?? '') !== form.districtId || (detail.branchId ?? '') !== form.branchId;
+    if (placementChanged) list.push({ label: 'Placement', before: currentPlacement, after: nextPlacement });
+    if ((detail.roleId ?? '') !== form.roleId) list.push({ label: 'Role', before: detail.roleName ?? 'No role', after: nextRoleName });
+    if ((detail.status ?? 'ACTIVE') !== form.status) list.push({ label: 'Status', before: detail.status ?? 'ACTIVE', after: form.status });
+    return list;
+  }, [detail, form, currentPlacement, nextPlacement, nextRoleName]);
+
+  const revokesSessions = changes.some(c => c.label === 'Placement' || c.label === 'Status');
+
   const submit = async () => {
     if (form.scope === 'EDIR' && !form.edirId) { toast.error('Select an Edir.'); return; }
     if (form.scope === 'DISTRICT' && !form.districtId) { toast.error('Select a district.'); return; }
@@ -83,76 +124,145 @@ export function EditAssociationDialog({ userId, userLabel, edirs, onClose, onDon
       roleId: form.roleId || null, status: form.status,
     });
     setSaving(false);
-    if (res?.success) { toast.success('Association updated.'); onDone(); }
+    if (res?.success) { toast.success('Access updated.'); onDone(); }
     else toast.error(res?.error || 'Failed to update.');
   };
 
   return (
     <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent>
+      <DialogContent className="max-h-[88vh] max-w-2xl overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Manage Access</DialogTitle>
-          <DialogDescription>{userLabel} — update scope, role, and status. Existing sessions are revoked on scope/status change.</DialogDescription>
+          <DialogTitle className="flex items-center gap-2"><ShieldCheck className="h-5 w-5 text-primary" /> Manage Access</DialogTitle>
+          <DialogDescription>Reposition <span className="font-medium text-foreground">{userLabel}</span> in the organization — scope, placement, role, and account status — with a review of every change before it applies.</DialogDescription>
         </DialogHeader>
         {loading ? (
-          <div className="flex h-32 items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
+          <div className="flex h-40 items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
         ) : blocked ? (
           <p className="rounded-md bg-warning/10 p-3 text-sm text-warning">{blocked}</p>
         ) : (
-          <div className="space-y-3">
-            <div className="space-y-1.5">
-              <Label className="text-xs">Scope</Label>
-              <div className="flex flex-wrap rounded-lg border p-0.5">
+          <div className="space-y-5">
+            {/* Current access snapshot */}
+            <div className="rounded-xl border bg-muted/30 p-3">
+              <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Current access</div>
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <Badge variant="secondary">{currentPlacement}</Badge>
+                <Badge variant="outline">{detail?.roleName ?? 'No role'}</Badge>
+                <Badge variant="outline" className={detail?.status === 'ACTIVE' ? 'border-success/20 bg-success/10 text-success' : 'bg-muted text-muted-foreground'}>{detail?.status ?? '—'}</Badge>
+              </div>
+            </div>
+
+            {/* 1 · Organizational scope */}
+            <div className="space-y-2">
+              <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">1 · Organizational scope</Label>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                 {SCOPES.map(s => (
-                  <button key={s.id} type="button" onClick={() => setScope(s.id)} className={`flex-1 rounded-md px-2 py-1.5 text-xs font-medium ${form.scope === s.id ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}>{s.label}</button>
+                  <button
+                    key={s.id} type="button" onClick={() => setScope(s.id)}
+                    className={cn(
+                      'flex flex-col items-start gap-1 rounded-xl border p-3 text-left transition-colors',
+                      form.scope === s.id ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'hover:border-primary/40 hover:bg-muted/40',
+                    )}
+                  >
+                    <s.icon className={cn('h-4 w-4', form.scope === s.id ? 'text-primary' : 'text-muted-foreground')} />
+                    <span className="text-sm font-medium">{s.label}</span>
+                    <span className="text-[11px] leading-snug text-muted-foreground">{s.hint}</span>
+                  </button>
                 ))}
               </div>
             </div>
 
-            {form.scope === 'EDIR' && (
-              <div className="space-y-1.5"><Label className="text-xs">Edir</Label>
-                <Select value={form.edirId} onValueChange={v => setForm(f => ({ ...f, edirId: v, roleId: '' }))}>
-                  <SelectTrigger><SelectValue placeholder="Select an Edir" /></SelectTrigger>
-                  <SelectContent>{edirs.map(e => <SelectItem key={e.id} value={e.id}>{e.name}</SelectItem>)}</SelectContent>
-                </Select>
-              </div>
-            )}
-            {(form.scope === 'DISTRICT' || form.scope === 'BRANCH') && (
-              <div className="space-y-1.5"><Label className="text-xs">District</Label>
-                <Select value={form.districtId} onValueChange={v => setForm(f => ({ ...f, districtId: v, branchId: '', roleId: '' }))}>
-                  <SelectTrigger><SelectValue placeholder="Select a district" /></SelectTrigger>
-                  <SelectContent>{orgUnits.map(d => <SelectItem key={d.id} value={d.id}>{d.name}{d.code ? ` (${d.code})` : ''}</SelectItem>)}</SelectContent>
-                </Select>
-              </div>
-            )}
-            {form.scope === 'BRANCH' && (
-              <div className="space-y-1.5"><Label className="text-xs">Branch</Label>
-                <Select value={form.branchId} onValueChange={v => setForm(f => ({ ...f, branchId: v, roleId: '' }))} disabled={!form.districtId}>
-                  <SelectTrigger><SelectValue placeholder={form.districtId ? 'Select a branch' : 'Pick a district first'} /></SelectTrigger>
-                  <SelectContent>{branchesForDistrict.map((b: any) => <SelectItem key={b.id} value={b.id}>{b.name}{b.code ? ` (${b.code})` : ''}</SelectItem>)}</SelectContent>
-                </Select>
+            {/* 2 · Placement */}
+            {form.scope !== 'HEAD_OFFICE' && (
+              <div className="space-y-2">
+                <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">2 · Placement</Label>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {form.scope === 'EDIR' && (
+                    <div className="space-y-1.5 sm:col-span-2"><Label className="text-xs">Edir</Label>
+                      <Select value={form.edirId} onValueChange={v => setForm(f => ({ ...f, edirId: v, roleId: '' }))}>
+                        <SelectTrigger><SelectValue placeholder="Select an Edir" /></SelectTrigger>
+                        <SelectContent>{edirs.map(e => <SelectItem key={e.id} value={e.id}>{e.name}</SelectItem>)}</SelectContent>
+                      </Select>
+                    </div>
+                  )}
+                  {(form.scope === 'DISTRICT' || form.scope === 'BRANCH') && (
+                    <div className="space-y-1.5"><Label className="text-xs">District</Label>
+                      <Select value={form.districtId} onValueChange={v => setForm(f => ({ ...f, districtId: v, branchId: '', roleId: '' }))}>
+                        <SelectTrigger><SelectValue placeholder="Select a district" /></SelectTrigger>
+                        <SelectContent>{orgUnits.map(d => <SelectItem key={d.id} value={d.id}>{d.name}{d.code ? ` (${d.code})` : ''}</SelectItem>)}</SelectContent>
+                      </Select>
+                    </div>
+                  )}
+                  {form.scope === 'BRANCH' && (
+                    <div className="space-y-1.5"><Label className="text-xs">Branch</Label>
+                      <Select value={form.branchId} onValueChange={v => setForm(f => ({ ...f, branchId: v, roleId: '' }))} disabled={!form.districtId}>
+                        <SelectTrigger><SelectValue placeholder={form.districtId ? 'Select a branch' : 'Pick a district first'} /></SelectTrigger>
+                        <SelectContent>{branchesForDistrict.map((b: any) => <SelectItem key={b.id} value={b.id}>{b.name}{b.code ? ` (${b.code})` : ''}</SelectItem>)}</SelectContent>
+                      </Select>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5"><Label className="text-xs">Role</Label>
+            {/* 3 · Role & status */}
+            <div className="space-y-2">
+              <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{form.scope === 'HEAD_OFFICE' ? '2' : '3'} · Role &amp; account status</Label>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Role at this placement</Label>
                 <Select value={form.roleId || 'none'} onValueChange={v => setForm(f => ({ ...f, roleId: v === 'none' ? '' : v }))}>
                   <SelectTrigger><SelectValue placeholder="No role" /></SelectTrigger>
-                  <SelectContent><SelectItem value="none">No role</SelectItem>{roles.map(r => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}</SelectContent>
+                  <SelectContent><SelectItem value="none">No role (no permissions)</SelectItem>{roles.map(r => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}</SelectContent>
                 </Select>
+                {roles.length === 0 && <p className="text-[11px] text-muted-foreground">No roles defined for this placement yet — pick a placement first or create one on the Roles page.</p>}
               </div>
-              <div className="space-y-1.5"><Label className="text-xs">Status</Label>
-                <Select value={form.status} onValueChange={v => setForm(f => ({ ...f, status: v as any }))}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent><SelectItem value="ACTIVE">Active</SelectItem><SelectItem value="INACTIVE">Inactive</SelectItem><SelectItem value="SUSPENDED">Suspended</SelectItem></SelectContent>
-                </Select>
+              <div className="grid grid-cols-3 gap-2">
+                {STATUSES.map(s => (
+                  <button
+                    key={s.id} type="button" onClick={() => setForm(f => ({ ...f, status: s.id }))}
+                    className={cn(
+                      'flex flex-col items-start gap-0.5 rounded-xl border p-2.5 text-left transition-colors',
+                      form.status === s.id ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'hover:border-primary/40 hover:bg-muted/40',
+                    )}
+                  >
+                    <span className={cn('flex items-center gap-1 text-sm font-medium', s.tone)}><s.icon className="h-3.5 w-3.5" /> {s.label}</span>
+                    <span className="text-[11px] leading-snug text-muted-foreground">{s.hint}</span>
+                  </button>
+                ))}
               </div>
+            </div>
+
+            {/* Review panel */}
+            <div className="rounded-xl border p-3">
+              <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Review changes</div>
+              {changes.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No changes yet — the account keeps its current access.</p>
+              ) : (
+                <div className="space-y-1.5">
+                  {changes.map(c => (
+                    <div key={c.label} className="flex flex-wrap items-center gap-2 text-sm">
+                      <span className="w-20 shrink-0 text-xs text-muted-foreground">{c.label}</span>
+                      <span className="rounded bg-muted px-2 py-0.5 text-muted-foreground line-through decoration-destructive/40">{c.before}</span>
+                      <ArrowRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      <span className="rounded bg-primary/10 px-2 py-0.5 font-medium text-primary">{c.after}</span>
+                    </div>
+                  ))}
+                  {revokesSessions && (
+                    <p className="mt-2 flex items-start gap-1.5 rounded-md bg-warning/10 p-2 text-[11px] text-warning">
+                      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> Changing the placement or status signs the user out of every active session immediately.
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         )}
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
-          {!blocked && <Button onClick={submit} disabled={saving || loading}>{saving && <Loader2 className="mr-1 h-4 w-4 animate-spin" />} Save changes</Button>}
+          {!blocked && (
+            <Button onClick={submit} disabled={saving || loading || changes.length === 0}>
+              {saving && <Loader2 className="mr-1 h-4 w-4 animate-spin" />} Apply {changes.length > 0 ? `${changes.length} change${changes.length === 1 ? '' : 's'}` : 'changes'}
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -120,6 +120,91 @@ export async function getMemberOutstanding(memberId: string) {
   };
 }
 
+// ─── Per-member obligations matrix (Payments page table) ────────────────────
+
+/**
+ * Detailed per-member obligation rows for the Payments page: instead of one
+ * pooled balance, each member's contribution arrears (months behind × fee),
+ * computed late penalty (Edir tiers + daily accrual), and other charges
+ * (registration fees, compensations — the pooled balance) are broken out, with
+ * the total due. Tenant-scoped; settings are resolved per Edir so the figures
+ * are correct across tenants for cross-tenant actors.
+ */
+export async function getPaymentsMatrix(params: { query?: string; status?: string } = {}) {
+  const actor = await getActor();
+  await assertPermission(actor, ['view_payments', 'record_payment']);
+
+  const where: Prisma.MemberWhereInput = {
+    ...tenantWhere(actor),
+    ...(params.status && params.status !== 'all' ? { status: params.status as any } : { status: 'ACTIVE' }),
+    ...(params.query
+      ? {
+          OR: [
+            { name: { contains: params.query, mode: 'insensitive' } },
+            { memberId: { contains: params.query, mode: 'insensitive' } },
+            { phone: { contains: params.query } },
+          ],
+        }
+      : {}),
+  };
+
+  const members = await prisma.member.findMany({
+    where,
+    include: { paymentStatus: true },
+    orderBy: { name: 'asc' },
+    take: 500,
+  });
+
+  // Per-Edir settings (penalty tiers, fees) for the members in scope.
+  const edirIds = Array.from(new Set(members.map(m => m.edirId)));
+  const settingsRows = edirIds.length
+    ? await prisma.edirSettings.findMany({ where: { edirId: { in: edirIds } } })
+    : [];
+  const settingsByEdir = new Map(settingsRows.map(s => [s.edirId, s]));
+  const now = new Date();
+
+  const items = members.map(m => {
+    const s = settingsByEdir.get(m.edirId);
+    const balance = Number(m.paymentStatus?.balance ?? 0);
+    const monthlyFee = Number(s?.monthlyFee ?? 0);
+    const { monthsBehind, arrears } = computeContributionArrears({
+      joinDate: m.joinDate, dueDay: s?.dueDay ?? 1,
+      monthsPaid: m.paymentStatus?.monthsPaid ?? 0, monthlyFee,
+    });
+    const penalty = computePenalty({
+      monthsBehind, arrears, dueDay: s?.dueDay ?? 1, gracePeriodDays: s?.gracePeriodDays ?? 0,
+      currency: s?.currency ?? 'ETB', tiers: s?.penaltyTiers, now,
+      daily: {
+        enabled: !!s?.dailyPenaltyEnabled,
+        type: s?.dailyPenaltyType === 'PERCENT' ? 'PERCENT' : 'FIXED',
+        value: Number(s?.dailyPenaltyValue ?? 0),
+        maxDays: Number(s?.dailyPenaltyMaxDays ?? 0),
+      },
+    });
+    const penaltyAmount = penalty?.amount ?? 0;
+    return {
+      id: m.id,
+      memberId: m.memberId,
+      name: m.name,
+      phone: m.phone,
+      status: m.status,
+      joinDate: m.joinDate,
+      monthlyFee,
+      monthsPaid: m.paymentStatus?.monthsPaid ?? 0,
+      lastPayment: m.paymentStatus?.lastPayment ?? null,
+      monthsBehind,
+      contributionArrears: arrears,
+      latePenalty: penaltyAmount,
+      penaltyRule: penalty?.rule ?? null,
+      overdueDays: penalty?.overdueDays ?? 0,
+      otherCharges: balance,
+      totalDue: balance + arrears + penaltyAmount,
+    };
+  });
+
+  return { items, currency: settingsRows[0]?.currency ?? 'ETB' };
+}
+
 // ─── Per-member payment history (detail view) ────────────────────────────────
 
 const BREAKDOWN_KEYS = ['installment', 'arrears', 'latePenalty', 'interest', 'serviceFees', 'other'] as const;
@@ -351,7 +436,10 @@ export async function getPaymentLogs(params: { status?: string; query?: string; 
   const [logs, total] = await Promise.all([
     prisma.paymentLog.findMany({
       where,
-      include: { member: { select: { name: true, memberId: true, phone: true, status: true } }, edir: { select: { name: true } } },
+      include: {
+        member: { select: { name: true, memberId: true, phone: true, status: true } },
+        edir: { select: { name: true, accountNumber: true, logoUrl: true } },
+      },
       orderBy: { createdAt: 'desc' }, skip: (page - 1) * pageSize, take: pageSize,
     }),
     prisma.paymentLog.count({ where }),
@@ -383,6 +471,7 @@ export async function getPaymentLogs(params: { status?: string; query?: string; 
         memberPhone: l.member?.phone ?? null,
         memberStatus: l.member?.status ?? null,
         edirName: l.edir?.name ?? null,
+        edirLogoUrl: l.edir?.logoUrl ?? null,
         // ── Detailed fields (present per source; null when not captured) ──
         contributionAmount: meta.installment != null ? Number(meta.installment) : null,
         penaltyAmount: meta.latePenalty != null ? Number(meta.latePenalty) : null,
@@ -391,7 +480,9 @@ export async function getPaymentLogs(params: { status?: string; query?: string; 
         payerPhone,
         payerName: (meta.payerName as string) ?? (payerPhone ? (payerNameByPhone.get(payerPhone) ?? null) : null),
         payerAccount: (meta.payerAccount as string) ?? null,
-        edirAccount: (meta.edirAccount as string) ?? null,
+        // Receiving account: the settlement's captured account, else the Edir's
+        // configured payment account (Edir configuration).
+        edirAccount: (meta.edirAccount as string) ?? l.edir?.accountNumber ?? null,
         bankRef: l.receiptUrl ?? (meta.bankRef as string) ?? null,
         failureReason: (meta.failureReason as string) ?? null,
         voidReason: (meta.voidReason as string) ?? null,

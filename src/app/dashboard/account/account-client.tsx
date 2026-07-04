@@ -7,24 +7,22 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import {
   Loader2, Wallet, CreditCard, CalendarClock, ShieldCheck, AlertTriangle, Users, FolderOpen, Siren, Package,
   MessageSquareWarning, KeyRound, Scale, Bell, Activity, Plus, Upload, FileText, ExternalLink, CircleUser, Receipt,
 } from 'lucide-react';
 import { PageHeader, LoadingState, ErrorState, EmptyState, StatCard } from '@/components/ui/states';
 import { NotificationSettings } from '@/components/notification-settings';
+import { PaymentReceiptModal } from '@/components/payment-receipt-modal';
 import { changePassword } from '@/app/actions/auth';
 import { getMyPortal } from '@/app/actions/account';
-import { getMyRequests, submitMemberRequest } from '@/app/actions/member-requests';
+import { getMyRequests } from '@/app/actions/member-requests';
 import { submitRelativeDocument } from '@/app/actions/relative-documents';
-import { getActiveRelationshipCategories } from '@/app/actions/relationship-categories';
+import { RequestDialog, ActionTile, uploadDoc } from './request-dialog';
 import { toUserError } from '@/lib/errors';
 
 type Portal = NonNullable<Awaited<ReturnType<typeof getMyPortal>>>;
@@ -41,14 +39,6 @@ const STATUS_BADGE: Record<string, string> = {
   FAILED: 'border-destructive/20 bg-destructive/10 text-destructive', VOID: 'bg-muted text-muted-foreground',
   PAID: 'border-success/20 bg-success/10 text-success',
 };
-
-async function uploadDoc(file: File): Promise<string | null> {
-  const fd = new FormData(); fd.append('file', file); fd.append('type', 'documents');
-  const r = await fetch('/api/upload', { method: 'POST', body: fd });
-  const d = await r.json();
-  if (!r.ok || !d.success) { toast.error(d.error || 'Upload failed.'); return null; }
-  return d.path as string;
-}
 
 /** Self-service: a member uploads a proof-of-relationship for their own dependent.
  *  The document lands PENDING and is approved by an Edir reviewer (Maker–Checker). */
@@ -84,6 +74,7 @@ export default function AccountClient() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [requestType, setRequestType] = useState<string | null>(null);
+  const [receipt, setReceipt] = useState<any | null>(null);
   const searchParams = useSearchParams();
 
   const load = useCallback(() => {
@@ -219,11 +210,13 @@ export default function AccountClient() {
         {/* Payments (only for members) */}
         {p.hasMembership && (
           <TabsContent value="payments" className="mt-4 space-y-4">
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-              <StatCard title="Balance" value={money(p.payments.balance, cur)} accent={p.payments.balance > 0 ? 'warning' : 'success'} />
-              <StatCard title="Total Paid" value={money(p.payments.totalContributions, cur)} accent="success" />
-              <StatCard title="Months Paid" value={p.payments.monthsPaid} accent="info" />
-              <StatCard title="Penalties Paid" value={money(p.payments.penaltiesPaid, cur)} accent="destructive" />
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
+              <StatCard title="Total Due" value={money(p.payments.totalDue, cur)} accent={p.payments.totalDue > 0 ? 'warning' : 'success'} hint="balance + arrears + penalty" />
+              <StatCard title="Other Charges" value={money(p.payments.balance, cur)} accent={p.payments.balance > 0 ? 'warning' : 'success'} />
+              <StatCard title="Contribution Arrears" value={money(p.payments.contributionArrears, cur)} accent={p.payments.contributionArrears > 0 ? 'warning' : 'success'} hint={p.payments.monthsBehind > 0 ? `${p.payments.monthsBehind} month(s) behind` : 'up to date'} />
+              <StatCard title="Late Penalty" value={money(p.payments.penalty?.amount ?? 0, cur)} accent={(p.payments.penalty?.amount ?? 0) > 0 ? 'destructive' : 'success'} />
+              <StatCard title="Total Paid" value={money(p.payments.totalContributions, cur)} accent="success" hint={`${p.payments.monthsPaid} month(s) paid`} />
+              <StatCard title="Penalties Paid" value={money(p.payments.penaltiesPaid, cur)} accent="primary" />
             </div>
 
             <Card>
@@ -248,20 +241,24 @@ export default function AccountClient() {
             </Card>
 
             <Card>
-              <CardHeader><CardTitle className="text-base">Payment History & Receipts</CardTitle></CardHeader>
+              <CardHeader><CardTitle className="text-base">Payment History & Receipts</CardTitle><CardDescription>Open any payment for its formal receipt — previewable and downloadable as PDF.</CardDescription></CardHeader>
               <CardContent className="p-0">
                 {p.payments.history.length === 0 ? <EmptyState icon={CreditCard} title="No payments yet" className="min-h-28" /> : (
                   <Table>
-                    <TableHeader><TableRow><TableHead>Date</TableHead><TableHead>Method</TableHead><TableHead>Reference</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Amount</TableHead><TableHead></TableHead></TableRow></TableHeader>
+                    <TableHeader><TableRow><TableHead>Date</TableHead><TableHead>Method</TableHead><TableHead>Reference</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Amount</TableHead><TableHead className="text-right">Receipt</TableHead></TableRow></TableHeader>
                     <TableBody>
                       {p.payments.history.map(l => (
-                        <TableRow key={l.id}>
+                        <TableRow key={l.id} className="cursor-pointer" onClick={() => setReceipt(l)}>
                           <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{fmt(l.createdAt)}</TableCell>
-                          <TableCell className="text-sm">{l.method}</TableCell>
+                          <TableCell className="text-sm">{l.method.replace(/_/g, ' ')}</TableCell>
                           <TableCell className="font-mono text-xs text-muted-foreground">{l.transactionId}</TableCell>
                           <TableCell><Badge variant="outline" className={STATUS_BADGE[l.status] ?? ''}>{l.status}</Badge></TableCell>
                           <TableCell className="text-right font-semibold">{money(l.amount, cur)}</TableCell>
-                          <TableCell className="text-right">{l.receiptUrl && <a href={l.receiptUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center text-primary hover:underline"><Receipt className="h-4 w-4" /></a>}</TableCell>
+                          <TableCell className="text-right" onClick={e => e.stopPropagation()}>
+                            <Button size="sm" variant="outline" className="h-7 gap-1 text-xs" onClick={() => setReceipt(l)}>
+                              <Receipt className="h-3.5 w-3.5" /> Receipt
+                            </Button>
+                          </TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
@@ -419,6 +416,7 @@ export default function AccountClient() {
       </Tabs>
 
       {p.hasMembership && requestType && <RequestDialog type={requestType} onClose={() => setRequestType(null)} onDone={() => { setRequestType(null); load(); }} />}
+      {receipt && <PaymentReceiptModal log={receipt} currency={cur} onClose={() => setReceipt(null)} />}
     </div>
   );
 }
@@ -428,143 +426,6 @@ function Info({ label, value }: { label: string; value?: any }) {
 }
 function Row({ label, value }: { label: string; value: string }) {
   return <div className="flex items-center justify-between"><span className="text-muted-foreground">{label}</span><span className="font-medium">{value}</span></div>;
-}
-function ActionTile({ icon: Icon, label, onClick }: { icon: any; label: string; onClick: () => void }) {
-  return (
-    <button onClick={onClick} className="flex flex-col items-center gap-2 rounded-xl border p-4 text-center transition-all hover:-translate-y-0.5 hover:shadow-md">
-      <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary"><Icon className="h-5 w-5" /></span>
-      <span className="text-sm font-medium">{label}</span>
-    </button>
-  );
-}
-
-// ─── Request submission dialog ───────────────────────────────────────────────
-
-const GRIEVANCE_CATEGORIES = ['Complaint', 'Suggestion', 'Dispute', 'Inquiry', 'Feedback'];
-const RELATIONSHIPS = ['Spouse', 'Child', 'Parent', 'Sibling', 'Other'];
-
-function RequestDialog({ type, onClose, onDone }: { type: string; onClose: () => void; onDone: () => void }) {
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [attachments, setAttachments] = useState<string[]>([]);
-  const [uploading, setUploading] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [f, setF] = useState<any>({
-    subject: '', description: '', category: type === 'GRIEVANCE' ? 'Complaint' : '',
-    name: '', relationship: 'Spouse', phone: '', dateOfBirth: '',
-    affectedPerson: '', date: '', location: '',
-    assetName: '', qty: '1',
-  });
-  const set = (k: string, v: any) => setF((s: any) => ({ ...s, [k]: v }));
-  const [relOptions, setRelOptions] = useState<string[]>(RELATIONSHIPS);
-  useEffect(() => { getActiveRelationshipCategories().then(c => { if (c?.length) setRelOptions(c.map(x => x.name)); }).catch(() => {}); }, []);
-  const relChoices = relOptions.includes(f.relationship) ? relOptions : [f.relationship, ...relOptions];
-
-  const titles: Record<string, string> = { RELATIVE: 'Request to Add Relative', EMERGENCY: 'Report an Emergency', ASSET: 'Request an Asset', GRIEVANCE: 'Grievance / Feedback' };
-
-  const onUpload = async (file: File) => {
-    setUploading(true);
-    const path = await uploadDoc(file);
-    if (path) setAttachments(a => [...a, path]);
-    setUploading(false);
-    if (fileRef.current) fileRef.current.value = '';
-  };
-
-  const submit = async () => {
-    let subject = f.subject.trim();
-    let category: string | null = f.category || null;
-    let payload: any = {};
-
-    if (type === 'RELATIVE') {
-      if (f.name.trim().length < 2) { toast.error('Relative name is required.'); return; }
-      subject = f.name.trim(); category = f.relationship;
-      payload = { name: f.name.trim(), relationship: f.relationship, phone: f.phone || null, dateOfBirth: f.dateOfBirth || null };
-    } else if (type === 'EMERGENCY') {
-      if (!subject) { toast.error('A short title is required.'); return; }
-      payload = { affectedPerson: f.affectedPerson || null, date: f.date || null, location: f.location || null };
-    } else if (type === 'ASSET') {
-      if (f.assetName.trim().length < 2) { toast.error('Asset name is required.'); return; }
-      subject = f.assetName.trim(); payload = { assetName: f.assetName.trim(), qty: Number(f.qty) || 1 };
-    } else { // GRIEVANCE / FEEDBACK
-      if (!subject) { toast.error('A subject is required.'); return; }
-    }
-
-    const submitType = type === 'GRIEVANCE' && f.category === 'Feedback' ? 'FEEDBACK' : type;
-    setSaving(true);
-    const res = await submitMemberRequest({ type: submitType as any, category, subject, description: f.description || null, payload, attachments });
-    setSaving(false);
-    if (res?.success) { toast.success('Request submitted.'); onDone(); }
-    else toast.error(res?.error || 'Failed to submit request.');
-  };
-
-  return (
-    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="max-h-[85vh] max-w-lg overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>{titles[type] ?? 'New Request'}</DialogTitle>
-          <DialogDescription>Your request will be reviewed by the Edir committee and you’ll be notified of the outcome.</DialogDescription>
-        </DialogHeader>
-        <div className="space-y-3" onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault(); }}>
-          {type === 'RELATIVE' && (
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5"><Label className="text-xs">Full Name</Label><Input value={f.name} onChange={e => set('name', e.target.value)} /></div>
-              <div className="space-y-1.5"><Label className="text-xs">Relationship</Label>
-                <Select value={f.relationship} onValueChange={v => set('relationship', v)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{relChoices.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}</SelectContent></Select>
-              </div>
-              <div className="space-y-1.5"><Label className="text-xs">Phone</Label><Input value={f.phone} onChange={e => set('phone', e.target.value)} /></div>
-              <div className="space-y-1.5"><Label className="text-xs">Date of Birth</Label><Input type="date" value={f.dateOfBirth} onChange={e => set('dateOfBirth', e.target.value)} /></div>
-            </div>
-          )}
-          {type === 'EMERGENCY' && (
-            <>
-              <div className="space-y-1.5"><Label className="text-xs">Title</Label><Input value={f.subject} onChange={e => set('subject', e.target.value)} placeholder="e.g. Death of a parent" /></div>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5"><Label className="text-xs">Affected Person</Label><Input value={f.affectedPerson} onChange={e => set('affectedPerson', e.target.value)} /></div>
-                <div className="space-y-1.5"><Label className="text-xs">Date</Label><Input type="date" value={f.date} onChange={e => set('date', e.target.value)} /></div>
-              </div>
-              <div className="space-y-1.5"><Label className="text-xs">Location</Label><Input value={f.location} onChange={e => set('location', e.target.value)} /></div>
-            </>
-          )}
-          {type === 'ASSET' && (
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5"><Label className="text-xs">Asset</Label><Input value={f.assetName} onChange={e => set('assetName', e.target.value)} placeholder="e.g. Tent, chairs" /></div>
-              <div className="space-y-1.5"><Label className="text-xs">Quantity</Label><Input type="number" min={1} value={f.qty} onChange={e => set('qty', e.target.value)} /></div>
-            </div>
-          )}
-          {type === 'GRIEVANCE' && (
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5"><Label className="text-xs">Category</Label>
-                <Select value={f.category} onValueChange={v => set('category', v)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{GRIEVANCE_CATEGORIES.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent></Select>
-              </div>
-              <div className="space-y-1.5"><Label className="text-xs">Subject</Label><Input value={f.subject} onChange={e => set('subject', e.target.value)} /></div>
-            </div>
-          )}
-
-          <div className="space-y-1.5"><Label className="text-xs">{type === 'GRIEVANCE' ? 'Message' : 'Details'}</Label><Textarea rows={3} value={f.description} onChange={e => set('description', e.target.value)} /></div>
-
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <Label className="text-xs">Supporting documents</Label>
-              <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={e => { const file = e.target.files?.[0]; if (file) onUpload(file); }} />
-              <Button type="button" size="sm" variant="outline" disabled={uploading} onClick={() => fileRef.current?.click()}>{uploading ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Upload className="mr-1 h-4 w-4" />} Attach</Button>
-            </div>
-            {attachments.length > 0 && (
-              <div className="flex flex-wrap gap-2">
-                {attachments.map(u => (
-                  <span key={u} className="inline-flex items-center gap-1.5 rounded border px-2 py-1 text-xs"><FileText className="h-3.5 w-3.5" /> {fileName(u)}
-                    <button type="button" onClick={() => setAttachments(a => a.filter(x => x !== u))} className="text-muted-foreground hover:text-destructive">×</button>
-                  </span>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
-          <Button onClick={submit} disabled={saving || uploading}>{saving && <Loader2 className="mr-1 h-4 w-4 animate-spin" />} Submit request</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
 }
 
 function ChangePassword() {

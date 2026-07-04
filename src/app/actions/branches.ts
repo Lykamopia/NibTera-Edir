@@ -18,9 +18,13 @@ const BRANCH_MANAGER_PERMISSIONS = [
   'view_members', 'manage_members',
   'view_payments', 'record_payment', 'approve_payment',
   'view_approvals', 'view_audit_log', 'view_branch_dashboard',
+  // Manage the branch's own platform users and recover the credentials of the
+  // branch's Edir users (e.g. Edir Admin password resets).
+  'view_users', 'manage_users', 'reset_password', 'lock_user', 'unlock_user',
 ];
 const BRANCH_OPERATOR_PERMISSIONS = [
   'view_dashboard', 'view_branches', 'register_edir', 'view_members', 'view_payments', 'view_branch_dashboard',
+  'view_users',
 ];
 
 /** Provision the default Branch Manager / Operator roles for a new branch. */

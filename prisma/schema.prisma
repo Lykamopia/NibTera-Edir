@@ -570,6 +570,9 @@ model EdirSettings {
   currency          String  @default("ETB")
   dueDay            Int     @default(1) // day of month payments are due
   gracePeriodDays   Int     @default(5)
+  // Days after a settling payment before the member may pay the NEXT month's
+  // contribution (0 = pay ahead any time). Only gates fully-settled members.
+  nextPaymentDelayDays Int  @default(0)
   penaltyTiers      Json? // [{ id, label, fromDays, toDays|null, type: 'FIXED'|'PERCENT', value }]
   // Optional daily penalty accrual: penalties grow each day past the grace window.
   dailyPenaltyEnabled Boolean @default(false)

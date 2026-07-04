@@ -1,11 +1,13 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import Papa from 'papaparse';
 import { toast } from 'sonner';
-import { cn } from '@/lib/utils';
+import { cn, isValidEthiopianPhone } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -14,14 +16,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import {
   Users, UserCog, Building2, Search, Download, Plus, UserPlus, MoreHorizontal,
-  Eye, UserX, Power, Loader2, Upload, Wallet, KeyRound, IdCard,
+  Eye, UserX, Power, Loader2, Upload, Wallet, KeyRound,
 } from 'lucide-react';
 import { CredentialsDialog, type Credentials } from '@/components/credentials-dialog';
 import { useConfirm } from '@/components/ui/confirm-provider';
 import { DateRangeFilter, ALL_TIME, toParam, type DateRangeValue } from '@/components/ui/date-range-filter';
 import { Avatar, SortHead, STATUS_COLORS, FormSection, FormField } from '@/app/dashboard/_directory/shared';
 import { getMembersDirectory, exportMembersDirectoryCsv, type PersonRow, type DirectoryContext, type MembersStats } from '@/app/actions/people';
-import { createMember, requestMemberRemoval, setMemberStatus, resetMemberPassword, type MemberInput } from '@/app/actions/members';
+import { createMember, requestMemberRemoval, setMemberStatus, resetMemberPassword, bulkImportMembers, type MemberInput, type BulkMemberRow } from '@/app/actions/members';
 
 type SortKey = 'name' | 'balance' | 'status' | 'edir';
 
@@ -40,9 +42,12 @@ export default function MembersClient() {
   const [dateRange, setDateRange] = useState<DateRangeValue>(ALL_TIME);
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'name', dir: 'asc' });
 
-  const [detail, setDetail] = useState<PersonRow | null>(null);
   const [cred, setCred] = useState<{ name: string; credentials: Credentials } | null>(null);
   const confirm = useConfirm();
+  const router = useRouter();
+
+  // "View details" opens the member's full 360° profile page (single entry point).
+  const openProfile = (r: PersonRow) => { if (r.memberId) router.push(`/dashboard/members/${r.memberId}`); };
 
   const rangeKey = `${dateRange.preset}:${dateRange.from?.toISOString() ?? ''}:${dateRange.to?.toISOString() ?? ''}`;
   const load = useCallback(() => {
@@ -220,6 +225,7 @@ export default function MembersClient() {
         <div className="ml-auto flex flex-wrap items-center gap-2">
           <DateRangeFilter value={dateRange} onChange={setDateRange} className="h-9" align="end" />
           <Button variant="outline" size="sm" onClick={onExport}><Download className="mr-1 h-4 w-4" /> Export</Button>
+          {ctx?.canManageMembers && <BulkImportMembersDialog ctx={ctx} onDone={load} />}
           {ctx?.canManageMembers && <AddMemberDialog ctx={ctx} onCreated={load} onCredentials={setCred} />}
         </div>
       </div>
@@ -249,13 +255,14 @@ export default function MembersClient() {
                   {isSuper && <SortHead label="Edir" k="edir" sort={sort} onSort={toggleSort} />}
                   <TableHead>Role</TableHead>
                   <SortHead label="Status" k="status" sort={sort} onSort={toggleSort} />
+                  <TableHead>Registered</TableHead>
                   <SortHead label="Balance" k="balance" sort={sort} onSort={toggleSort} className="text-right" />
                   <TableHead></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {filtered.map(r => (
-                  <TableRow key={r.key} className="cursor-pointer" onClick={() => setDetail(r)}>
+                  <TableRow key={r.key} className="cursor-pointer" onClick={() => openProfile(r)}>
                     <TableCell>
                       <div className="flex items-center gap-3">
                         <Avatar row={r} />
@@ -280,9 +287,10 @@ export default function MembersClient() {
                         {!r.membershipStatus && '—'}
                       </div>
                     </TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{r.joinDate ? new Date(r.joinDate).toLocaleDateString() : '—'}</TableCell>
                     <TableCell className="text-right tabular-nums">{r.balance.toLocaleString()}</TableCell>
                     <TableCell className="text-right" onClick={e => e.stopPropagation()}>
-                      <RowActions r={r} ctx={ctx!} onView={() => setDetail(r)} onRemoveMember={() => onRemoveMember(r)} onResetPassword={() => onResetPassword(r)} act={act} />
+                      <RowActions r={r} ctx={ctx!} onView={() => openProfile(r)} onRemoveMember={() => onRemoveMember(r)} onResetPassword={() => onResetPassword(r)} act={act} />
                     </TableCell>
                   </TableRow>
                 ))}
@@ -295,15 +303,6 @@ export default function MembersClient() {
         <p className="px-1 text-xs text-muted-foreground">{filtered.length} of {rows.length} {rows.length === 1 ? 'member' : 'members'}</p>
       )}
 
-      {detail && ctx && (
-        <MemberDetail
-          r={detail} ctx={ctx} isSuper={isSuper}
-          onClose={() => setDetail(null)}
-          onRemoveMember={() => onRemoveMember(detail)}
-          onResetPassword={() => onResetPassword(detail)}
-          act={act}
-        />
-      )}
     </div>
   );
 }
@@ -318,10 +317,8 @@ function RowActions({ r, ctx, onView, onRemoveMember, onResetPassword, act }: {
     <DropdownMenu>
       <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="h-8 w-8"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-52">
-        <DropdownMenuItem onClick={onView}><Eye className="mr-2 h-4 w-4" /> View details</DropdownMenuItem>
-        {r.memberId && (
-          <DropdownMenuItem asChild><Link href={`/dashboard/members/${r.memberId}`}><IdCard className="mr-2 h-4 w-4" /> 360° profile</Link></DropdownMenuItem>
-        )}
+        {/* Single entry point: View details opens the full 360° profile page. */}
+        <DropdownMenuItem onClick={onView} disabled={!r.memberId}><Eye className="mr-2 h-4 w-4" /> View details</DropdownMenuItem>
 
         {ctx.canManageMembers && (
           <>
@@ -342,77 +339,23 @@ function RowActions({ r, ctx, onView, onRemoveMember, onResetPassword, act }: {
   );
 }
 
-// ─── Member detail ───────────────────────────────────────────────────────────
-
-function MemberDetail({ r, ctx, isSuper, onClose, onRemoveMember, onResetPassword, act }: {
-  r: PersonRow; ctx: DirectoryContext; isSuper: boolean; onClose: () => void;
-  onRemoveMember: () => void; onResetPassword: () => void; act: (fn: () => Promise<any>, ok: string) => void;
-}) {
-  const rows: [string, React.ReactNode][] = [
-    ['Member ID', r.memberCode || '—'],
-    ['Edir', r.edirName || (isSuper ? 'Unassigned' : '—')],
-    ['Membership role', r.membershipRole || '—'],
-    ['Membership status', r.membershipStatus ? <Badge variant="outline" className={STATUS_COLORS[r.membershipStatus]}>{r.membershipStatus}</Badge> : '—'],
-    ['Login account', r.hasLogin ? (r.accountStatus ?? 'Yes') : 'None'],
-    ['Outstanding balance', <span className="font-semibold tabular-nums">{r.balance.toLocaleString()}</span>],
-    ['Last login', r.lastLoginAt ? new Date(r.lastLoginAt).toLocaleString() : 'Never'],
-  ];
-  return (
-    <Dialog open onOpenChange={o => { if (!o) onClose(); }}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
-          <div className="flex items-center gap-3">
-            <Avatar row={r} lg />
-            <div className="min-w-0">
-              <DialogTitle className="truncate">{r.name}</DialogTitle>
-              <DialogDescription className="truncate">{r.phone || r.email || r.memberCode || ''}</DialogDescription>
-            </div>
-          </div>
-        </DialogHeader>
-        <div className="grid grid-cols-1 gap-px overflow-hidden rounded-lg border bg-border sm:grid-cols-2">
-          {rows.map(([k, v]) => (
-            <div key={k} className="flex flex-col gap-0.5 bg-card px-3 py-2">
-              <span className="text-[10px] uppercase tracking-wide text-muted-foreground">{k}</span>
-              <span className="text-sm font-medium">{v}</span>
-            </div>
-          ))}
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {r.memberId && (
-            <Button size="sm" variant="outline" asChild><Link href={`/dashboard/members/${r.memberId}`}><IdCard className="mr-1 h-4 w-4" /> Open 360° profile</Link></Button>
-          )}
-          {ctx.canManageMembers && r.membershipStatus === 'ACTIVE' && (
-            <Button size="sm" variant="outline" onClick={() => act(() => setMemberStatus(r.memberId!, 'SUSPENDED'), 'Member suspended.')}><Power className="mr-1 h-4 w-4" /> Suspend</Button>
-          )}
-          {ctx.canManageMembers && r.membershipStatus !== 'ACTIVE' && (
-            <Button size="sm" variant="outline" onClick={() => act(() => setMemberStatus(r.memberId!, 'ACTIVE'), 'Member reinstated.')}><Power className="mr-1 h-4 w-4" /> Reinstate</Button>
-          )}
-          {(ctx.canManageMembers || ctx.canResetPassword) && (
-            <Button size="sm" variant="outline" onClick={onResetPassword}><KeyRound className="mr-1 h-4 w-4" /> Reset password</Button>
-          )}
-          {ctx.canManageMembers && (
-            <Button size="sm" variant="ghost" className="text-destructive" onClick={onRemoveMember}><UserX className="mr-1 h-4 w-4" /> Request removal</Button>
-          )}
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 // ─── Add Member ──────────────────────────────────────────────────────────────
 
 const EMPTY_MEMBER: MemberInput = {
   name: '', occupation: '', photoUrl: '', dateOfBirth: '', gender: '', nationalId: '',
   phone: '', email: '', address: '', city: '', subcity: '', woreda: '',
-  emergencyContactName: '', emergencyContactPhone: '', role: 'Member', roleId: '', edirId: '', registrationInstallmentCount: 1,
+  emergencyContactName: '', emergencyContactPhone: '', role: 'Member', roleId: '', edirId: '',
+  registrationInstallmentCount: 1, joinDate: '',
 };
+
+const today = () => new Date().toISOString().slice(0, 10);
 
 function AddMemberDialog({ ctx, onCreated, onCredentials }: {
   ctx: DirectoryContext; onCreated: () => void; onCredentials: (c: { name: string; credentials: Credentials }) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [stage, setStage] = useState<'form' | 'confirm'>('form');
-  const [form, setForm] = useState<MemberInput>(EMPTY_MEMBER);
+  const [form, setForm] = useState<MemberInput>({ ...EMPTY_MEMBER, joinDate: today() });
   const [saving, setSaving] = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const photoRef = useRef<HTMLInputElement>(null);
@@ -421,7 +364,7 @@ function AddMemberDialog({ ctx, onCreated, onCredentials }: {
   const availableRoles = ctx.roles.filter(r => r.scope === 'EDIR' && (!ctx.isSuperAdmin || !r.edirId || r.edirId === form.edirId));
 
   const set = (k: keyof MemberInput, v: any) => setForm(f => ({ ...f, [k]: v }));
-  const reset = () => { setForm(EMPTY_MEMBER); setStage('form'); setSaving(false); };
+  const reset = () => { setForm({ ...EMPTY_MEMBER, joinDate: today() }); setStage('form'); setSaving(false); };
 
   const onPhoto = async (file: File) => {
     setUploadingPhoto(true);
@@ -438,6 +381,7 @@ function AddMemberDialog({ ctx, onCreated, onCredentials }: {
   const proceed = () => {
     if (!form.name || form.name.trim().length < 2) { toast.error('Name is required.'); return; }
     if (ctx.isSuperAdmin && !form.edirId) { toast.error('Select an Edir for the new member.'); return; }
+    if (!form.joinDate) { toast.error('Set the registration date.'); return; }
     setStage('confirm');
   };
 
@@ -517,6 +461,9 @@ function AddMemberDialog({ ctx, onCreated, onCredentials }: {
                   <SelectContent>{availableRoles.map(r => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}</SelectContent>
                 </Select>
               </FormField>
+              <FormField label="Registration Date *">
+                <Input type="date" value={form.joinDate ?? ''} onChange={e => set('joinDate', e.target.value)} />
+              </FormField>
               <FormField label="Registration Installments">
                 <Input type="number" min={1} value={form.registrationInstallmentCount} onChange={e => set('registrationInstallmentCount', Number(e.target.value) || 1)} />
               </FormField>
@@ -529,7 +476,8 @@ function AddMemberDialog({ ctx, onCreated, onCredentials }: {
               ...(ctx.isSuperAdmin ? [['Edir', ctx.edirs.find(e => e.id === form.edirId)?.name ?? '—']] : []),
               ['Name', form.name], ['Occupation', form.occupation], ['Phone', form.phone], ['Email', form.email],
               ['Address', form.address], ['Emergency', `${form.emergencyContactName || ''} ${form.emergencyContactPhone || ''}`],
-              ['Role', form.role], ['Installments', String(form.registrationInstallmentCount)],
+              ['Role', form.role], ['Registration Date', form.joinDate ? new Date(form.joinDate).toLocaleDateString() : '—'],
+              ['Installments', String(form.registrationInstallmentCount)],
             ].map(([k, v]) => (
               <div key={k as string} className="flex justify-between border-b py-1"><span className="text-muted-foreground">{k}</span><span className="font-medium">{v || '—'}</span></div>
             ))}
@@ -543,6 +491,187 @@ function AddMemberDialog({ ctx, onCreated, onCredentials }: {
                 <Button type="button" onClick={doCreate} disabled={saving}>{saving && <Loader2 className="mr-1 h-4 w-4 animate-spin" />} Confirm & Create</Button>
               </>}
         </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Bulk member import (CSV, with relatives) ────────────────────────────────
+
+type MemberImportRow = BulkMemberRow & { name: string };
+
+const MEMBER_IMPORT_COLUMNS =
+  'Name,Phone,Email,Gender,DateOfBirth,NationalId,Occupation,Address,City,Subcity,Woreda,EmergencyContactName,EmergencyContactPhone,Role,RegistrationDate,Relatives';
+
+function BulkImportMembersDialog({ ctx, onDone }: { ctx: DirectoryContext; onDone: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [edirId, setEdirId] = useState('');
+  const [rows, setRows] = useState<MemberImportRow[]>([]);
+  const [fileName, setFileName] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [result, setResult] = useState<{ created: number; relativesCreated: number; total: number; failed: { row: number; name?: string; error: string }[] } | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const reset = () => { setRows([]); setFileName(''); setResult(null); setEdirId(''); if (fileRef.current) fileRef.current.value = ''; };
+
+  const relativeCount = (r: MemberImportRow) =>
+    (r.relatives ?? '').split('|').map(s => s.trim()).filter(s => s.split(':')[0]?.trim().length >= 2).length;
+
+  const rowError = (r: MemberImportRow): string | null => {
+    if ((r.name ?? '').trim().length < 2) return 'Name required';
+    if (r.phone?.trim() && !isValidEthiopianPhone(r.phone.trim())) return 'Invalid phone';
+    if (r.dateOfBirth?.trim() && isNaN(new Date(r.dateOfBirth).getTime())) return 'Invalid birth date';
+    if (r.registrationDate?.trim() && isNaN(new Date(r.registrationDate).getTime())) return 'Invalid registration date';
+    return null;
+  };
+  const validCount = rows.filter(r => !rowError(r)).length;
+
+  const onFile = (file: File) => {
+    setResult(null);
+    Papa.parse<Record<string, string>>(file, {
+      header: true, skipEmptyLines: true,
+      transformHeader: h => h.trim().toLowerCase().replace(/[\s_-]/g, ''),
+      complete: (res) => {
+        const parsed: MemberImportRow[] = (res.data || [])
+          .map(r => ({
+            name: (r.name ?? '').trim(),
+            phone: (r.phone ?? '').trim(),
+            email: (r.email ?? '').trim(),
+            gender: (r.gender ?? '').trim(),
+            dateOfBirth: (r.dateofbirth ?? '').trim(),
+            nationalId: (r.nationalid ?? '').trim(),
+            occupation: (r.occupation ?? '').trim(),
+            address: (r.address ?? '').trim(),
+            city: (r.city ?? '').trim(),
+            subcity: (r.subcity ?? '').trim(),
+            woreda: (r.woreda ?? '').trim(),
+            emergencyContactName: (r.emergencycontactname ?? '').trim(),
+            emergencyContactPhone: (r.emergencycontactphone ?? '').trim(),
+            role: (r.role ?? '').trim(),
+            registrationDate: (r.registrationdate ?? '').trim(),
+            relatives: (r.relatives ?? '').trim(),
+          }))
+          .filter(r => Object.values(r).some(v => v));
+        setRows(parsed);
+        setFileName(file.name);
+        if (parsed.length === 0) toast.error(`No rows found. Expected columns: ${MEMBER_IMPORT_COLUMNS}.`);
+      },
+      error: () => toast.error('Could not read the CSV file.'),
+    });
+  };
+
+  const downloadTemplate = () => {
+    const csv = `${MEMBER_IMPORT_COLUMNS}\nAbebe Kebede,0912345678,abebe@example.com,Male,1980-05-12,ID123456,Merchant,"Bole, Addis Ababa",Addis Ababa,Bole,03,Almaz Kebede,0911000000,Member,2024-01-15,"Almaz Kebede:Spouse:0911000000|Kalkidan Abebe:Child"\n`;
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+    const a = document.createElement('a'); a.href = url; a.download = 'members-import-template.csv'; a.click(); URL.revokeObjectURL(url);
+  };
+
+  const submit = async () => {
+    if (ctx.isSuperAdmin && !edirId) { toast.error('Select a target Edir.'); return; }
+    if (rows.length === 0) { toast.error('Upload a CSV first.'); return; }
+    setSubmitting(true);
+    const res = await bulkImportMembers({ edirId: ctx.isSuperAdmin ? edirId : undefined, rows });
+    setSubmitting(false);
+    if (res?.success) {
+      setResult({ created: res.created, relativesCreated: res.relativesCreated, total: res.total, failed: res.failed });
+      toast.success(`${res.created} member(s) imported${res.failed.length ? ` · ${res.failed.length} skipped` : ''}.`);
+      if (res.created > 0) onDone();
+    } else {
+      toast.error(res?.error || 'Import failed.');
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={o => { setOpen(o); if (!o) reset(); }}>
+      <DialogTrigger asChild><Button size="sm" variant="outline"><Upload className="mr-1 h-4 w-4" /> Import Members</Button></DialogTrigger>
+      <DialogContent className="max-h-[88vh] max-w-4xl overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Import Members</DialogTitle>
+          <DialogDescription>
+            Upload a CSV to register many members (and their relatives) at once. Encode relatives as
+            <span className="mx-1 rounded bg-muted px-1 font-mono text-[11px]">Name:Relationship:Phone | Name:Relationship</span>
+            in the Relatives column. Imported members have no login yet — issue credentials later with “Reset login password”.
+          </DialogDescription>
+        </DialogHeader>
+
+        {result ? (
+          <div className="space-y-4">
+            <div className="rounded-lg border bg-muted/30 p-4 text-sm">
+              <p className="font-medium">{result.created} of {result.total} members imported · {result.relativesCreated} relative(s) added.</p>
+              {result.failed.length > 0 && <p className="text-muted-foreground">{result.failed.length} row{result.failed.length === 1 ? '' : 's'} skipped — see below.</p>}
+            </div>
+            {result.failed.length > 0 && (
+              <div className="max-h-64 overflow-y-auto rounded-lg border">
+                <Table>
+                  <TableHeader><TableRow><TableHead className="w-16">Row</TableHead><TableHead>Name</TableHead><TableHead>Reason</TableHead></TableRow></TableHeader>
+                  <TableBody>
+                    {result.failed.map((f, i) => (
+                      <TableRow key={i}><TableCell className="tabular-nums">{f.row}</TableCell><TableCell className="text-sm">{f.name || '—'}</TableCell><TableCell className="text-sm text-destructive">{f.error}</TableCell></TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+            <DialogFooter>
+              <Button variant="outline" onClick={reset}>Import another</Button>
+              <Button onClick={() => { setOpen(false); reset(); }}>Done</Button>
+            </DialogFooter>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {ctx.isSuperAdmin && (
+              <div className="space-y-1.5">
+                <Label className="text-xs">Target Edir</Label>
+                <Select value={edirId} onValueChange={setEdirId}>
+                  <SelectTrigger><SelectValue placeholder="Select the Edir to import into…" /></SelectTrigger>
+                  <SelectContent>{ctx.edirs.map(e => <SelectItem key={e.id} value={e.id}>{e.name}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center gap-2">
+              <input ref={fileRef} type="file" accept=".csv,text/csv" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) onFile(f); }} />
+              <Button type="button" variant="outline" size="sm" onClick={() => fileRef.current?.click()}><Upload className="mr-1 h-4 w-4" /> {fileName || 'Choose CSV'}</Button>
+              <Button type="button" variant="ghost" size="sm" onClick={downloadTemplate}><Download className="mr-1 h-4 w-4" /> Download template</Button>
+              <span className="text-xs text-muted-foreground">Only Name is required; Registration Date defaults to today.</span>
+            </div>
+
+            {rows.length > 0 && (
+              <div className="space-y-2">
+                <div className="text-xs text-muted-foreground">{validCount} of {rows.length} rows look valid. Invalid rows are skipped on import.</div>
+                <div className="max-h-72 overflow-y-auto rounded-lg border">
+                  <Table>
+                    <TableHeader><TableRow><TableHead className="w-10"></TableHead><TableHead>Name</TableHead><TableHead>Phone</TableHead><TableHead>Role</TableHead><TableHead>Registered</TableHead><TableHead className="text-right">Relatives</TableHead></TableRow></TableHeader>
+                    <TableBody>
+                      {rows.map((r, i) => {
+                        const err = rowError(r);
+                        return (
+                          <TableRow key={i} className={err ? 'bg-destructive/5' : ''}>
+                            <TableCell>{err
+                              ? <Badge variant="outline" className="border-destructive/30 text-destructive">!</Badge>
+                              : <Badge variant="outline" className="border-success/30 text-success">✓</Badge>}</TableCell>
+                            <TableCell className="text-sm">{r.name || '—'}{err && <span className="ml-2 text-xs text-destructive">{err}</span>}</TableCell>
+                            <TableCell className="text-sm">{r.phone || '—'}</TableCell>
+                            <TableCell className="text-sm">{r.role || 'Member'}</TableCell>
+                            <TableCell className="text-sm">{r.registrationDate || 'today'}</TableCell>
+                            <TableCell className="text-right text-sm tabular-nums">{relativeCount(r)}</TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+              </div>
+            )}
+
+            <DialogFooter>
+              <Button variant="outline" onClick={() => { setOpen(false); reset(); }} disabled={submitting}>Cancel</Button>
+              <Button onClick={submit} disabled={submitting || rows.length === 0 || (ctx.isSuperAdmin && !edirId)}>
+                {submitting && <Loader2 className="mr-1 h-4 w-4 animate-spin" />} Import{validCount > 0 ? ` ${validCount} member${validCount === 1 ? '' : 's'}` : ''}
+              </Button>
+            </DialogFooter>
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   );

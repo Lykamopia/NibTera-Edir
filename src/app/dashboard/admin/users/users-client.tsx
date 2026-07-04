@@ -16,14 +16,18 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import {
   UserCog, Building2, Search, Download, MoreHorizontal, UserPlus, ShieldCheck,
   Eye, UserMinus, ArrowRightLeft, Lock, Unlock, KeyRound, Power, Loader2, Upload, History,
+  Pencil, Trash2,
 } from 'lucide-react';
 import { CredentialsDialog, type Credentials } from '@/components/credentials-dialog';
 import { CreateUserDialog, EditAssociationDialog } from './association-dialogs';
+import { OrgUserDialog } from './org-user-dialog';
+import { UserProfileDialog } from './user-profile-dialog';
 import { useConfirm } from '@/components/ui/confirm-provider';
 import { DateRangeFilter, ALL_TIME, toParam, type DateRangeValue } from '@/components/ui/date-range-filter';
 import { Avatar, SortHead, STATUS_COLORS } from '@/app/dashboard/_directory/shared';
 import { getUsersDirectory, exportUsersDirectoryCsv, type PersonRow, type DirectoryContext, type UsersStats } from '@/app/actions/people';
-import { setUserRole, setUserStatus, lockUser, unlockUser, adminResetUserPassword, bulkInviteUsers, inviteUser } from '@/app/actions/admin';
+import { setUserRole, setUserStatus, lockUser, unlockUser, adminResetUserPassword, adminGenerateTempPassword, bulkInviteUsers, inviteUser } from '@/app/actions/admin';
+import { deleteOrgUser } from '@/app/actions/user-management';
 import { removeUserFromEdir, getAssociationAudit } from '@/app/actions/associations';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -49,6 +53,7 @@ export default function UsersClient() {
   const [editAccess, setEditAccess] = useState<PersonRow | null>(null);
   const [addUser, setAddUser] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
+  const [orgDialog, setOrgDialog] = useState<{ edit: PersonRow | null } | null>(null);
   const [showActivity, setShowActivity] = useState(false);
   const [cred, setCred] = useState<{ name: string; credentials: Credentials } | null>(null);
   const confirm = useConfirm();
@@ -126,6 +131,36 @@ export default function UsersClient() {
     if (!(await confirm({ title: 'Remove from Edir', description: `Remove ${r.name} from ${r.edirName || 'their Edir'}? They will be unassigned and deactivated.`, destructive: true, confirmText: 'Remove' }))) return;
     await act(() => removeUserFromEdir(r.userId!), 'User removed from Edir.');
   };
+
+  // Issue a fresh temporary password (manual delivery) — used when a user cannot
+  // receive the reset email; the credentials are shown exactly once.
+  const onTempPassword = async (r: PersonRow) => {
+    if (!r.userId) return;
+    if (!(await confirm({
+      title: 'Generate temporary password',
+      description: `Issue a new temporary password for ${r.name}? Their account is activated, existing sessions are signed out, and they must change it on first login. You'll see the password once to deliver it manually.`,
+      confirmText: 'Generate password',
+    }))) return;
+    const res = await adminGenerateTempPassword(r.userId);
+    if (res?.success && res.credentials) { setCred({ name: r.name, credentials: res.credentials as Credentials }); load(); }
+    else toast.error((res && !res.success && res.error) || 'Failed to reset password.');
+  };
+
+  // Delete a platform user of the actor's own org unit (district/branch scope).
+  const onDeleteOrgUser = async (r: PersonRow) => {
+    if (!r.userId) return;
+    if (!(await confirm({
+      title: `Delete ${r.name}?`,
+      description: 'Permanently deletes this operator account. Accounts with approval history cannot be deleted — deactivate them instead.',
+      destructive: true, confirmText: 'Delete',
+    }))) return;
+    await act(() => deleteOrgUser(r.userId!), 'User deleted.');
+  };
+
+  // A row this org operator may edit/delete directly: a platform (non-Edir)
+  // account. The server enforces the exact branch/district scope.
+  const isOrgManageable = (r: PersonRow) =>
+    !!ctx?.canManageOrgUsers && !r.edirId && r.roleScope !== 'SUPER_ADMIN' && (!!r.branchId || !!r.districtId);
 
   const statCards = [
     { label: 'Users', value: stats?.total ?? 0, icon: UserCog, accent: 'text-primary bg-primary/10' },
@@ -224,10 +259,12 @@ export default function UsersClient() {
           <DateRangeFilter value={dateRange} onChange={setDateRange} className="h-9" align="end" />
           <Button variant="outline" size="sm" onClick={onExport}><Download className="mr-1 h-4 w-4" /> Export</Button>
           {crossTenant && <Button variant="outline" size="sm" onClick={() => setShowActivity(true)}><History className="mr-1 h-4 w-4" /> Activity</Button>}
-          {ctx?.canManageUsers && <BulkImportDialog ctx={ctx} onDone={load} />}
+          {ctx?.canManageUsers && (ctx.isSuperAdmin || ctx.orgScope === 'EDIR') && <BulkImportDialog ctx={ctx} onDone={load} />}
           {crossTenant
             ? <Button size="sm" onClick={() => setAddUser(true)}><UserPlus className="mr-1 h-4 w-4" /> Add User</Button>
-            : ctx?.canManageUsers && <Button size="sm" onClick={() => setInviteOpen(true)}><UserPlus className="mr-1 h-4 w-4" /> Invite User</Button>}
+            : ctx?.canManageOrgUsers
+              ? <Button size="sm" onClick={() => setOrgDialog({ edit: null })}><UserPlus className="mr-1 h-4 w-4" /> Add User</Button>
+              : ctx?.canManageUsers && <Button size="sm" onClick={() => setInviteOpen(true)}><UserPlus className="mr-1 h-4 w-4" /> Invite User</Button>}
         </div>
       </div>
 
@@ -303,9 +340,13 @@ export default function UsersClient() {
                     <TableCell className="text-right" onClick={e => e.stopPropagation()}>
                       <RowActions
                         r={r} ctx={ctx!} canAssociate={crossTenant}
+                        orgManageable={isOrgManageable(r)}
                         onView={() => setDetail(r)}
                         onReassign={() => setEditAccess(r)}
                         onRemoveFromEdir={() => onRemoveFromEdir(r)}
+                        onTempPassword={() => onTempPassword(r)}
+                        onEditOrgUser={() => setOrgDialog({ edit: r })}
+                        onDeleteOrgUser={() => onDeleteOrgUser(r)}
                         act={act}
                       />
                     </TableCell>
@@ -321,17 +362,50 @@ export default function UsersClient() {
       )}
 
       {detail && ctx && (
-        <UserDetail
-          r={detail} ctx={ctx} canAssociate={crossTenant}
+        <UserProfileDialog
+          row={detail}
           onClose={() => setDetail(null)}
-          onReassign={() => { setEditAccess(detail); setDetail(null); }}
-          onRemoveFromEdir={() => onRemoveFromEdir(detail)}
-          act={act}
+          actions={
+            <>
+              {ctx.canManageUsers && detail.userId && (
+                <Button size="sm" variant="outline" onClick={() => act(() => setUserStatus(detail.userId!, detail.accountStatus === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE'), 'Status updated.')}>
+                  <Power className="mr-1 h-4 w-4" /> {detail.accountStatus === 'ACTIVE' ? 'Deactivate' : 'Activate'}
+                </Button>
+              )}
+              {ctx.canLock && detail.userId && (
+                <Button size="sm" variant="outline" onClick={() => act(() => (detail.locked ? unlockUser(detail.userId!) : lockUser(detail.userId!)), detail.locked ? 'User unlocked.' : 'User locked.')}>
+                  {detail.locked ? <><Unlock className="mr-1 h-4 w-4" /> Unlock</> : <><Lock className="mr-1 h-4 w-4" /> Lock</>}
+                </Button>
+              )}
+              {ctx.canResetPassword && detail.userId && (
+                <>
+                  <Button size="sm" variant="outline" onClick={() => act(() => adminResetUserPassword(detail.userId!), 'Reset email sent.')}><KeyRound className="mr-1 h-4 w-4" /> Reset password</Button>
+                  <Button size="sm" variant="outline" onClick={() => { const r = detail; setDetail(null); onTempPassword(r); }}><KeyRound className="mr-1 h-4 w-4" /> Temp password</Button>
+                </>
+              )}
+              {isOrgManageable(detail) && (
+                <Button size="sm" variant="outline" onClick={() => { setOrgDialog({ edit: detail }); setDetail(null); }}><Pencil className="mr-1 h-4 w-4" /> Edit</Button>
+              )}
+              {crossTenant && (
+                <Button size="sm" variant="outline" onClick={() => { setEditAccess(detail); setDetail(null); }}><ArrowRightLeft className="mr-1 h-4 w-4" /> Manage access</Button>
+              )}
+              {crossTenant && detail.edirId && (
+                <Button size="sm" variant="ghost" className="text-destructive" onClick={() => onRemoveFromEdir(detail)}><UserMinus className="mr-1 h-4 w-4" /> Remove from Edir</Button>
+              )}
+            </>
+          }
         />
       )}
       {editAccess?.userId && ctx && <EditAssociationDialog userId={editAccess.userId} userLabel={editAccess.name} edirs={ctx.edirs} onClose={() => setEditAccess(null)} onDone={() => { setEditAccess(null); load(); }} />}
       {addUser && ctx && <CreateUserDialog edirs={ctx.edirs} canPlatform={isSuper} initialKind="edir" onClose={() => setAddUser(false)} onDone={(c) => { setAddUser(false); if (c) setCred(c); load(); }} />}
       {inviteOpen && ctx && <InviteUserDialog ctx={ctx} onClose={() => setInviteOpen(false)} onDone={() => { setInviteOpen(false); load(); }} />}
+      {orgDialog && ctx && (
+        <OrgUserDialog
+          ctx={ctx} edit={orgDialog.edit}
+          onClose={() => setOrgDialog(null)}
+          onDone={(c) => { setOrgDialog(null); if (c) setCred(c); load(); }}
+        />
+      )}
       {showActivity && <ActivityDialog onClose={() => setShowActivity(false)} />}
     </div>
   );
@@ -339,15 +413,20 @@ export default function UsersClient() {
 
 // ─── Row pieces ──────────────────────────────────────────────────────────────
 
-function RowActions({ r, ctx, canAssociate, onView, onReassign, onRemoveFromEdir, act }: {
-  r: PersonRow; ctx: DirectoryContext; canAssociate: boolean; onView: () => void; onReassign: () => void;
-  onRemoveFromEdir: () => void; act: (fn: () => Promise<any>, ok: string) => void;
+function RowActions({ r, ctx, canAssociate, orgManageable, onView, onReassign, onRemoveFromEdir, onTempPassword, onEditOrgUser, onDeleteOrgUser, act }: {
+  r: PersonRow; ctx: DirectoryContext; canAssociate: boolean; orgManageable: boolean;
+  onView: () => void; onReassign: () => void; onRemoveFromEdir: () => void;
+  onTempPassword: () => void; onEditOrgUser: () => void; onDeleteOrgUser: () => void;
+  act: (fn: () => Promise<any>, ok: string) => void;
 }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="h-8 w-8"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-52">
-        <DropdownMenuItem onClick={onView}><Eye className="mr-2 h-4 w-4" /> View details</DropdownMenuItem>
+      <DropdownMenuContent align="end" className="w-56">
+        <DropdownMenuItem onClick={onView}><Eye className="mr-2 h-4 w-4" /> 360° profile</DropdownMenuItem>
+        {orgManageable && (
+          <DropdownMenuItem onClick={onEditOrgUser}><Pencil className="mr-2 h-4 w-4" /> Edit user</DropdownMenuItem>
+        )}
 
         {(ctx.canManageUsers || ctx.canLock || ctx.canResetPassword) && (
           <>
@@ -362,7 +441,10 @@ function RowActions({ r, ctx, canAssociate, onView, onReassign, onRemoveFromEdir
               ? <DropdownMenuItem onClick={() => act(() => unlockUser(r.userId!), 'User unlocked.')}><Unlock className="mr-2 h-4 w-4" /> Unlock</DropdownMenuItem>
               : <DropdownMenuItem onClick={() => act(() => lockUser(r.userId!), 'User locked.')}><Lock className="mr-2 h-4 w-4" /> Lock</DropdownMenuItem>)}
             {ctx.canResetPassword && (
-              <DropdownMenuItem onClick={() => act(() => adminResetUserPassword(r.userId!), 'Reset email sent.')}><KeyRound className="mr-2 h-4 w-4" /> Reset password</DropdownMenuItem>
+              <>
+                <DropdownMenuItem onClick={() => act(() => adminResetUserPassword(r.userId!), 'Reset email sent.')}><KeyRound className="mr-2 h-4 w-4" /> Reset password (email)</DropdownMenuItem>
+                <DropdownMenuItem onClick={onTempPassword}><KeyRound className="mr-2 h-4 w-4" /> Temporary password</DropdownMenuItem>
+              </>
             )}
           </>
         )}
@@ -375,68 +457,14 @@ function RowActions({ r, ctx, canAssociate, onView, onReassign, onRemoveFromEdir
             {r.edirId && <DropdownMenuItem className="text-destructive" onClick={onRemoveFromEdir}><UserMinus className="mr-2 h-4 w-4" /> Remove from Edir</DropdownMenuItem>}
           </>
         )}
+        {orgManageable && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem className="text-destructive" onClick={onDeleteOrgUser}><Trash2 className="mr-2 h-4 w-4" /> Delete user</DropdownMenuItem>
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
-  );
-}
-
-// ─── User detail ─────────────────────────────────────────────────────────────
-
-function UserDetail({ r, ctx, canAssociate, onClose, onReassign, onRemoveFromEdir, act }: {
-  r: PersonRow; ctx: DirectoryContext; canAssociate: boolean; onClose: () => void; onReassign: () => void;
-  onRemoveFromEdir: () => void; act: (fn: () => Promise<any>, ok: string) => void;
-}) {
-  const rows: [string, React.ReactNode][] = [
-    ['Placement', r.edirName || r.placement || 'Unassigned'],
-    ['Account role', r.roleName || '—'],
-    ['Account status', r.accountStatus ? <Badge variant="outline" className={STATUS_COLORS[r.accountStatus]}>{r.accountStatus}</Badge> : '—'],
-    ['Account locked', r.locked ? 'Yes' : 'No'],
-    ['Member', r.hasMembership ? (r.memberCode ?? 'Yes') : 'No'],
-    ['Last login', r.lastLoginAt ? new Date(r.lastLoginAt).toLocaleString() : 'Never'],
-  ];
-  return (
-    <Dialog open onOpenChange={o => { if (!o) onClose(); }}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
-          <div className="flex items-center gap-3">
-            <Avatar row={r} lg />
-            <div className="min-w-0">
-              <DialogTitle className="truncate">{r.name}</DialogTitle>
-              <DialogDescription className="truncate">{r.email || r.phone || ''}</DialogDescription>
-            </div>
-          </div>
-        </DialogHeader>
-        <div className="grid grid-cols-1 gap-px overflow-hidden rounded-lg border bg-border sm:grid-cols-2">
-          {rows.map(([k, v]) => (
-            <div key={k} className="flex flex-col gap-0.5 bg-card px-3 py-2">
-              <span className="text-[10px] uppercase tracking-wide text-muted-foreground">{k}</span>
-              <span className="text-sm font-medium">{v}</span>
-            </div>
-          ))}
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {ctx.canManageUsers && (
-            <Button size="sm" variant="outline" onClick={() => act(() => setUserStatus(r.userId!, r.accountStatus === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE'), 'Status updated.')}>
-              <Power className="mr-1 h-4 w-4" /> {r.accountStatus === 'ACTIVE' ? 'Deactivate' : 'Activate'}
-            </Button>
-          )}
-          {ctx.canLock && (
-            <Button size="sm" variant="outline" onClick={() => act(() => (r.locked ? unlockUser(r.userId!) : lockUser(r.userId!)), r.locked ? 'User unlocked.' : 'User locked.')}>
-              {r.locked ? <><Unlock className="mr-1 h-4 w-4" /> Unlock</> : <><Lock className="mr-1 h-4 w-4" /> Lock</>}
-            </Button>
-          )}
-          {ctx.canResetPassword && (
-            <Button size="sm" variant="outline" onClick={() => act(() => adminResetUserPassword(r.userId!), 'Reset email sent.')}><KeyRound className="mr-1 h-4 w-4" /> Reset password</Button>
-          )}
-          {canAssociate && (
-            <Button size="sm" variant="outline" onClick={onReassign}><ArrowRightLeft className="mr-1 h-4 w-4" /> Manage access</Button>
-          )}
-          {canAssociate && r.edirId && (
-            <Button size="sm" variant="ghost" className="text-destructive" onClick={onRemoveFromEdir}><UserMinus className="mr-1 h-4 w-4" /> Remove from Edir</Button>
-          )}
-        </div>
-      </DialogContent>
-    </Dialog>
   );
 }
 

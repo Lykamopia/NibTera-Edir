@@ -1,8 +1,10 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { toast } from 'sonner';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import {
   Table,
   TableBody,
@@ -12,9 +14,11 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { type Actor } from '@/lib/tenant-scope';
-import { Users, Building2, DollarSign, TrendingUp, MapPin, ShieldAlert } from 'lucide-react';
+import { Users, Building2, DollarSign, TrendingUp, MapPin, ShieldAlert, Download, ReceiptText } from 'lucide-react';
 import { LoadingState } from '@/components/ui/states';
-import { getDistrictDashboard } from '@/app/actions/dashboard';
+import { DateRangeFilter, ALL_TIME, toParam, type DateRangeValue } from '@/components/ui/date-range-filter';
+import { getDistrictDashboard, exportOrgDashboardCsv } from '@/app/actions/dashboard';
+import { OrgEdirRegistry } from './org-edir-registry';
 
 const money = (n: number) => `ETB ${Number(n || 0).toLocaleString()}`;
 const pct = (num: number, den: number) => (den > 0 ? (num / den) * 100 : 0);
@@ -23,15 +27,26 @@ export default function DistrictDashboard({ actor }: { actor: Actor }) {
   const [stats, setStats] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [denied, setDenied] = useState(false);
+  const [range, setRange] = useState<DateRangeValue>(ALL_TIME);
 
+  const rangeKey = `${range.preset}:${range.from?.toISOString() ?? ''}:${range.to?.toISOString() ?? ''}`;
   const load = useCallback(() => {
     setLoading(true); setDenied(false);
-    getDistrictDashboard()
+    getDistrictDashboard(toParam(range))
       .then(setStats)
       .catch(() => setDenied(true))
       .finally(() => setLoading(false));
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rangeKey]);
   useEffect(() => { load(); }, [load, actor.districtId]);
+
+  const onExport = async () => {
+    try {
+      const csv = await exportOrgDashboardCsv(toParam(range));
+      const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+      const a = document.createElement('a'); a.href = url; a.download = 'district-dashboard-report.csv'; a.click(); URL.revokeObjectURL(url);
+    } catch { toast.error('Export failed.'); }
+  };
 
   const StatCard = ({ icon: Icon, label, value, subtext, variant = 'default' }: any) => (
     <Card>
@@ -53,12 +68,18 @@ export default function DistrictDashboard({ actor }: { actor: Actor }) {
   return (
     <div className="space-y-8">
       {/* Header */}
-      <div>
-        <h1 className="text-3xl font-bold flex items-center gap-2">
-          <MapPin className="w-8 h-8" />
-          {stats?.districtName ? `${stats.districtName} — District Dashboard` : 'District Dashboard'}
-        </h1>
-        <p className="text-gray-600 mt-2">Aggregated overview of all branches and Edirs in your district</p>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h1 className="text-3xl font-bold flex items-center gap-2">
+            <MapPin className="w-8 h-8" />
+            {stats?.districtName ? `${stats.districtName} — District Dashboard` : 'District Dashboard'}
+          </h1>
+          <p className="text-gray-600 mt-2">Aggregated overview of all branches and Edirs in your district</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <DateRangeFilter value={range} onChange={setRange} align="end" />
+          <Button variant="outline" size="sm" onClick={onExport}><Download className="mr-1 h-4 w-4" /> Export Report</Button>
+        </div>
       </div>
 
       {loading ? (
@@ -74,13 +95,17 @@ export default function DistrictDashboard({ actor }: { actor: Actor }) {
       ) : stats && (
         <>
           {/* KPI Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
             <StatCard icon={Building2} label="Branches" value={stats.totalBranches} variant="default" />
             <StatCard icon={Building2} label="Total Edirs" value={stats.totalEdirs} variant="default" />
             <StatCard icon={Building2} label="Active Edirs" value={stats.activeEdirs} subtext={`${stats.pendingRegistrations} pending`} variant="success" />
             <StatCard icon={Users} label="Members" value={stats.totalMembers} subtext={`+${stats.newMembers} this month`} variant="default" />
+            <StatCard icon={ReceiptText} label="Transactions" value={stats.txCount} subtext="settled in period" variant="default" />
             <StatCard icon={DollarSign} label="Collected" value={money(stats.collected)} subtext={`${money(stats.outstanding)} outstanding`} variant="warning" />
           </div>
+
+          {/* Edir registry — placement, transactions, created/approved by */}
+          <OrgEdirRegistry edirs={stats.edirs ?? []} showBranch />
 
           {/* Branch Performance Table */}
           <Card>
@@ -97,13 +122,14 @@ export default function DistrictDashboard({ actor }: { actor: Actor }) {
                       <TableHead className="text-center">Edirs</TableHead>
                       <TableHead className="text-center">Active</TableHead>
                       <TableHead className="text-right">Members</TableHead>
+                      <TableHead className="text-right">Transactions</TableHead>
                       <TableHead className="text-right">Collected</TableHead>
                       <TableHead className="text-center">Performance</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {stats.branches.length === 0 && (
-                      <TableRow><TableCell colSpan={6} className="text-center text-sm text-muted-foreground py-6">No branches in this district yet.</TableCell></TableRow>
+                      <TableRow><TableCell colSpan={7} className="text-center text-sm text-muted-foreground py-6">No branches in this district yet.</TableCell></TableRow>
                     )}
                     {stats.branches.map((branch: any) => {
                       const performance = pct(branch.activeEdirs, branch.edirs);
@@ -123,6 +149,7 @@ export default function DistrictDashboard({ actor }: { actor: Actor }) {
                             </Badge>
                           </TableCell>
                           <TableCell className="text-right">{branch.members}</TableCell>
+                          <TableCell className="text-right tabular-nums">{branch.txCount ?? 0}</TableCell>
                           <TableCell className="text-right">{money(branch.collected)}</TableCell>
                           <TableCell className="text-center">
                             <div className="flex items-center justify-center gap-2">

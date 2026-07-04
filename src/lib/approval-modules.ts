@@ -25,7 +25,7 @@ export function ensureApprovalModules() {
 
   // ── Manual Payment ─────────────────────────────────────────────────────────
   registerModule('MANUAL_PAYMENT', {
-    async execute(payload: ManualPaymentPayload, { tx }) {
+    async execute(payload: ManualPaymentPayload, { tx, request, actor }) {
       await settlePaymentTx(tx, {
         memberId: payload.memberId,
         paymentLogId: payload.paymentLogId,
@@ -33,6 +33,38 @@ export function ensureApprovalModules() {
         breakdown: payload.breakdown,
         method: 'MANUAL',
       });
+
+      // File the payment evidence (receipt/attachment) into the central document
+      // repository as an APPROVED record, so it is findable long after approval.
+      const log = await tx.paymentLog.findUnique({
+        where: { id: payload.paymentLogId },
+        select: { receiptUrl: true, transactionId: true, member: { select: { name: true, memberId: true } } },
+      });
+      if (log?.receiptUrl) {
+        const req = await tx.approvalRequest.findUnique({ where: { id: request.id }, select: { makerId: true } });
+        const fileName = log.receiptUrl.split('/').pop() ?? 'receipt';
+        const ext = fileName.split('.').pop()?.toLowerCase() ?? '';
+        const now = new Date();
+        await tx.dmsDocument.create({
+          data: {
+            edirId: request.edirId,
+            title: `Payment receipt — ${log.member?.name ?? 'Member'}${log.member?.memberId ? ` (${log.member.memberId})` : ''}`,
+            category: 'Payment Receipts',
+            tags: 'payment,receipt,manual',
+            purpose: `Evidence for manual payment ${log.transactionId}, approved via Maker–Checker.`,
+            fileUrl: log.receiptUrl,
+            fileName,
+            fileType: ext === 'pdf' ? 'pdf' : 'image',
+            status: 'APPROVED',
+            visibility: 'staff',
+            uploadedById: req?.makerId ?? actor.id,
+            reviewedById: actor.id,
+            approvedById: actor.id,
+            reviewedAt: now,
+            approvedAt: now,
+          },
+        });
+      }
     },
   });
 
@@ -464,6 +496,18 @@ export function ensureApprovalModules() {
         }
       }
     },
+    // A rejected registration is terminal: close the provisional Edir so it can
+    // never be operated or accept payments. The registration surfaces show the
+    // rejection (and its reason) from the approval request itself.
+    async onReject(payload: { edirId: string }, { tx, actor, comment }) {
+      const edir = await tx.edir.findUnique({ where: { id: payload.edirId }, select: { id: true, name: true, status: true } });
+      if (!edir || edir.status !== 'PENDING') return;
+      await tx.edir.update({ where: { id: edir.id }, data: { status: 'CLOSED' } });
+      await writeAudit({
+        edirId: edir.id, userId: actor.id, action: 'EDIR_REGISTRATION_REJECTED', targetType: 'Edir', targetId: edir.id,
+        details: `Registration of "${edir.name}" rejected${comment ? `: ${comment}` : '.'}`,
+      }, tx);
+    },
   });
 
   // ── Edir Update (apply changed fields from payload to Edir) ────────────────────
@@ -483,11 +527,13 @@ export function ensureApprovalModules() {
     },
   });
 
-  // ── User Creation (create User + hashed password + membership) ────────────────
+  // ── User Creation (create User + hashed password) ─────────────────────────────
   registerModule('USER_CREATION', {
-    async execute(payload: { edirId: string; email: string; phone: string; name: string; roleId: string }, { tx, actor }) {
+    async execute(payload: { edirId: string; email: string; phone: string; name: string; roleId: string }, { tx }) {
       const hashedPassword = await bcrypt.hash(generateTempPassword(), 12);
-      const user = await tx.user.create({
+      // User.edirId IS the association; membership records are ensured by the
+      // user-management flows (ensureMembershipForUser) outside this transaction.
+      await tx.user.create({
         data: {
           email: payload.email,
           phone: payload.phone,
@@ -498,10 +544,6 @@ export function ensureApprovalModules() {
           status: 'ACTIVE',
           mustChangePassword: true,
         },
-      });
-      // Create a default membership association
-      await tx.userEdirAssociation.create({
-        data: { userId: user.id, edirId: payload.edirId, role: 'USER', createdAt: new Date() },
       });
     },
   });

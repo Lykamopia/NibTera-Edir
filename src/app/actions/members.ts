@@ -34,6 +34,8 @@ const memberSchema = z.object({
   roleId: z.string().optional().nullable(), // login (permission) role from the Roles page
   edirId: z.string().optional().nullable(),  // required for Super-Admins; ignored for Edir admins
   registrationInstallmentCount: z.coerce.number().int().min(1).max(60).default(1),
+  // Official registration date (Member.joinDate) — defaults to "now" when omitted.
+  joinDate: z.string().optional().nullable(),
 });
 
 export type MemberInput = z.infer<typeof memberSchema>;
@@ -572,6 +574,7 @@ export async function createMember(input: MemberInput) {
           role: memberRoleLabel,
           status: 'ACTIVE',
           registrationInstallmentCount: data.registrationInstallmentCount,
+          ...(data.joinDate ? { joinDate: new Date(data.joinDate) } : {}),
           paymentStatus: {
             create: {
               balance: registrationFee,
@@ -755,6 +758,184 @@ export async function requestMemberRemoval(id: string, reason?: string) {
     });
     revalidatePath('/dashboard/approvals');
     return { success: true as const, requestId };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+// ─── Bulk member import (CSV) ──────────────────────────────────────────────────
+
+export interface BulkMemberRow {
+  name?: string;
+  phone?: string;
+  email?: string;
+  gender?: string;
+  dateOfBirth?: string;
+  nationalId?: string;
+  occupation?: string;
+  address?: string;
+  city?: string;
+  subcity?: string;
+  woreda?: string;
+  emergencyContactName?: string;
+  emergencyContactPhone?: string;
+  role?: string;
+  registrationDate?: string;
+  /** Relatives encoded as `Name:Relationship:Phone|Name:Relationship` (phone optional). */
+  relatives?: string;
+}
+
+function parseRelativesColumn(raw: string | undefined): { name: string; relationship: string; phone: string | null }[] {
+  if (!raw?.trim()) return [];
+  return raw
+    .split('|')
+    .map(part => {
+      const [name, relationship, phone] = part.split(':').map(s => (s ?? '').trim());
+      return { name, relationship: relationship || 'Other', phone: phone || null };
+    })
+    .filter(r => r.name.length >= 2);
+}
+
+/**
+ * Import many members (and their relatives) at once into a single Edir. Rows are
+ * validated like createMember (name, optional valid unique phone/email within the
+ * Edir, parseable dates); each valid row creates the Member, its PaymentStatus
+ * (registration fee), and any relatives from the Relatives column. Members are
+ * imported WITHOUT login accounts — issue credentials later via "Reset login
+ * password", which creates the login on demand. Row numbers are 1-based.
+ */
+export async function bulkImportMembers(input: { edirId?: string | null; rows: BulkMemberRow[] }) {
+  try {
+    const actor = await getActor();
+    await assertPermission(actor, ['create_member', 'manage_members']);
+    if (actor.isSuperAdmin && !input.edirId) return { success: false as const, error: 'Select an Edir for the imported members.' };
+    const edirId = await resolveEdirId(actor, input.edirId);
+
+    const rows = Array.isArray(input.rows) ? input.rows : [];
+    if (rows.length === 0) return { success: false as const, error: 'No rows to import.' };
+    if (rows.length > 500) return { success: false as const, error: 'Import is limited to 500 rows at a time.' };
+
+    const settings = await prisma.edirSettings.findUnique({ where: { edirId } });
+    const registrationFee = settings?.registrationFee ?? new Prisma.Decimal(0);
+
+    type Norm = {
+      idx: number; name: string; phone: string | null; email: string | null;
+      gender: string | null; dateOfBirth: Date | null; nationalId: string | null; occupation: string | null;
+      address: string | null; city: string | null; subcity: string | null; woreda: string | null;
+      emergencyContactName: string | null; emergencyContactPhone: string | null;
+      role: string; joinDate: Date | null;
+      relatives: { name: string; relationship: string; phone: string | null }[];
+      error?: string;
+    };
+    const parseDate = (s?: string) => {
+      if (!s?.trim()) return { date: null as Date | null, bad: false };
+      const d = new Date(s.trim());
+      return isNaN(d.getTime()) ? { date: null, bad: true } : { date: d, bad: false };
+    };
+
+    const normalized: Norm[] = rows.map((r, i) => {
+      const name = (r.name ?? '').trim();
+      const rawPhone = (r.phone ?? '').trim();
+      const email = (r.email ?? '').trim().toLowerCase();
+      const dob = parseDate(r.dateOfBirth);
+      const reg = parseDate(r.registrationDate);
+      let error: string | undefined;
+      if (name.length < 2) error = 'Name is required.';
+      else if (rawPhone && !isValidEthiopianPhone(rawPhone)) error = 'Invalid phone number.';
+      else if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) error = 'Invalid email.';
+      else if (dob.bad) error = 'Invalid date of birth.';
+      else if (reg.bad) error = 'Invalid registration date.';
+      return {
+        idx: i, name,
+        phone: !error && rawPhone ? normalizeEthiopianPhone(rawPhone) : rawPhone || null,
+        email: email || null,
+        gender: (r.gender ?? '').trim() || null,
+        dateOfBirth: dob.date,
+        nationalId: (r.nationalId ?? '').trim() || null,
+        occupation: (r.occupation ?? '').trim() || null,
+        address: (r.address ?? '').trim() || null,
+        city: (r.city ?? '').trim() || null,
+        subcity: (r.subcity ?? '').trim() || null,
+        woreda: (r.woreda ?? '').trim() || null,
+        emergencyContactName: (r.emergencyContactName ?? '').trim() || null,
+        emergencyContactPhone: (r.emergencyContactPhone ?? '').trim() || null,
+        role: (r.role ?? '').trim() || 'Member',
+        joinDate: reg.date,
+        relatives: parseRelativesColumn(r.relatives),
+        error,
+      };
+    });
+
+    // Existing members with the same phone/email in this Edir → skipped as duplicates.
+    const okRows = normalized.filter(n => !n.error);
+    const phones = okRows.map(n => n.phone).filter(Boolean) as string[];
+    const emails = okRows.map(n => n.email).filter(Boolean) as string[];
+    const existing = (phones.length || emails.length)
+      ? await prisma.member.findMany({
+          where: { edirId, OR: [...(phones.length ? [{ phone: { in: phones } }] : []), ...(emails.length ? [{ email: { in: emails } }] : [])] },
+          select: { phone: true, email: true },
+        })
+      : [];
+    const takenPhones = new Set(existing.map(m => m.phone).filter(Boolean) as string[]);
+    const takenEmails = new Set(existing.map(m => m.email).filter(Boolean) as string[]);
+
+    const failed: { row: number; name?: string; error: string }[] = [];
+    const seenPhone = new Set<string>();
+    const seenEmail = new Set<string>();
+    const toCreate: Norm[] = [];
+    for (const n of normalized) {
+      const row = n.idx + 1;
+      if (n.error) { failed.push({ row, name: n.name || undefined, error: n.error }); continue; }
+      if (n.phone && (seenPhone.has(n.phone) || takenPhones.has(n.phone))) { failed.push({ row, name: n.name, error: 'A member with this phone already exists.' }); continue; }
+      if (n.email && (seenEmail.has(n.email) || takenEmails.has(n.email))) { failed.push({ row, name: n.name, error: 'A member with this email already exists.' }); continue; }
+      if (n.phone) seenPhone.add(n.phone);
+      if (n.email) seenEmail.add(n.email);
+      toCreate.push(n);
+    }
+
+    let created = 0;
+    let relativesCreated = 0;
+    for (const n of toCreate) {
+      try {
+        await prisma.$transaction(async (tx) => {
+          const memberId = await nextMemberId(edirId, tx);
+          const member = await tx.member.create({
+            data: {
+              edirId, memberId,
+              name: n.name, phone: n.phone, email: n.email,
+              gender: n.gender, dateOfBirth: n.dateOfBirth, nationalId: n.nationalId, occupation: n.occupation,
+              address: n.address, city: n.city, subcity: n.subcity, woreda: n.woreda,
+              emergencyContactName: n.emergencyContactName,
+              emergencyContactPhone: n.emergencyContactPhone ? normalizeEthiopianPhone(n.emergencyContactPhone) : null,
+              role: n.role, status: 'ACTIVE',
+              ...(n.joinDate ? { joinDate: n.joinDate } : {}),
+              paymentStatus: { create: { balance: registrationFee, status: registrationFee.greaterThan(0) ? 'PENDING' : 'PAID' } },
+            },
+          });
+          if (n.relatives.length > 0) {
+            await tx.relative.createMany({
+              data: n.relatives.map(rel => ({
+                memberId: member.id, name: rel.name, relationship: rel.relationship,
+                phone: rel.phone ? (isValidEthiopianPhone(rel.phone) ? normalizeEthiopianPhone(rel.phone) : rel.phone) : null,
+              })),
+            });
+            relativesCreated += n.relatives.length;
+          }
+          await writeAudit({ edirId, userId: actor.id, action: 'MEMBER_CREATED', targetType: 'Member', targetId: member.id, details: `Imported member ${n.name} (${memberId}).` }, tx);
+        });
+        created++;
+      } catch (e) {
+        failed.push({ row: n.idx + 1, name: n.name, error: e instanceof Error ? e.message : 'Failed to create.' });
+      }
+    }
+
+    await writeAudit({
+      edirId, userId: actor.id, action: 'MEMBERS_IMPORTED', targetType: 'Member', targetId: null,
+      details: `Bulk import: ${created} member(s) and ${relativesCreated} relative(s) created, ${failed.length} row(s) skipped.`,
+    });
+    if (created > 0) revalidatePath('/dashboard/members');
+    failed.sort((a, b) => a.row - b.row);
+    return { success: true as const, total: rows.length, created, relativesCreated, failed };
   } catch (error) {
     return failure(error);
   }

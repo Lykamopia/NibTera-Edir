@@ -84,6 +84,27 @@ type EdirCaps = { canCreate: boolean; canEdit: boolean; canRevoke: boolean; canD
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+/** Human label for a stored upload path (strips the random-token prefix). */
+const fileLabel = (url: string) => {
+  const base = url.split('/').pop() ?? url;
+  return base.replace(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-/i, '');
+};
+
+/** Upload the agreement (Rules & Laws) PDF and return its served path. */
+async function uploadAgreementDoc(file: File): Promise<{ path: string } | { error: string }> {
+  try {
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('type', 'documents');
+    const res = await fetch('/api/upload', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (res.ok && data.success) return { path: data.path as string };
+    return { error: data.error || 'Upload failed.' };
+  } catch {
+    return { error: 'Upload failed.' };
+  }
+}
+
 const FORM_STEPS = [
   { id: 'details', label: 'Edir Details' },
   { id: 'location', label: 'Branch & District' },
@@ -120,7 +141,7 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
   const [regsLoading, setRegsLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<'PENDING' | 'ACTIVE' | 'REJECTED' | 'RETURNED' | 'ALL'>('PENDING');
   const [activeTab, setActiveTab] = useState('all-edirs');
-  const [edirCaps, setEdirCaps] = useState<EdirCaps>({ canCreate: false, canEdit: false, canRevoke: false, canDelete: false });
+  const [edirCaps, setEdirCaps] = useState<EdirCaps>({ canCreate: false, canEdit: false, canRevoke: false, canDelete: false, canApprove: false });
   const [editEdir, setEditEdir] = useState<EdirItem | null>(null);
   const [edirsRange, setEdirsRange] = useState<DateRangeValue>(ALL_TIME);
   const router = useRouter();
@@ -244,9 +265,19 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const [agreementUploading, setAgreementUploading] = useState(false);
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) setFormData(prev => ({ ...prev, agreementDocUrl: file.name }));
+    if (!file) return;
+    setAgreementUploading(true);
+    const res = await uploadAgreementDoc(file);
+    setAgreementUploading(false);
+    if ('path' in res) {
+      setFormData(prev => ({ ...prev, agreementDocUrl: res.path }));
+      toast.success('Agreement document uploaded.');
+    } else {
+      toast.error(res.error);
+    }
   };
 
   const handleSubmit = async () => {
@@ -551,21 +582,31 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
                       htmlFor="agreement-upload"
                       className="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-border p-8 text-center transition-colors hover:border-primary/50 hover:bg-primary/5"
                     >
-                      <input type="file" accept=".pdf" onChange={handleFileUpload} className="hidden" id="agreement-upload" />
-                      {formData.agreementDocUrl ? (
+                      <input type="file" accept=".pdf,image/*" onChange={handleFileUpload} className="hidden" id="agreement-upload" disabled={agreementUploading} />
+                      {agreementUploading ? (
+                        <>
+                          <Loader2 className="mb-2 h-8 w-8 animate-spin text-muted-foreground" />
+                          <p className="font-medium text-muted-foreground">Uploading…</p>
+                        </>
+                      ) : formData.agreementDocUrl ? (
                         <>
                           <FileText className="mb-2 h-8 w-8 text-success" />
-                          <p className="font-medium text-success">{formData.agreementDocUrl}</p>
+                          <p className="font-medium text-success">{fileLabel(formData.agreementDocUrl)}</p>
                           <p className="mt-1 text-xs text-muted-foreground">Click to change file</p>
                         </>
                       ) : (
                         <>
                           <Upload className="mb-2 h-8 w-8 text-muted-foreground" />
                           <p className="font-medium">Click to upload</p>
-                          <p className="mt-1 text-xs text-muted-foreground">PDF files only, up to 10&nbsp;MB</p>
+                          <p className="mt-1 text-xs text-muted-foreground">PDF or image, up to 10&nbsp;MB</p>
                         </>
                       )}
                     </label>
+                    {formData.agreementDocUrl && /^(\/|https?:)/.test(formData.agreementDocUrl) && !agreementUploading && (
+                      <a href={formData.agreementDocUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-sm text-primary hover:underline">
+                        <Eye className="h-4 w-4" /> Preview uploaded document
+                      </a>
+                    )}
                   </div>
                 )}
 
@@ -616,7 +657,7 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
                     ]} />
                     <ReviewSection title="Address & Document" rows={[
                       ['Edir Address', formData.address || '—'],
-                      ['Agreement', formData.agreementDocUrl || 'No document uploaded'],
+                      ['Rules & Laws (Agreement)', formData.agreementDocUrl ? fileLabel(formData.agreementDocUrl) : 'No document uploaded'],
                     ]} />
 
                     <div className="flex items-start gap-2 rounded-lg border border-info/20 bg-info/5 p-3 text-sm text-info">
@@ -748,6 +789,7 @@ function EditEdirDialog({ edir, branches, onClose, onDone }: { edir: EdirItem; b
     agreementDocUrl: edir.agreementDocUrl ?? '',
   });
   const [saving, setSaving] = useState(false);
+  const [docUploading, setDocUploading] = useState(false);
   const set = (k: keyof typeof form, v: string) => setForm(f => ({ ...f, [k]: v }));
 
   const submit = async () => {
@@ -813,11 +855,25 @@ function EditEdirDialog({ edir, branches, onClose, onDone }: { edir: EdirItem; b
             <h4 className="text-sm font-semibold text-muted-foreground">Address & Document</h4>
             <div className="space-y-1.5"><Label className="text-xs">Edir Address / Location</Label><Textarea rows={2} value={form.address} onChange={e => set('address', e.target.value)} /></div>
             <div className="space-y-1.5">
-              <Label className="text-xs">Agreement Document</Label>
+              <Label className="text-xs">Rules & Laws (Agreement Document)</Label>
               <label className="flex cursor-pointer items-center gap-2 rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground hover:border-primary/50 hover:bg-primary/5">
-                <input type="file" accept=".pdf" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) set('agreementDocUrl', f.name); }} />
-                <FileText className="h-4 w-4" /> {form.agreementDocUrl || 'Attach a PDF'}
+                <input type="file" accept=".pdf,image/*" className="hidden" disabled={docUploading} onChange={async e => {
+                  const f = e.target.files?.[0];
+                  if (!f) return;
+                  setDocUploading(true);
+                  const res = await uploadAgreementDoc(f);
+                  setDocUploading(false);
+                  if ('path' in res) { set('agreementDocUrl', res.path); toast.success('Document uploaded.'); }
+                  else toast.error(res.error);
+                }} />
+                {docUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
+                {docUploading ? 'Uploading…' : form.agreementDocUrl ? fileLabel(form.agreementDocUrl) : 'Attach a PDF or image'}
               </label>
+              {form.agreementDocUrl && /^(\/|https?:)/.test(form.agreementDocUrl) && (
+                <a href={form.agreementDocUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-primary hover:underline">
+                  <Eye className="h-3.5 w-3.5" /> Preview document
+                </a>
+              )}
             </div>
           </div>
         </div>

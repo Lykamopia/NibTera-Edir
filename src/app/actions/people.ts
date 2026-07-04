@@ -30,13 +30,17 @@ export interface PersonRow {
   photoUrl: string | null;
   edirId: string | null;
   edirName: string | null;
+  branchId: string | null;       // org placement (platform users)
+  districtId: string | null;
   roleId: string | null;         // login (account) role
   roleName: string | null;
+  roleScope: string | null;      // Role.scope of the account role
   membershipRole: string | null; // Member.role label (e.g. "Member", "Chairperson")
   accountStatus: string | null;  // User.status
   locked: boolean;
   lastLoginAt: string | null;
   membershipStatus: string | null; // Member.status
+  joinDate: string | null;       // membership registration date
   balance: number;
   hasLogin: boolean;
   hasMembership: boolean;
@@ -45,15 +49,20 @@ export interface PersonRow {
 
 export interface DirectoryContext {
   isSuperAdmin: boolean;
+  orgScope: 'HEAD_OFFICE' | 'DISTRICT' | 'BRANCH' | 'EDIR';
   canMembers: boolean;
   canManageMembers: boolean;
   canUsers: boolean;
   canManageUsers: boolean;
+  /** District/Branch operators managing the platform users of their own org unit. */
+  canManageOrgUsers: boolean;
   canAssociate: boolean; // cross-tenant user association (assign/transfer/remove, assign Edir Admins)
   canLock: boolean;
   canResetPassword: boolean;
   edirs: { id: string; name: string }[];
   roles: { id: string; name: string; scope: string; edirId: string | null }[];
+  /** Branches selectable when a district user creates/edits an org user. */
+  branches: { id: string; name: string; code: string | null }[];
 }
 
 export interface MembersStats {
@@ -74,17 +83,21 @@ export interface UsersStats {
 
 function buildCaps(actor: Awaited<ReturnType<typeof getActor>>): DirectoryContext {
   const isSuperAdmin = actor.isSuperAdmin;
+  const canManageUsers = isSuperAdmin || actorHasPermission(actor, ['manage_users']);
   return {
     isSuperAdmin,
+    orgScope: actor.orgScope,
     canMembers: isSuperAdmin || actorHasPermission(actor, ['view_members', 'manage_members']),
     canManageMembers: isSuperAdmin || actorHasPermission(actor, ['manage_members']),
     canUsers: isSuperAdmin || actorHasPermission(actor, ['view_users', 'manage_users']),
-    canManageUsers: isSuperAdmin || actorHasPermission(actor, ['manage_users']),
+    canManageUsers,
+    canManageOrgUsers: canManageUsers && (actor.orgScope === 'BRANCH' || actor.orgScope === 'DISTRICT'),
     canAssociate: isSuperAdmin || actorHasPermission(actor, ['manage_associations', 'manage_edir_associations', 'manage_edir_users']),
     canLock: isSuperAdmin || actorHasPermission(actor, ['lock_user', 'unlock_user']),
     canResetPassword: isSuperAdmin || actorHasPermission(actor, ['reset_password']),
     edirs: [],
     roles: [],
+    branches: [],
   };
 }
 
@@ -108,13 +121,17 @@ function personFromUser(u: any): PersonRow {
     photoUrl: m?.photoUrl ?? null,
     edirId: u.edirId ?? null,
     edirName: u.edir?.name ?? null,
+    branchId: u.branchId ?? null,
+    districtId: u.districtId ?? null,
     roleId: u.roleId ?? null,
     roleName: u.role?.name ?? null,
+    roleScope: u.role?.scope ?? null,
     membershipRole: m?.role ?? null,
     accountStatus: u.status ?? null,
     locked: !!(u.lockoutUntil && new Date(u.lockoutUntil) > new Date()),
     lastLoginAt: u.lastLoginAt ? new Date(u.lastLoginAt).toISOString() : null,
     membershipStatus: m?.status ?? null,
+    joinDate: m?.joinDate ? new Date(m.joinDate).toISOString() : null,
     balance: m?.paymentStatus ? Number(m.paymentStatus.balance) : 0,
     hasLogin: true,
     hasMembership: !!m,
@@ -135,13 +152,17 @@ function personFromMember(m: any): PersonRow {
     photoUrl: m.photoUrl ?? null,
     edirId: m.edirId ?? null,
     edirName: m.edir?.name ?? null,
+    branchId: null,
+    districtId: null,
     roleId: u?.roleId ?? null,
     roleName: u?.role?.name ?? null,
+    roleScope: u?.role?.scope ?? null,
     membershipRole: m.role ?? null,
     accountStatus: u?.status ?? null,
     locked: !!(u?.lockoutUntil && new Date(u.lockoutUntil) > new Date()),
     lastLoginAt: u?.lastLoginAt ? new Date(u.lastLoginAt).toISOString() : null,
     membershipStatus: m.status ?? null,
+    joinDate: m.joinDate ? new Date(m.joinDate).toISOString() : null,
     balance: m.paymentStatus ? Number(m.paymentStatus.balance) : 0,
     hasLogin: !!u?.id,
     hasMembership: true,
@@ -254,16 +275,37 @@ export async function exportMembersDirectoryCsv(params: { edirId?: string; range
   const caps = buildCaps(actor);
   if (!caps.canMembers) throw new AccessDeniedError('You do not have access to the Members directory.');
   const rows = await collectMemberRows(resolveScope(actor, params.edirId, caps.isSuperAdmin), dateWhere('createdAt', params.range));
-  const header = ['Member ID', 'Name', 'Phone', 'Email', 'Edir', 'Membership Role', 'Membership Status', 'Balance', 'Has Login', 'Last Login'];
+  const header = ['Member ID', 'Name', 'Phone', 'Email', 'Edir', 'Membership Role', 'Membership Status', 'Registration Date', 'Balance', 'Has Login', 'Last Login'];
   const body = rows.map(r => [
     r.memberCode ?? '', r.name, r.phone ?? '', r.email ?? '', r.edirName ?? '',
-    r.membershipRole ?? '', r.membershipStatus ?? '', String(r.balance),
+    r.membershipRole ?? '', r.membershipStatus ?? '',
+    r.joinDate ? new Date(r.joinDate).toLocaleDateString() : '', String(r.balance),
     r.hasLogin ? 'Yes' : 'No', r.lastLoginAt ? new Date(r.lastLoginAt).toLocaleDateString() : '',
   ]);
   return [header, ...body].map(line => line.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
 }
 
 // ─── Users directory (Platform Users page) ───────────────────────────────────
+
+/** Tenant filter for the Users directory. A branch/district operator sees the
+ *  operator accounts of their OWN org unit (platform users with no Edir) in
+ *  addition to the login accounts of the Edirs within their unit. */
+function usersScopeWhere(actor: Awaited<ReturnType<typeof getActor>>, edirId?: string, crossTenant = false): any {
+  if (crossTenant) return resolveScope(actor, edirId, true);
+  if (actor.orgScope === 'BRANCH' && actor.branchId) {
+    return { OR: [tenantWhere(actor), { edirId: null, branchId: actor.branchId }] };
+  }
+  if (actor.orgScope === 'DISTRICT' && actor.districtId) {
+    return {
+      OR: [
+        tenantWhere(actor),
+        { edirId: null, districtId: actor.districtId },
+        { edirId: null, branch: { districtId: actor.districtId } },
+      ],
+    };
+  }
+  return tenantWhere(actor);
+}
 
 export async function getUsersDirectory(params: { edirId?: string; range?: DateRangeParam } = {}): Promise<{
   rows: PersonRow[]; context: DirectoryContext; stats: UsersStats;
@@ -273,17 +315,25 @@ export async function getUsersDirectory(params: { edirId?: string; range?: DateR
   if (!caps.canUsers && !caps.canAssociate) throw new AccessDeniedError('You do not have access to the Platform Users directory.');
 
   const crossTenant = caps.isSuperAdmin || caps.canAssociate;
-  const baseWhere = resolveScope(actor, params.edirId, crossTenant);
+  const baseWhere = usersScopeWhere(actor, params.edirId, crossTenant);
   const rows = await collectUserRows(baseWhere, dateWhere('createdAt', params.range));
-  const [edirs, roles] = await Promise.all([edirOptions(actor, crossTenant), roleOptions(actor, params.edirId, crossTenant)]);
-  return { rows, context: { ...caps, edirs, roles }, stats: summarizeUsers(rows) };
+  const [edirs, roles, branches] = await Promise.all([
+    edirOptions(actor, crossTenant),
+    roleOptions(actor, params.edirId, crossTenant),
+    caps.canManageOrgUsers && actor.orgScope === 'DISTRICT' && actor.districtId
+      ? prisma.branch.findMany({ where: { districtId: actor.districtId }, orderBy: { name: 'asc' }, select: { id: true, name: true, code: true } })
+      : caps.canManageOrgUsers && actor.orgScope === 'BRANCH' && actor.branchId
+        ? prisma.branch.findMany({ where: { id: actor.branchId }, select: { id: true, name: true, code: true } })
+        : Promise.resolve([]),
+  ]);
+  return { rows, context: { ...caps, edirs, roles, branches }, stats: summarizeUsers(rows) };
 }
 
 export async function exportUsersDirectoryCsv(params: { edirId?: string; range?: DateRangeParam } = {}): Promise<string> {
   const actor = await getActor();
   const caps = buildCaps(actor);
   if (!caps.canUsers && !caps.canAssociate) throw new AccessDeniedError('You do not have access to the Platform Users directory.');
-  const rows = await collectUserRows(resolveScope(actor, params.edirId, caps.isSuperAdmin || caps.canAssociate), dateWhere('createdAt', params.range));
+  const rows = await collectUserRows(usersScopeWhere(actor, params.edirId, caps.isSuperAdmin || caps.canAssociate), dateWhere('createdAt', params.range));
   const header = ['Name', 'Phone', 'Email', 'Placement', 'Account Role', 'Account Status', 'Locked', 'Last Login'];
   const body = rows.map(r => [
     r.name, r.phone ?? '', r.email ?? '', r.edirName ?? r.placement ?? '',

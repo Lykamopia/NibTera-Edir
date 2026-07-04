@@ -29,6 +29,9 @@ const configSchema = z.object({
   currency: z.string().min(1).max(8),
   dueDay: z.coerce.number().int().min(1).max(28),
   gracePeriodDays: z.coerce.number().int().min(0).max(90),
+  // Days after a settling payment before the NEXT month's contribution becomes
+  // payable (0 = members may pay ahead at any time).
+  nextPaymentDelayDays: z.coerce.number().int().min(0).max(28).default(0),
   // Penalties
   penaltyTiers: z.array(tierSchema).default([]),
   // Daily penalty accrual (optional)
@@ -79,6 +82,7 @@ export async function getRuleConfig() {
       currency: settings.currency,
       dueDay: settings.dueDay,
       gracePeriodDays: settings.gracePeriodDays,
+      nextPaymentDelayDays: settings.nextPaymentDelayDays ?? 0,
       penaltyTiers: Array.isArray(settings.penaltyTiers) ? settings.penaltyTiers : [],
       dailyPenaltyEnabled: settings.dailyPenaltyEnabled,
       dailyPenaltyType: settings.dailyPenaltyType === 'PERCENT' ? 'PERCENT' : 'FIXED',
@@ -115,6 +119,7 @@ const FIELD_LABELS: Record<string, string> = {
   currency: 'Currency',
   dueDay: 'Due Day',
   gracePeriodDays: 'Grace Period (days)',
+  nextPaymentDelayDays: 'Next-Payment Delay (days)',
   autoSuspendMonths: 'Auto-Suspend (months)',
   autoTerminateMonths: 'Auto-Terminate (months)',
   minMembershipMonths: 'Min. Membership (months)',
@@ -186,6 +191,7 @@ export async function saveRuleConfig(input: RuleConfigInput) {
         ['currency', existing.currency, data.currency],
         ['dueDay', existing.dueDay, data.dueDay],
         ['gracePeriodDays', existing.gracePeriodDays, data.gracePeriodDays],
+        ['nextPaymentDelayDays', existing.nextPaymentDelayDays ?? 0, data.nextPaymentDelayDays],
         ['autoSuspendMonths', existing.autoSuspendMonths, data.autoSuspendMonths],
         ['autoTerminateMonths', existing.autoTerminateMonths, data.autoTerminateMonths],
         ['minMembershipMonths', existing.minMembershipMonths, data.minMembershipMonths],

@@ -244,13 +244,43 @@ export async function bulkInviteUsers(input: { edirId?: string | null; rows: Bul
   }
 }
 
+/**
+ * Account-administration scope check. Edir accounts fall under tenant scoping
+ * (assertSameTenant); platform accounts (no Edir) may additionally be managed by
+ * the district/branch operators of their own org unit. Super-Admin-role targets
+ * are only ever administered by a full Super-Admin.
+ */
+async function assertCanAdministerUser(
+  actor: Actor,
+  user: { edirId: string | null; branchId: string | null; districtId: string | null; roleId?: string | null },
+): Promise<void> {
+  if (!actor.isSuperAdmin && user.roleId) {
+    const role = await prisma.role.findUnique({ where: { id: user.roleId }, select: { scope: true } });
+    if (role?.scope === 'SUPER_ADMIN') throw new Error('Platform Super-Admins can only be managed by a Super Administrator.');
+  }
+  if (user.edirId) {
+    await assertSameTenant(actor, user.edirId);
+    return;
+  }
+  if (actor.isSuperAdmin || actor.orgScope === 'HEAD_OFFICE') return;
+  if (actor.orgScope === 'BRANCH' && user.branchId && user.branchId === actor.branchId) return;
+  if (actor.orgScope === 'DISTRICT') {
+    if (user.districtId && user.districtId === actor.districtId) return;
+    if (user.branchId) {
+      const branch = await prisma.branch.findUnique({ where: { id: user.branchId }, select: { districtId: true } });
+      if (branch?.districtId === actor.districtId) return;
+    }
+  }
+  throw new Error('Access Denied: this account is outside your organizational scope.');
+}
+
 export async function setUserRole(userId: string, roleId: string | null) {
   try {
     const actor = await getActor();
     await assertPermission(actor, 'manage_users');
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (!user) return { success: false as const, error: 'User not found.' };
-    await assertSameTenant(actor, user.edirId);
+    await assertCanAdministerUser(actor, user);
     if (roleId) {
       const role = await prisma.role.findUnique({ where: { id: roleId }, select: { scope: true, edirId: true } });
       if (!role) return { success: false as const, error: 'Role not found.' };
@@ -282,7 +312,7 @@ export async function setUserStatus(userId: string, status: 'ACTIVE' | 'INACTIVE
     await assertPermission(actor, 'manage_users');
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (!user) return { success: false as const, error: 'User not found.' };
-    await assertSameTenant(actor, user.edirId);
+    await assertCanAdministerUser(actor, user);
     await prisma.user.update({ where: { id: userId }, data: { status, tokenVersion: { increment: 1 } } });
     await writeAudit({ edirId: user.edirId, userId: actor.id, action: 'USER_STATUS_CHANGED', targetType: 'User', targetId: userId, details: `→ ${status}` });
     revalidatePath('/dashboard/admin/users');
@@ -300,7 +330,7 @@ async function setUserLock(userId: string, lock: boolean) {
     await assertPermission(actor, lock ? 'lock_user' : 'unlock_user');
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (!user) return { success: false as const, error: 'User not found.' };
-    await assertSameTenant(actor, user.edirId);
+    await assertCanAdministerUser(actor, user);
     await prisma.user.update({
       where: { id: userId },
       data: { lockoutUntil: lock ? new Date(Date.now() + 365 * 24 * 60 * 60 * 1000) : null, failedLoginAttempts: 0 },
@@ -319,7 +349,7 @@ export async function adminResetUserPassword(userId: string) {
     await assertPermission(actor, 'reset_password');
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (!user?.email) return { success: false as const, error: 'User has no email for reset.' };
-    await assertSameTenant(actor, user.edirId);
+    await assertCanAdministerUser(actor, user);
     const token = crypto.randomBytes(32).toString('hex');
     await prisma.passwordResetToken.upsert({
       where: { email: user.email },
@@ -351,7 +381,7 @@ export async function adminGenerateTempPassword(userId: string) {
     const user = await prisma.user.findUnique({ where: { id: userId }, include: { role: { select: { scope: true } } } });
     if (!user) return { success: false as const, error: 'User not found.' };
     if (user.role?.scope === 'SUPER_ADMIN') return { success: false as const, error: 'Platform Super-Admins cannot be reset here.' };
-    await assertSameTenant(actor, user.edirId);
+    await assertCanAdministerUser(actor, user);
 
     const tempPassword = generateTempPassword();
     const hashedPassword = await bcrypt.hash(tempPassword, 12);
@@ -377,6 +407,83 @@ export async function adminGenerateTempPassword(userId: string) {
   } catch (error) {
     return failure(error);
   }
+}
+
+/**
+ * 360° profile of a platform/system user account — identity, org placement, role
+ * & permissions, account security posture, linked membership, workload, and the
+ * account's recent activity trail. Mirrors the member 360 profile for operator
+ * accounts. Scope: the caller must be able to administer (or at least see) the
+ * account within their org unit.
+ */
+export async function getPlatformUserProfile(userId: string) {
+  const actor = await getActor();
+  await assertPermission(actor, ['view_users', 'manage_users', 'manage_associations', 'manage_edir_associations', 'manage_edir_users']);
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    include: {
+      role: true,
+      edir: { select: { id: true, name: true } },
+      branch: { select: { id: true, name: true, code: true, district: { select: { name: true } } } },
+      district: { select: { id: true, name: true } },
+      member: { include: { paymentStatus: true, edir: { select: { name: true } } } },
+    },
+  });
+  if (!user) return null;
+  await assertCanAdministerUser(actor, user);
+
+  const [approvalsMade, approvalsChecked, pendingSubmitted, activity] = await Promise.all([
+    prisma.approvalRequest.count({ where: { makerId: userId } }),
+    prisma.approvalRequest.count({ where: { checkerId: userId } }),
+    prisma.approvalRequest.count({ where: { makerId: userId, status: 'PENDING' } }),
+    prisma.auditLog.findMany({ where: { userId }, orderBy: { createdAt: 'desc' }, take: 20, select: { id: true, action: true, details: true, createdAt: true } }),
+  ]);
+
+  const placement = user.edir?.name
+    ? { kind: 'EDIR' as const, label: `Edir · ${user.edir.name}` }
+    : user.branch?.name
+      ? { kind: 'BRANCH' as const, label: `Branch · ${user.branch.name}${user.branch.code ? ` (${user.branch.code})` : ''}`, district: user.branch.district?.name ?? null }
+      : user.district?.name
+        ? { kind: 'DISTRICT' as const, label: `District · ${user.district.name}` }
+        : { kind: 'HEAD_OFFICE' as const, label: 'Head Office' };
+
+  return {
+    identity: {
+      id: user.id, name: user.name, email: user.email, phone: user.phone,
+      title: user.title, avatar: user.avatar, createdAt: user.createdAt,
+    },
+    placement,
+    role: user.role
+      ? { id: user.role.id, name: user.role.name, scope: user.role.scope, permissions: (user.role.permissions ?? '').split(',').map(p => p.trim()).filter(Boolean) }
+      : null,
+    security: {
+      status: user.status,
+      locked: !!(user.lockoutUntil && user.lockoutUntil > new Date()),
+      lockoutUntil: user.lockoutUntil,
+      failedLoginAttempts: user.failedLoginAttempts,
+      lastLoginAt: user.lastLoginAt,
+      lastIp: user.lastIp,
+      twoFactorEnabled: user.twoFactorEnabled,
+      mustChangePassword: user.mustChangePassword,
+      onboardingCompleted: user.onboardingCompleted,
+      emailVerified: user.emailVerified,
+      passwordChangedAt: user.passwordChangedAt,
+      passwordResetCount: user.passwordResetCount,
+      lastPasswordResetAt: user.lastPasswordResetAt,
+    },
+    membership: user.member
+      ? {
+          memberId: user.member.id,
+          memberCode: user.member.memberId,
+          status: user.member.status,
+          edirName: user.member.edir?.name ?? null,
+          joinDate: user.member.joinDate,
+          balance: Number(user.member.paymentStatus?.balance ?? 0),
+        }
+      : null,
+    workload: { approvalsMade, approvalsChecked, pendingSubmitted },
+    activity,
+  };
 }
 
 // ─── Roles ───────────────────────────────────────────────────────────────────

@@ -1,12 +1,14 @@
 'use server';
 
-import { getActor, assertPermission } from '@/lib/tenant-scope';
+import { getActor, assertPermission, type Actor } from '@/lib/tenant-scope';
 import prisma from '@/lib/prisma';
 import bcrypt from 'bcrypt';
+import crypto from 'crypto';
 import { revalidatePath } from 'next/cache';
 import { writeAudit } from '@/lib/audit';
 import { isValidEthiopianPhone, normalizeEthiopianPhone, normalizeNibEmail } from '@/lib/utils';
 import { generateTempPassword } from '@/lib/secure-random';
+import { sendVerificationEmail } from '@/lib/email';
 import { z } from 'zod';
 
 function failure(error: unknown): { success: false; error: string } {
@@ -245,6 +247,252 @@ export async function listBranchUsers(branchId: string) {
 
     return { success: true as const, data: users };
   } catch (error) {
+    return failure(error);
+  }
+}
+
+// ─── Org-unit platform user management (District / Branch operators) ──────────
+// District and Branch users manage the operator accounts of their OWN org unit:
+// a district user manages district-level users and the users of branches in the
+// district; a branch user manages the users of their own branch. Every action
+// requires the `manage_users` permission and is audited.
+
+/** The org placement (branch/district) the actor may manage. Throws on mismatch. */
+async function assertOrgUnitScope(
+  actor: Actor,
+  placement: { branchId: string | null; districtId: string | null },
+): Promise<void> {
+  if (actor.isSuperAdmin || actor.orgScope === 'HEAD_OFFICE') return;
+  if (actor.orgScope === 'BRANCH') {
+    if (placement.branchId && placement.branchId === actor.branchId) return;
+    throw new Error('You can only manage users of your own branch.');
+  }
+  if (actor.orgScope === 'DISTRICT') {
+    if (placement.districtId && placement.districtId === actor.districtId && !placement.branchId) return;
+    if (placement.branchId) {
+      const branch = await prisma.branch.findUnique({ where: { id: placement.branchId }, select: { districtId: true } });
+      if (branch?.districtId === actor.districtId) return;
+    }
+    throw new Error('You can only manage users within your own district.');
+  }
+  throw new Error('Permission denied.');
+}
+
+/** Roles assignable to a platform user at the given branch/district placement.
+ *  With no placement given, falls back to the actor's own org unit. */
+export async function getOrgRoles(placement: { branchId?: string | null; districtId?: string | null } = {}) {
+  try {
+    const actor = await getActor();
+    await assertPermission(actor, ['view_users', 'manage_users']);
+    let branchId = placement.branchId?.trim() || null;
+    let districtId = placement.districtId?.trim() || null;
+    if (!branchId && !districtId) {
+      if (actor.orgScope === 'BRANCH') branchId = actor.branchId;
+      else if (actor.orgScope === 'DISTRICT') districtId = actor.districtId;
+    }
+    if (!branchId && !districtId) return { success: false as const, error: 'Select a branch or district.' };
+    await assertOrgUnitScope(actor, { branchId, districtId });
+
+    const roles = branchId
+      ? await prisma.role.findMany({
+          where: { scope: 'BRANCH', OR: [{ branchId }, { branchId: null }] },
+          orderBy: { name: 'asc' }, select: { id: true, name: true, scope: true },
+        })
+      : await prisma.role.findMany({
+          where: { scope: 'DISTRICT', OR: [{ districtId }, { districtId: null }] },
+          orderBy: { name: 'asc' }, select: { id: true, name: true, scope: true },
+        });
+    return { success: true as const, data: roles };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+const orgUserSchema = z.object({
+  name: z.string().trim().min(2, 'Name is required.').max(120, 'Name is too long.'),
+  email: z.string().trim().email('A valid email is required.').max(254),
+  phone: z.string().trim().min(7, 'Phone is required.').max(20),
+  roleId: z.string().trim().min(1, 'Select a role.'),
+  branchId: z.string().trim().optional().nullable(),
+  districtId: z.string().trim().optional().nullable(),
+});
+
+/** Validate that a role fits a branch/district placement. */
+async function validateOrgRole(roleId: string, branchId: string | null, districtId: string | null): Promise<string | null> {
+  const role = await prisma.role.findUnique({ where: { id: roleId }, select: { scope: true, branchId: true, districtId: true } });
+  if (!role) return 'Role not found.';
+  if (branchId) {
+    if (role.scope !== 'BRANCH' || (role.branchId && role.branchId !== branchId)) return 'Select a branch-scoped role for a branch user.';
+  } else {
+    if (role.scope !== 'DISTRICT' || (role.districtId && role.districtId !== districtId)) return 'Select a district-scoped role for a district user.';
+  }
+  return null;
+}
+
+/**
+ * Create a platform user inside the actor's own org unit — a branch user (branchId
+ * set) or a district user (districtId set). Returns one-time credentials so the
+ * operator can hand them over; a set-password email is also sent.
+ */
+export async function createOrgUser(input: z.infer<typeof orgUserSchema>) {
+  try {
+    const actor = await getActor();
+    await assertPermission(actor, 'manage_users');
+    const parsed = orgUserSchema.safeParse(input);
+    if (!parsed.success) return { success: false as const, error: parsed.error.issues[0]?.message || 'Invalid input.' };
+    const data = parsed.data;
+
+    let branchId = data.branchId?.trim() || null;
+    let districtId = data.districtId?.trim() || null;
+    // Default the placement to the actor's own org unit.
+    if (!branchId && !districtId) {
+      if (actor.orgScope === 'BRANCH') branchId = actor.branchId;
+      else if (actor.orgScope === 'DISTRICT') districtId = actor.districtId;
+    }
+    if (!branchId && !districtId) return { success: false as const, error: 'Choose a branch or district placement.' };
+    await assertOrgUnitScope(actor, { branchId, districtId });
+
+    let placementLabel = '';
+    if (branchId) {
+      const branch = await prisma.branch.findUnique({ where: { id: branchId }, select: { name: true, districtId: true } });
+      if (!branch) return { success: false as const, error: 'Branch not found.' };
+      districtId = branch.districtId;
+      placementLabel = `branch ${branch.name}`;
+    } else {
+      const district = await prisma.district.findUnique({ where: { id: districtId! }, select: { name: true } });
+      if (!district) return { success: false as const, error: 'District not found.' };
+      placementLabel = `district ${district.name}`;
+    }
+
+    const roleError = await validateOrgRole(data.roleId, branchId, districtId);
+    if (roleError) return { success: false as const, error: roleError };
+
+    if (!isValidEthiopianPhone(data.phone)) return { success: false as const, error: 'Enter a valid Ethiopian phone number.' };
+    const phone = normalizeEthiopianPhone(data.phone);
+    const email = normalizeNibEmail(data.email);
+    const [emailTaken, phoneTaken] = await Promise.all([
+      prisma.user.findUnique({ where: { email } }),
+      prisma.user.findUnique({ where: { phone } }),
+    ]);
+    if (emailTaken) return { success: false as const, error: 'A user with this email already exists.' };
+    if (phoneTaken) return { success: false as const, error: 'A user with this phone already exists.' };
+
+    const tempPassword = generateTempPassword();
+    const hashedPassword = await bcrypt.hash(tempPassword, 12);
+    const user = await prisma.user.create({
+      data: {
+        name: data.name, email, phone,
+        // Branch users are keyed by branch only (district derives via the branch).
+        branchId,
+        districtId: branchId ? null : districtId,
+        roleId: data.roleId,
+        hashedPassword, status: 'ACTIVE', mustChangePassword: true,
+      },
+    });
+
+    // Also email a set-password link (best-effort) alongside the temp password.
+    const token = crypto.randomBytes(32).toString('hex');
+    await prisma.passwordResetToken.upsert({
+      where: { email },
+      update: { token, expires: new Date(Date.now() + 48 * 60 * 60 * 1000) },
+      create: { email, token, expires: new Date(Date.now() + 48 * 60 * 60 * 1000) },
+    });
+    sendVerificationEmail({ to: email, name: data.name, token }).catch(() => {});
+
+    await writeAudit({
+      userId: actor.id, action: 'ORG_USER_CREATED', targetType: 'User', targetId: user.id,
+      details: `Created ${data.name} (${email}) in ${placementLabel}.`,
+    });
+    revalidatePath('/dashboard/admin/users');
+    return { success: true as const, userId: user.id, credentials: { username: phone ?? email, tempPassword, channel: phone ? 'SMS' : 'email' } };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+const orgUserUpdateSchema = z.object({
+  name: z.string().trim().min(2).max(120),
+  email: z.string().trim().email().max(254),
+  phone: z.string().trim().min(7).max(20),
+  roleId: z.string().trim().min(1, 'Select a role.'),
+});
+
+/** Edit a platform user within the actor's org unit (name, contact, role). */
+export async function updateOrgUser(userId: string, input: z.infer<typeof orgUserUpdateSchema>) {
+  try {
+    const actor = await getActor();
+    await assertPermission(actor, 'manage_users');
+    const parsed = orgUserUpdateSchema.safeParse(input);
+    if (!parsed.success) return { success: false as const, error: parsed.error.issues[0]?.message || 'Invalid input.' };
+    const data = parsed.data;
+
+    const user = await prisma.user.findUnique({ where: { id: userId }, include: { role: { select: { scope: true } } } });
+    if (!user) return { success: false as const, error: 'User not found.' };
+    if (user.edirId) return { success: false as const, error: 'This account belongs to an Edir — manage it from its Edir instead.' };
+    if (user.role?.scope === 'SUPER_ADMIN' && !actor.isSuperAdmin) return { success: false as const, error: 'Platform Super-Admins cannot be edited here.' };
+    await assertOrgUnitScope(actor, { branchId: user.branchId, districtId: user.districtId });
+
+    const roleError = await validateOrgRole(data.roleId, user.branchId, user.districtId);
+    if (roleError) return { success: false as const, error: roleError };
+
+    if (!isValidEthiopianPhone(data.phone)) return { success: false as const, error: 'Enter a valid Ethiopian phone number.' };
+    const phone = normalizeEthiopianPhone(data.phone);
+    const email = normalizeNibEmail(data.email);
+    const [emailTaken, phoneTaken] = await Promise.all([
+      prisma.user.findFirst({ where: { email, id: { not: userId } } }),
+      prisma.user.findFirst({ where: { phone, id: { not: userId } } }),
+    ]);
+    if (emailTaken) return { success: false as const, error: 'Another user already uses this email.' };
+    if (phoneTaken) return { success: false as const, error: 'Another user already uses this phone.' };
+
+    const roleChanged = user.roleId !== data.roleId;
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        name: data.name, email, phone, roleId: data.roleId,
+        ...(roleChanged ? { tokenVersion: { increment: 1 } } : {}),
+      },
+    });
+    await writeAudit({ userId: actor.id, action: 'ORG_USER_UPDATED', targetType: 'User', targetId: userId, details: `Updated ${data.name} (${email})${roleChanged ? ' — role changed' : ''}.` });
+    revalidatePath('/dashboard/admin/users');
+    return { success: true as const };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/**
+ * Permanently delete a platform user within the actor's org unit. Blocked when
+ * the account has operational history (approvals made/checked) — deactivate
+ * instead in that case.
+ */
+export async function deleteOrgUser(userId: string) {
+  try {
+    const actor = await getActor();
+    await assertPermission(actor, 'manage_users');
+    const user = await prisma.user.findUnique({ where: { id: userId }, include: { role: { select: { scope: true } } } });
+    if (!user) return { success: false as const, error: 'User not found.' };
+    if (user.id === actor.id) return { success: false as const, error: 'You cannot delete your own account.' };
+    if (user.edirId) return { success: false as const, error: 'This account belongs to an Edir — manage it from its Edir instead.' };
+    if (user.role?.scope === 'SUPER_ADMIN') return { success: false as const, error: 'Platform Super-Admins cannot be deleted here.' };
+    await assertOrgUnitScope(actor, { branchId: user.branchId, districtId: user.districtId });
+
+    const [made, checked] = await Promise.all([
+      prisma.approvalRequest.count({ where: { makerId: userId } }),
+      prisma.approvalRequest.count({ where: { checkerId: userId } }),
+    ]);
+    if (made + checked > 0) {
+      return { success: false as const, error: 'This user has approval history and cannot be deleted — deactivate the account instead.' };
+    }
+
+    await prisma.user.delete({ where: { id: userId } });
+    await writeAudit({ userId: actor.id, action: 'ORG_USER_DELETED', targetType: 'User', targetId: userId, details: `Deleted ${user.name ?? user.email ?? userId}.` });
+    revalidatePath('/dashboard/admin/users');
+    return { success: true as const };
+  } catch (error) {
+    if ((error as any)?.code === 'P2003') {
+      return { success: false as const, error: 'This user has linked records and cannot be deleted — deactivate the account instead.' };
+    }
     return failure(error);
   }
 }

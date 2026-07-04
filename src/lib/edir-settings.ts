@@ -10,6 +10,7 @@ export const DEFAULT_MEMBER_ROLES = ['Member', 'Chairperson', 'Vice Chairperson'
  */
 export interface EdirSettingsData {
   monthlyFee: number; registrationFee: number; currency: string; dueDay: number; gracePeriodDays: number;
+  nextPaymentDelayDays: number;
   penaltyTiers: unknown[]; dailyPenaltyEnabled: boolean; dailyPenaltyType: string; dailyPenaltyValue: number; dailyPenaltyMaxDays: number;
   autoSuspendMonths: number; autoTerminateMonths: number; minMembershipMonths: number; reinstatementFee: number;
   autoSuspendEnabled: boolean; autoTerminateEnabled: boolean; autoReminderEnabled: boolean;
@@ -29,6 +30,7 @@ export function buildEdirSettingsUpdate(data: EdirSettingsData) {
     currency: data.currency,
     dueDay: data.dueDay,
     gracePeriodDays: data.gracePeriodDays,
+    nextPaymentDelayDays: data.nextPaymentDelayDays ?? 0,
     penaltyTiers: data.penaltyTiers as unknown as Prisma.InputJsonValue,
     dailyPenaltyEnabled: data.dailyPenaltyEnabled,
     dailyPenaltyType: data.dailyPenaltyType,

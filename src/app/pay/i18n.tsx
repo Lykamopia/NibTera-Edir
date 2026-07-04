@@ -89,6 +89,12 @@ const en: Record<string, string> = {
   settledWord: 'settled',
   upToDateMsg: "you're up to date",
   payAheadFor: 'You can pay ahead for',
+  // advance-payment window (nextPaymentDelayDays)
+  payWindowTitle: 'This month is fully paid',
+  payWindowBody: 'Per your Edir’s rules, the next monthly contribution ({month}) can be paid starting {date}.',
+  payWindowNoPay: 'No payment is needed right now — please come back after that date.',
+  payWindowOpens: 'Next payment opens on {date}',
+  payWindowBadge: 'Settled',
   // receipt
   receiptTitle: 'Payment Receipt',
   viewReceipt: 'View Receipt',
@@ -198,6 +204,11 @@ const am: Record<string, string> = {
   // settled-this-month banner
   settledWord: 'ተከፍሏል',
   upToDateMsg: 'ወቅታዊ ነዎት',
+  payWindowTitle: 'የዚህ ወር መዋጮ ሙሉ በሙሉ ተከፍሏል',
+  payWindowBody: 'በእድርዎ ደንብ መሠረት ቀጣዩ ወርሃዊ መዋጮ ({month}) መከፈል የሚችለው ከ{date} ጀምሮ ነው።',
+  payWindowNoPay: 'አሁን ምንም ክፍያ አያስፈልግም — እባክዎ ከዚያ ቀን በኋላ ይመለሱ።',
+  payWindowOpens: 'ቀጣዩ ክፍያ የሚከፈተው {date} ነው',
+  payWindowBadge: 'ተከፍሏል',
   payAheadFor: 'አስቀድመው መክፈል የሚችሉት',
   receiptTitle: 'የክፍያ ደረሰኝ',
   viewReceipt: 'ደረሰኝ ይመልከቱ',

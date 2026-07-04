@@ -17,9 +17,13 @@ const DISTRICT_MANAGER_PERMISSIONS = [
   'register_edir', 'approve_edir_registration', 'approve_edir_update',
   'view_members', 'manage_members', 'view_payments', 'record_payment',
   'view_approvals', 'view_audit_log', 'view_district_dashboard',
+  // Manage the district's own platform users (branch/district operators) and
+  // recover Edir user credentials within the district.
+  'view_users', 'manage_users', 'reset_password', 'lock_user', 'unlock_user',
 ];
 const DISTRICT_OPERATOR_PERMISSIONS = [
   'view_dashboard', 'view_districts', 'view_branches', 'register_edir', 'view_members', 'view_district_dashboard',
+  'view_users',
 ];
 
 /** Provision the default District Manager / Operator roles for a new district. */

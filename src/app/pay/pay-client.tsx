@@ -180,7 +180,13 @@ function PayInner() {
                 {m?.contributionCoverage?.paidThrough && (
                   <div className="flex items-center justify-between text-sm"><span className="text-muted-foreground">{t('paidThrough')}</span><span className="font-semibold text-success">{monthFmt(m.contributionCoverage.paidThrough)}</span></div>
                 )}
-                {m?.contributionCoverage?.nextDue && (
+                {m?.payWindow?.blocked && m.payWindow.availableAt ? (
+                  // The advance-payment window is now closed — say when it reopens
+                  // instead of inviting an immediate pay-ahead.
+                  <div className="rounded-md bg-success/10 px-3 py-2 text-xs text-success">
+                    {t('payWindowOpens').replace('{date}', new Date(m.payWindow.availableAt).toLocaleDateString(undefined, { dateStyle: 'long' }))}
+                  </div>
+                ) : m?.contributionCoverage?.nextDue && (
                   <div className="flex items-center justify-between text-sm"><span className="text-muted-foreground">{t('payAheadFor')}</span><span className="font-semibold">{monthFmt(m.contributionCoverage.nextDue)}</span></div>
                 )}
               </div>
@@ -269,6 +275,13 @@ function MemberPanel({ member, payerPhone, amount, setAmount, paying, error, txn
   const settledThisMonth = !!paidThrough && paidThrough >= thisMonthStart;
   const nextDue = cov.nextDue ?? null;
 
+  // Advance-payment window (Edir setting): while closed, the member is fully
+  // settled and the pay option is hidden entirely — only the settled state and
+  // when the next payment opens are shown. The server enforces the same gate.
+  const win = m.payWindow || {};
+  const payClosed = !!win.blocked;
+  const opensDate = win.availableAt ? new Date(win.availableAt).toLocaleDateString(undefined, { dateStyle: 'long' }) : '';
+
   return (
     <>
       {/* Who you are paying for — explicit when it differs from your own number */}
@@ -320,8 +333,29 @@ function MemberPanel({ member, payerPhone, amount, setAmount, paying, error, txn
         </CardContent>
       </Card>
 
+      {/* Advance-payment window closed — settled state, descriptive message, NO pay option */}
+      {payClosed && (
+        <Card className="page-enter overflow-hidden border-success/30">
+          <div className="flex flex-col items-center gap-2 bg-success/10 p-5 text-center">
+            <span className="flex h-14 w-14 items-center justify-center rounded-full bg-success/15 text-success"><CheckCircle2 className="h-8 w-8" /></span>
+            <div className="flex items-center gap-2">
+              <h3 className="text-base font-bold text-success">{t('payWindowTitle')}</h3>
+              <Badge variant="outline" className="border-success/30 bg-success/10 text-success">{t('payWindowBadge')}</Badge>
+            </div>
+            <p className="max-w-sm text-sm text-foreground/80">
+              {t('payWindowBody').replace('{month}', nextDue ? monthFmt(nextDue) : monthFmt(addMonths(thisMonthStart, 1))).replace('{date}', opensDate)}
+            </p>
+            <p className="text-xs text-muted-foreground">{t('payWindowNoPay')}</p>
+          </div>
+          <div className="flex items-center justify-between border-t bg-card px-4 py-2.5 text-sm">
+            <span className="flex items-center gap-1.5 text-muted-foreground"><CalendarClock className="h-4 w-4" /> {t('paidThrough')}</span>
+            <span className="font-semibold text-success">{paidThrough ? monthFmt(paidThrough) : '—'}</span>
+          </div>
+        </Card>
+      )}
+
       {/* This-month settlement — clear confirmation + the next payable month */}
-      {settledThisMonth && (
+      {settledThisMonth && !payClosed && (
         <div className="page-enter flex items-start gap-2.5 rounded-xl border border-success/30 bg-success/10 p-3.5 text-success">
           <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0" />
           <div className="min-w-0">
@@ -336,7 +370,8 @@ function MemberPanel({ member, payerPhone, amount, setAmount, paying, error, txn
       {/* Contribution coverage — which months are paid / being paid */}
       <CoverageCard member={member} amount={amount} />
 
-      {/* What You Owe — aggregated obligations */}
+      {/* What You Owe — aggregated obligations (hidden while the pay window is closed) */}
+      {!payClosed && (
       <Card className="page-enter">
         <CardContent className="space-y-3 p-4">
           <h3 className="text-sm font-semibold">{t('obligations')}</h3>
@@ -400,6 +435,7 @@ function MemberPanel({ member, payerPhone, amount, setAmount, paying, error, txn
           </div>
         </CardContent>
       </Card>
+      )}
 
       {/* Link to dedicated history page */}
       <Link href={`/pay/history?phone=${encodeURIComponent(m.phone || '')}`} className="block">
@@ -413,13 +449,22 @@ function MemberPanel({ member, payerPhone, amount, setAmount, paying, error, txn
 
       {error && <div className="flex items-start gap-2 rounded-md bg-destructive/10 p-2.5 text-xs text-destructive"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> {error}</div>}
 
-      {/* Sticky pay bar */}
+      {/* Sticky pay bar — replaced by an informational strip while the pay window is closed */}
       <div className="fixed inset-x-0 bottom-0 z-20 border-t bg-card/90 p-3 backdrop-blur-md">
         <div className="mx-auto w-full max-w-md">
-          <Button className="h-14 w-full text-base font-semibold shadow-lg" onClick={onPay} disabled={paying || Number(amount) <= 0 || !canPay}>
-            {paying ? <><Loader2 className="mr-1.5 h-5 w-5 animate-spin" /> {t('processing')}</> : !canPay ? <><AlertTriangle className="mr-1.5 h-5 w-5" /> {t('payUnavailable')}</> : <><Wallet className="mr-1.5 h-5 w-5" /> {t('pay')} {money(Number(amount) || 0, cur)}</>}
-          </Button>
-          {txn && <p className="mt-1 text-center font-mono text-[10px] text-muted-foreground">{t('ref')}: {txn}</p>}
+          {payClosed ? (
+            <div className="flex h-14 items-center justify-center gap-2 rounded-lg border border-success/30 bg-success/10 px-3 text-sm font-medium text-success">
+              <CheckCircle2 className="h-5 w-5 shrink-0" />
+              <span className="truncate">{t('payWindowOpens').replace('{date}', opensDate)}</span>
+            </div>
+          ) : (
+            <>
+              <Button className="h-14 w-full text-base font-semibold shadow-lg" onClick={onPay} disabled={paying || Number(amount) <= 0 || !canPay}>
+                {paying ? <><Loader2 className="mr-1.5 h-5 w-5 animate-spin" /> {t('processing')}</> : !canPay ? <><AlertTriangle className="mr-1.5 h-5 w-5" /> {t('payUnavailable')}</> : <><Wallet className="mr-1.5 h-5 w-5" /> {t('pay')} {money(Number(amount) || 0, cur)}</>}
+              </Button>
+              {txn && <p className="mt-1 text-center font-mono text-[10px] text-muted-foreground">{t('ref')}: {txn}</p>}
+            </>
+          )}
         </div>
       </div>
     </>

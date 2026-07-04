@@ -12,7 +12,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { X, Download } from 'lucide-react';
 import { paymentLogStatusLabel, PAYMENT_LOG_STATUS_TONE } from '@/lib/payment-log-status';
-import { downloadPaymentReceiptPdf } from '@/lib/receipt-pdf';
+import { downloadPaymentReceiptPdf, amountInWords } from '@/lib/receipt-pdf';
 
 const BREAKDOWN_LABELS: Record<string, string> = {
   installment: 'Installment / Contribution', arrears: 'Overdue Amount', latePenalty: 'Late Penalty',
@@ -22,43 +22,6 @@ const BREAKDOWN_LABELS: Record<string, string> = {
 const num = (n: any) => Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const dateTime = (d: any) => (d ? new Date(d).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '—');
 const monthFmt = (d: any) => (d ? new Date(d).toLocaleDateString(undefined, { month: 'short', year: 'numeric' }) : '');
-
-// ── Amount in words ──────────────────────────────────────────────────────────
-const ONES = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen'];
-const TENS = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'];
-const SCALES = ['', ' thousand', ' million', ' billion', ' trillion'];
-
-function underThousand(n: number): string {
-  let out = '';
-  if (n >= 100) { out += `${ONES[Math.floor(n / 100)]} hundred`; n %= 100; if (n) out += ' '; }
-  if (n >= 20) { out += TENS[Math.floor(n / 10)]; if (n % 10) out += `-${ONES[n % 10]}`; }
-  else if (n > 0) { out += ONES[n]; }
-  return out;
-}
-
-function intToWords(n: number): string {
-  if (n === 0) return 'zero';
-  const groups: number[] = [];
-  while (n > 0) { groups.push(n % 1000); n = Math.floor(n / 1000); }
-  let words = '';
-  for (let i = groups.length - 1; i >= 0; i--) {
-    if (groups[i] === 0) continue;
-    words += `${underThousand(groups[i])}${SCALES[i]}`;
-    if (i > 0) words += ' ';
-  }
-  return words.trim();
-}
-
-function amountInWords(amount: number, currency: string): string {
-  const major = currency === 'ETB' ? 'Birr' : currency;
-  const rounded = Math.round((Number(amount) || 0) * 100);
-  const whole = Math.floor(rounded / 100);
-  const cents = rounded % 100;
-  const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
-  let out = `${cap(intToWords(whole))} ${major}`;
-  if (cents > 0) out += ` and ${intToWords(cents)} cent${cents === 1 ? '' : 's'}`;
-  return `${out}.`;
-}
 
 // ── Layout primitives ─────────────────────────────────────────────────────────
 function InfoRow({ label, value, mono }: { label: string; value: React.ReactNode; mono?: boolean }) {
@@ -96,10 +59,15 @@ export function PaymentReceiptModal({ log, currency = 'ETB', onClose }: { log: a
   const statusLabel = log.displayStatus ?? paymentLogStatusLabel(log.status);
   const receiptNo = `RCPT-${new Date(log.createdAt).toISOString().slice(0, 10).replace(/-/g, '')}-${String(log.id).slice(-6).toUpperCase()}`;
   const payerName = log.payerName || log.memberName || '—';
-  const payerAccount = log.payerAccount || log.payerPhone || '—';
+  // The account line always carries a BANK account — never fall back to a phone
+  // number. The payer's phone gets its own row when known.
+  const payerAccount = log.payerAccount || '—';
 
   const onDownload = () => {
     try {
+      // The downloaded PDF mirrors the on-screen preview: transaction information
+      // (payer + edir accounts), the details table with the line breakdown, the
+      // amount in words, and the payment meta.
       downloadPaymentReceiptPdf({
         receiptNo,
         edirName: log.edirName ?? 'Edir',
@@ -110,8 +78,15 @@ export function PaymentReceiptModal({ log, currency = 'ETB', onClose }: { log: a
         dateText: dateTime(log.createdAt),
         method: log.method ?? '—',
         reference: log.transactionId ?? '—',
-        hashId: log.bankRef ?? log.receiptUrl ?? null,
+        hashId: log.bankRef ?? null,
         status: statusLabel,
+        payerName: log.payerName ?? null,
+        payerAccount: log.payerAccount ?? null,
+        payerPhone: log.payerPhone ?? null,
+        edirAccount: log.edirAccount ?? null,
+        breakdown: breakdown.map(([label, v]) => ({ label, amount: v })),
+        periodText: cov ? periodText : null,
+        channel: log.verificationType ?? null,
       });
       toast.success('Receipt downloaded.');
     } catch { toast.error('Could not generate the receipt.'); }
@@ -157,6 +132,7 @@ export function PaymentReceiptModal({ log, currency = 'ETB', onClose }: { log: a
             <div className="divide-y">
               <InfoRow label="Payer Name" value={payerName} />
               <InfoRow label="Payer Account No." value={payerAccount} mono />
+              {log.payerPhone && <InfoRow label="Payer Phone" value={log.payerPhone} mono />}
               <InfoRow label="Member (Beneficiary)" value={log.memberName || '—'} />
               <InfoRow label="Member ID" value={log.memberCode || '—'} mono />
               <InfoRow label="Received By (Edir)" value={log.edirName || '—'} />

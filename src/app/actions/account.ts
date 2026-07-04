@@ -5,8 +5,15 @@ import prisma from '@/lib/prisma';
 import { getActor } from '@/lib/tenant-scope';
 import { writeAudit } from '@/lib/audit';
 import { ensureMembershipForUser } from '@/app/actions/members';
+import { computeContributionArrears, computePenalty, computePayWindow } from '@/lib/data';
+import { paymentLogStatusLabel } from '@/lib/payment-log-status';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
+
+function safeMeta(s: string | null): Record<string, any> {
+  if (!s) return {};
+  try { const v = JSON.parse(s); return typeof v === 'object' && v ? v : {}; } catch { return {}; }
+}
 
 /** Current user's own profile, plus linked member dues (self-service view). */
 export async function getMyAccount() {
@@ -100,8 +107,9 @@ export async function getMyPortal() {
     return { hasMembership: false as const, account, notifications: notifications.map(serializeNotif), recentActivity: [] };
   }
 
-  const [settings, rules, activity, myUploads] = await Promise.all([
+  const [settings, edir, rules, activity, myUploads] = await Promise.all([
     prisma.edirSettings.findUnique({ where: { edirId: m.edirId } }),
+    prisma.edir.findUnique({ where: { id: m.edirId }, select: { name: true, logoUrl: true, accountNumber: true } }),
     prisma.rulesVersion.findFirst({ where: { edirId: m.edirId, status: 'APPROVED' }, orderBy: { versionNumber: 'desc' }, select: { versionNumber: true, title: true, effectiveDate: true } }),
     prisma.auditLog.findMany({ where: { edirId: m.edirId, OR: [{ userId: user.id }, { targetId: m.id }] }, orderBy: { createdAt: 'desc' }, take: 20 }),
     // Documents this member uploaded through self-service requests — mirrored into
@@ -113,21 +121,60 @@ export async function getMyPortal() {
   const monthlyFee = num(settings?.monthlyFee);
   const balance = num(m.paymentStatus?.balance);
   const tenureMonths = Math.max(0, Math.floor((Date.now() - new Date(m.joinDate).getTime()) / (1000 * 60 * 60 * 24 * 30.4)));
-  const monthsBehind = monthlyFee > 0 ? Math.floor(balance / monthlyFee) : 0;
+  const now = new Date();
+  const dueDay = settings?.dueDay ?? 1;
+  const monthsPaid = m.paymentStatus?.monthsPaid ?? 0;
+  // Months behind is a CONTRIBUTION-ledger concept (months due since join vs
+  // months paid) — never balance/monthlyFee, since the pooled balance holds
+  // registration fees, penalties, and compensations, not monthly contributions.
+  const { monthsBehind, arrears: contributionArrears } = computeContributionArrears({ joinDate: m.joinDate, dueDay, monthsPaid, monthlyFee, now });
 
   const allInstallments = m.installmentPlans.flatMap(p => p.installments.map(i => ({ ...i, planType: p.type })));
-  const now = new Date();
   const upcoming = allInstallments
     .filter(i => i.status !== 'PAID')
     .sort((a, b) => +new Date(a.dueDate) - +new Date(b.dueDate))
     .map(i => ({ id: i.id, planType: i.planType, sequence: i.sequence, amount: num(i.amount), dueDate: i.dueDate, status: i.status, overdue: new Date(i.dueDate) < now }));
+  const installmentPlans = m.installmentPlans.map(p => ({
+    id: p.id, type: p.type, totalAmount: num(p.totalAmount),
+    total: p.installments.length,
+    paid: p.installments.filter(i => i.status === 'PAID').length,
+  }));
 
   const successful = m.paymentLogs.filter(l => l.status === 'SUCCESS' || l.status === 'PARTIAL');
   const totalContributions = successful.reduce((s, l) => s + num(l.amount), 0);
   const penaltiesPaid = successful.reduce((s, l) => { try { return s + (Number(JSON.parse(l.description || '{}').latePenalty) || 0); } catch { return s; } }, 0);
 
+  // The applicable LIVE late penalty from the Edir's penalty configuration.
+  const penalty = computePenalty({
+    monthsBehind, arrears: contributionArrears, dueDay,
+    gracePeriodDays: settings?.gracePeriodDays ?? 0, currency, tiers: settings?.penaltyTiers, now,
+    daily: {
+      enabled: !!settings?.dailyPenaltyEnabled,
+      type: settings?.dailyPenaltyType === 'PERCENT' ? 'PERCENT' : 'FIXED',
+      value: num(settings?.dailyPenaltyValue),
+      maxDays: num(settings?.dailyPenaltyMaxDays),
+    },
+  });
+
+  // Contribution coverage by calendar month (indexed from the join month).
+  const joinMonth = new Date(m.joinDate.getFullYear(), m.joinDate.getMonth(), 1);
+  const monthFromJoin = (n: number) => new Date(joinMonth.getFullYear(), joinMonth.getMonth() + n, 1);
+  const coverage = {
+    monthsPaid,
+    paidThrough: monthsPaid > 0 ? monthFromJoin(monthsPaid - 1) : null,
+    nextDueMonth: monthlyFee > 0 ? monthFromJoin(monthsPaid) : null,
+  };
+
+  // Advance-payment window (nextPaymentDelayDays Edir setting).
+  const reinstatementFee = (m.status === 'SUSPENDED' || m.status === 'TERMINATED') ? num(settings?.reinstatementFee) : 0;
+  const nothingDue = monthsBehind <= 0 && balance <= 0 && !penalty && upcoming.length === 0 && reinstatementFee <= 0;
+  const payWindow = computePayWindow({
+    delayDays: num(settings?.nextPaymentDelayDays),
+    lastPayment: m.paymentStatus?.lastPayment ?? null,
+    nothingDue, now,
+  });
+
   // Next monthly due date from the configured due day.
-  const dueDay = settings?.dueDay ?? 1;
   const nextDue = new Date(now.getFullYear(), now.getMonth(), dueDay);
   if (nextDue < now) nextDue.setMonth(nextDue.getMonth() + 1);
 
@@ -140,13 +187,54 @@ export async function getMyPortal() {
       phone: m.phone, email: m.email, address: m.address, city: m.city, subcity: m.subcity, woreda: m.woreda,
       emergencyContactName: m.emergencyContactName, emergencyContactPhone: m.emergencyContactPhone, joinDate: m.joinDate,
     },
+    edir: { name: edir?.name ?? user.edir?.name ?? 'Edir', logoUrl: edir?.logoUrl ?? null, accountNumber: edir?.accountNumber ?? null },
     payments: {
       currency, monthlyFee, balance, totalContributions, penaltiesPaid,
-      monthsPaid: m.paymentStatus?.monthsPaid ?? 0, lastPayment: m.paymentStatus?.lastPayment ?? null,
+      monthsPaid, lastPayment: m.paymentStatus?.lastPayment ?? null,
       nextDueDate: nextDue, gracePeriodDays: settings?.gracePeriodDays ?? 0,
       status: m.paymentStatus?.status ?? 'PENDING',
+      // Live obligations breakdown (mirrors the staff Payments matrix).
+      monthsBehind,
+      contributionArrears,
+      penalty, // full PenaltyBreakdown | null
+      reinstatementFee,
+      totalDue: balance + contributionArrears + (penalty?.amount ?? 0) + reinstatementFee,
+      coverage,
+      payWindow,
       upcoming,
-      history: m.paymentLogs.map(l => ({ id: l.id, amount: num(l.amount), method: l.method, status: l.status, transactionId: l.transactionId, createdAt: l.createdAt, receiptUrl: l.receiptUrl })),
+      installmentPlans,
+      // Receipt-grade history rows — every field the formal PaymentReceiptModal
+      // needs (mirrors getMemberPaymentHistory, self-scoped so no staff permission).
+      history: m.paymentLogs.map(l => {
+        const meta = safeMeta(l.description);
+        const cov = meta.coverage as { months?: number; from?: string; to?: string } | undefined;
+        return {
+          id: l.id,
+          amount: num(l.amount),
+          method: l.method,
+          status: l.status,
+          displayStatus: paymentLogStatusLabel(l.status),
+          verificationType: l.verificationType,
+          transactionId: l.transactionId,
+          createdAt: l.createdAt,
+          receiptUrl: l.receiptUrl,
+          description: l.description,
+          coverage: cov ? { months: Number(cov.months ?? 0), from: cov.from ?? null, to: cov.to ?? null } : null,
+          memberName: m.name,
+          memberCode: m.memberId,
+          memberStatus: m.status,
+          edirName: edir?.name ?? null,
+          edirLogoUrl: edir?.logoUrl ?? null,
+          edirAccount: (meta.edirAccount as string) ?? edir?.accountNumber ?? null,
+          payerName: (meta.payerName as string) ?? null,
+          payerAccount: (meta.payerAccount as string) ?? null,
+          payerPhone: (meta.payerPhone as string) ?? null,
+          bankRef: l.receiptUrl ?? (meta.bankRef as string) ?? null,
+          contributionAmount: meta.installment != null ? Number(meta.installment) : null,
+          penaltyAmount: meta.latePenalty != null ? Number(meta.latePenalty) : null,
+          dueDate: cov?.to ?? null,
+        };
+      }),
     },
     relatives: m.relatives.map(r => ({
       id: r.id, name: r.name, relationship: r.relationship, phone: r.phone, isBeneficiary: r.isBeneficiary, benefitShare: r.benefitShare,

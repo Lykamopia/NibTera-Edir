@@ -20,15 +20,14 @@ import { DateRangeFilter, ALL_TIME, toParam, dateRangeLabel, type DateRangeValue
 import { Pagination, usePagination } from '@/components/ui/pagination';
 import { ReceiptUpload, type ReceiptFile } from '@/components/ui/receipt-upload';
 import { PaymentReceiptModal } from '@/components/payment-receipt-modal';
-import { getMembers } from '@/app/actions/members';
-import { getMemberOutstanding, recordManualPayment, getPaymentsSummary, getMemberPaymentHistory } from '@/app/actions/payments';
+import { getMemberOutstanding, recordManualPayment, getPaymentsSummary, getMemberPaymentHistory, getPaymentsMatrix } from '@/app/actions/payments';
 
 const LINES = [
   ['installment', 'Installment / Contribution'], ['arrears', 'Overdue Amount'], ['latePenalty', 'Late Penalty'],
   ['interest', 'Interest'], ['serviceFees', 'Service Fees'], ['other', 'Other'],
 ] as const;
 type LineKey = (typeof LINES)[number][0];
-type SortKey = 'name' | 'balance' | 'status';
+type SortKey = 'name' | 'due' | 'penalty' | 'arrears' | 'months';
 
 export default function PaymentsClient() {
   const [items, setItems] = useState<any[]>([]);
@@ -37,29 +36,31 @@ export default function PaymentsClient() {
   const [error, setError] = useState(false);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<'all' | 'arrears' | 'settled'>('all');
-  const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'balance', dir: 'desc' });
+  const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'due', dir: 'desc' });
   const [target, setTarget] = useState<any | null>(null);
   const [historyMember, setHistoryMember] = useState<any | null>(null);
   const [range, setRange] = useState<DateRangeValue>(ALL_TIME);
 
   const load = useCallback(() => {
     setLoading(true); setError(false);
-    Promise.all([getMembers({ query, status: 'ACTIVE', pageSize: 100 }), getPaymentsSummary(toParam(range))])
+    Promise.all([getPaymentsMatrix({ query }), getPaymentsSummary(toParam(range))])
       .then(([r, s]) => { setItems(r.items); setSummary(s); })
       .catch(() => setError(true)).finally(() => setLoading(false));
   }, [query, range]);
   useEffect(() => { load(); }, [load]);
 
   const cur = summary?.currency ?? 'ETB';
-  const bal = (m: any) => Number(m.paymentStatus?.balance ?? 0);
+  const due = (m: any) => Number(m.totalDue ?? 0);
 
   const rows = useMemo(() => {
-    let r = items.filter(m => filter === 'all' ? true : filter === 'arrears' ? bal(m) > 0 : bal(m) <= 0);
+    let r = items.filter(m => filter === 'all' ? true : filter === 'arrears' ? due(m) > 0 : due(m) <= 0);
     r = [...r].sort((a, b) => {
       let cmp = 0;
       if (sort.key === 'name') cmp = (a.name || '').localeCompare(b.name || '');
-      else if (sort.key === 'balance') cmp = bal(a) - bal(b);
-      else cmp = (a.status || '').localeCompare(b.status || '');
+      else if (sort.key === 'due') cmp = due(a) - due(b);
+      else if (sort.key === 'penalty') cmp = (a.latePenalty ?? 0) - (b.latePenalty ?? 0);
+      else if (sort.key === 'arrears') cmp = (a.contributionArrears ?? 0) - (b.contributionArrears ?? 0);
+      else cmp = (a.monthsBehind ?? 0) - (b.monthsBehind ?? 0);
       return sort.dir === 'asc' ? cmp : -cmp;
     });
     return r;
@@ -67,12 +68,17 @@ export default function PaymentsClient() {
 
   const { page, setPage, pageCount, pageItems, total } = usePagination(rows, 12);
 
-  const toggleSort = (key: SortKey) => setSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: key === 'balance' ? 'desc' : 'asc' });
+  const toggleSort = (key: SortKey) => setSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: key === 'name' ? 'asc' : 'desc' });
   const SortIcon = ({ k }: { k: SortKey }) => sort.key !== k ? <ArrowUpDown className="h-3.5 w-3.5 opacity-40" /> : sort.dir === 'asc' ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />;
 
   const exportCsv = () => {
-    const header = ['Member ID', 'Name', 'Phone', 'Status', `Balance (${cur})`];
-    const data = rows.map(m => [m.memberId, m.name, m.phone || '', m.status, String(bal(m))]);
+    const header = ['Member ID', 'Name', 'Phone', 'Status', 'Months Paid', 'Months Behind', `Contribution Arrears (${cur})`, `Late Penalty (${cur})`, 'Penalty Rule', `Other Charges (${cur})`, `Total Due (${cur})`, 'Last Payment'];
+    const data = rows.map(m => [
+      m.memberId, m.name, m.phone || '', m.status, String(m.monthsPaid ?? 0), String(m.monthsBehind ?? 0),
+      String(m.contributionArrears ?? 0), String(m.latePenalty ?? 0), m.penaltyRule || '',
+      String(m.otherCharges ?? 0), String(m.totalDue ?? 0),
+      m.lastPayment ? new Date(m.lastPayment).toLocaleDateString() : '',
+    ]);
     const csv = [header, ...data].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
     const a = document.createElement('a'); a.href = url; a.download = 'payments.csv'; a.click(); URL.revokeObjectURL(url);
@@ -114,24 +120,50 @@ export default function PaymentsClient() {
           {loading ? <LoadingState rows={6} /> : error ? <ErrorState onRetry={load} /> : rows.length === 0 ? (
             <EmptyState icon={Users} title="No members found" description="Adjust your search or filter." />
           ) : (
+            <div className="overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead><button onClick={() => toggleSort('name')} className="flex items-center gap-1 hover:text-foreground">Member <SortIcon k="name" /></button></TableHead>
                   <TableHead>Phone</TableHead>
-                  <TableHead><button onClick={() => toggleSort('status')} className="flex items-center gap-1 hover:text-foreground">Status <SortIcon k="status" /></button></TableHead>
-                  <TableHead className="text-right"><button onClick={() => toggleSort('balance')} className="ml-auto flex items-center gap-1 hover:text-foreground">Balance <SortIcon k="balance" /></button></TableHead>
+                  <TableHead className="text-center"><button onClick={() => toggleSort('months')} className="mx-auto flex items-center gap-1 hover:text-foreground">Months Behind <SortIcon k="months" /></button></TableHead>
+                  <TableHead className="text-right"><button onClick={() => toggleSort('arrears')} className="ml-auto flex items-center gap-1 hover:text-foreground">Contribution Arrears <SortIcon k="arrears" /></button></TableHead>
+                  <TableHead className="text-right"><button onClick={() => toggleSort('penalty')} className="ml-auto flex items-center gap-1 hover:text-foreground">Late Penalty <SortIcon k="penalty" /></button></TableHead>
+                  <TableHead className="text-right">Other Charges</TableHead>
+                  <TableHead className="text-right"><button onClick={() => toggleSort('due')} className="ml-auto flex items-center gap-1 hover:text-foreground">Total Due <SortIcon k="due" /></button></TableHead>
                   <TableHead></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {pageItems.map(m => {
-                  const b = bal(m);
+                  const b = due(m);
                   return (
                     <TableRow key={m.id} className="group">
-                      <TableCell><button onClick={() => setHistoryMember(m)} className="text-left transition-colors hover:text-primary"><div className="font-medium">{m.name}</div><div className="font-mono text-xs text-muted-foreground">{m.memberId}</div></button></TableCell>
+                      <TableCell>
+                        <button onClick={() => setHistoryMember(m)} className="text-left transition-colors hover:text-primary">
+                          <div className="font-medium">{m.name}</div>
+                          <div className="font-mono text-xs text-muted-foreground">{m.memberId}</div>
+                        </button>
+                        <div className="mt-0.5 text-[11px] text-muted-foreground">
+                          {m.monthsPaid} mo paid{m.lastPayment ? ` · last ${new Date(m.lastPayment).toLocaleDateString()}` : ''}
+                        </div>
+                      </TableCell>
                       <TableCell className="text-sm">{m.phone || '—'}</TableCell>
-                      <TableCell><Badge variant="outline" className={m.status === 'ACTIVE' ? 'border-success/20 bg-success/10 text-success' : 'bg-muted text-muted-foreground'}>{m.status}</Badge></TableCell>
+                      <TableCell className="text-center">
+                        {m.monthsBehind > 0
+                          ? <Badge variant="outline" className="border-warning/20 bg-warning/10 text-warning">{m.monthsBehind} mo</Badge>
+                          : <Badge variant="outline" className="border-success/20 bg-success/10 text-success">Up to date</Badge>}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">{m.contributionArrears > 0 ? money(m.contributionArrears) : '—'}</TableCell>
+                      <TableCell className="text-right">
+                        {m.latePenalty > 0 ? (
+                          <div>
+                            <span className="font-medium tabular-nums text-warning">{money(m.latePenalty)}</span>
+                            {m.penaltyRule && <div className="text-[10px] text-muted-foreground" title={`${m.overdueDays} day(s) overdue`}>{m.penaltyRule}</div>}
+                          </div>
+                        ) : '—'}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">{m.otherCharges > 0 ? money(m.otherCharges) : '—'}</TableCell>
                       <TableCell className="text-right"><span className={`font-semibold tabular-nums ${b > 0 ? 'text-warning' : 'text-success'}`}>{money(b)}</span></TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1.5">
@@ -144,6 +176,7 @@ export default function PaymentsClient() {
                 })}
               </TableBody>
             </Table>
+            </div>
           )}
         </CardContent>
       </Card>

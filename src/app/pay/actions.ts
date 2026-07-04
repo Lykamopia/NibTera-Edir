@@ -5,7 +5,7 @@ import crypto from 'crypto';
 import { format } from 'date-fns';
 import { Prisma } from '@prisma/client';
 import { NIB_CONFIG, type NibValidateResponse, type NibPaymentResponse } from '@/lib/nib-config';
-import { fetchDetailedMemberByPhone } from '@/lib/data';
+import { fetchDetailedMemberByPhone, computeMemberPayWindow } from '@/lib/data';
 import { resolveEdirPaymentAccount } from '@/lib/edir-payment-account';
 import { getPendingPaymentStatus } from '@/lib/payment-status';
 import prisma from '@/lib/prisma';
@@ -160,6 +160,23 @@ export async function getPaymentToken(amount: number, token: string, memberId: s
     }
   } catch (e) {
     payLog('getPaymentToken', 'duplicate-check skipped', String(e));
+  }
+
+  // ── Advance-payment window (nextPaymentDelayDays Edir setting) ───────────────
+  // A fully-settled member may only pay the NEXT month's contribution once the
+  // configured number of days has passed since their last settling payment.
+  // Enforced here (not just in the UI) so a crafted request cannot pay early.
+  try {
+    const window = await computeMemberPayWindow(memberId);
+    if (window.blocked) {
+      const opensOn = window.availableAt
+        ? window.availableAt.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })
+        : 'a later date';
+      payLog('getPaymentToken', 'BLOCKED — advance-payment window closed', { memberId, availableAt: window.availableAt, delayDays: window.delayDays });
+      return { status: 'error', message: `This month's contribution is already settled. The next payment opens on ${opensOn}.`, transactionId };
+    }
+  } catch (e) {
+    payLog('getPaymentToken', 'pay-window check skipped', String(e));
   }
 
   // Multi-tenant payment destination: resolve the BENEFICIARY's Edir account and

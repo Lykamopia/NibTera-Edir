@@ -96,6 +96,17 @@ export interface ApprovalContext {
   // and every supporting document on file before approving a relative-document action.
   relative?: { name: string; relationship: string; phone: string | null; dateOfBirth: string | null; isBeneficiary: boolean; isDependent: boolean; memberName: string | null; memberCode: string | null };
   relativeDocuments?: { title: string; fileName: string; fileUrl: string; fileType: string; category: string; status: string; version: number }[];
+  // Manual-payment context: the recorded payment log (reference, evidence, dates)
+  // so the checker sees every detail of what they are settling.
+  payment?: { transactionId: string; method: string; status: string; receiptUrl: string | null; createdAt: string; amount: number; memberBalance: number | null };
+  // Edir-lifecycle context: the full registration profile plus the uploaded
+  // Rules & Laws (agreement) document, shown to the checker before approval.
+  edir?: {
+    name: string; status: string; description: string | null; accountNumber: string | null; address: string | null;
+    branchName: string | null; districtName: string | null;
+    contactPersonName: string | null; contactMobile: string | null; contactEmail: string | null;
+    agreementDocUrl: string | null; createdAt: string;
+  };
   edirName?: string | null;
 }
 
@@ -170,6 +181,59 @@ async function resolveApprovalContext(edirId: string, module: string, rawPayload
       if (!p.roleId) return;
       const r = await prisma.role.findUnique({ where: { id: p.roleId }, select: { name: true } });
       if (r) ctx.role = r;
+    }),
+    safe(async () => {
+      // Manual payment: surface the recorded payment log (reference, evidence,
+      // amount, member balance) so the checker reviews the complete picture.
+      if (module !== 'MANUAL_PAYMENT' || !p.paymentLogId) return;
+      const log = await prisma.paymentLog.findUnique({
+        where: { id: p.paymentLogId },
+        select: {
+          transactionId: true, method: true, status: true, receiptUrl: true, createdAt: true, amount: true,
+          member: { select: { paymentStatus: { select: { balance: true } } } },
+        },
+      });
+      if (!log) return;
+      ctx.payment = {
+        transactionId: log.transactionId, method: log.method, status: log.status,
+        receiptUrl: log.receiptUrl, createdAt: log.createdAt.toISOString(), amount: Number(log.amount),
+        memberBalance: log.member?.paymentStatus ? Number(log.member.paymentStatus.balance) : null,
+      };
+      if (log.receiptUrl) {
+        const fileName = log.receiptUrl.split('/').pop() ?? 'receipt';
+        ctx.document = {
+          title: 'Payment receipt / evidence', fileName, fileUrl: log.receiptUrl,
+          fileType: fileName.toLowerCase().endsWith('.pdf') ? 'pdf' : 'image', category: 'Payment Receipts',
+        };
+      }
+    }),
+    safe(async () => {
+      // Edir registration/update: full profile + the uploaded Rules & Laws
+      // (agreement) document for review before the decision.
+      if (module !== 'EDIR_REGISTRATION' && module !== 'EDIR_UPDATE') return;
+      const e = await prisma.edir.findUnique({
+        where: { id: (p.edirId as string) || edirId },
+        select: {
+          name: true, status: true, description: true, accountNumber: true, address: true,
+          contactPersonName: true, contactMobile: true, contactEmail: true, agreementDocUrl: true, createdAt: true,
+          branch: { select: { name: true, district: { select: { name: true } } } },
+        },
+      });
+      if (!e) return;
+      ctx.edir = {
+        name: e.name, status: e.status, description: e.description, accountNumber: e.accountNumber, address: e.address,
+        branchName: e.branch?.name ?? null, districtName: e.branch?.district?.name ?? null,
+        contactPersonName: e.contactPersonName, contactMobile: e.contactMobile, contactEmail: e.contactEmail,
+        agreementDocUrl: e.agreementDocUrl, createdAt: e.createdAt.toISOString(),
+      };
+      // Only a real uploaded path is presentable (older records stored a bare file name).
+      if (e.agreementDocUrl && /^(\/|https?:)/.test(e.agreementDocUrl)) {
+        const fileName = e.agreementDocUrl.split('/').pop() ?? 'agreement';
+        ctx.document = {
+          title: 'Edir Rules & Laws (agreement document)', fileName, fileUrl: e.agreementDocUrl,
+          fileType: fileName.toLowerCase().endsWith('.pdf') ? 'pdf' : 'image', category: 'Agreement',
+        };
+      }
     }),
     safe(async () => {
       ctx.edirName = (await prisma.edir.findUnique({ where: { id: edirId }, select: { name: true } }))?.name ?? null;

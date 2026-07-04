@@ -57,12 +57,16 @@ function buildView(detail: any): ViewModel {
 
   switch (detail?.module) {
     case 'MANUAL_PAYMENT': {
+      const pay = ctx.payment ?? {};
       const facts: Fact[] = [{ label: 'Total', value: money(Number(p.total ?? 0)), emphasis: true }];
       Object.entries((p.breakdown ?? {}) as Record<string, number>)
         .filter(([, v]) => Number(v) > 0)
         .forEach(([k, v]) => facts.push({ label: titleCase(k), value: money(Number(v)) }));
-      if (p.method) facts.push({ label: 'Method', value: titleCase(String(p.method)) });
-      return { icon: Wallet, accent: 'success', subject: member, facts };
+      facts.push({ label: 'Method', value: titleCase(String(p.method ?? pay.method ?? 'Manual')) });
+      if (pay.transactionId) facts.push({ label: 'Transaction Ref', value: pay.transactionId });
+      if (pay.createdAt) facts.push({ label: 'Recorded on', value: new Date(pay.createdAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) });
+      if (pay.memberBalance != null) facts.push({ label: 'Member balance', value: money(Number(pay.memberBalance)) });
+      return { icon: Wallet, accent: 'success', subject: member, facts, document: ctx.document };
     }
     case 'PENALTY_WAIVER': {
       const facts: Fact[] = [];
@@ -145,17 +149,35 @@ function buildView(detail: any): ViewModel {
     }
     case 'EDIR_REGISTRATION': {
       const admin = p.admin ?? {};
+      const e = ctx.edir ?? {};
       const facts: Fact[] = [];
       if (admin.name) facts.push({ label: 'Managing admin', value: admin.name, emphasis: true });
-      if (admin.email) facts.push({ label: 'Email', value: admin.email });
-      if (admin.phone) facts.push({ label: 'Phone', value: admin.phone });
-      return { icon: Building2, accent: 'primary', subject: { icon: Building2, title: ctx.edirName ?? detail.title, subtitle: 'New Edir registration' }, facts };
+      if (admin.email) facts.push({ label: 'Admin email', value: admin.email });
+      if (admin.phone) facts.push({ label: 'Admin phone', value: admin.phone });
+      if (e.branchName) facts.push({ label: 'Branch', value: e.branchName });
+      if (e.districtName) facts.push({ label: 'District', value: e.districtName });
+      if (e.accountNumber) facts.push({ label: 'Account number', value: e.accountNumber });
+      if (e.address) facts.push({ label: 'Address', value: e.address });
+      if (e.contactPersonName) facts.push({ label: 'Chairperson', value: e.contactPersonName });
+      if (e.contactMobile) facts.push({ label: 'Chairperson phone', value: e.contactMobile });
+      if (e.contactEmail) facts.push({ label: 'Chairperson email', value: e.contactEmail });
+      return {
+        icon: Building2, accent: 'primary',
+        subject: { icon: Building2, title: e.name ?? ctx.edirName ?? detail.title, subtitle: 'New Edir registration' },
+        facts,
+        document: ctx.document, // the uploaded Edir Rules & Laws (agreement) document
+        blocks: [
+          ...(e.description ? [{ label: 'About the Edir', text: String(e.description) }] : []),
+          ...(e.agreementDocUrl && !ctx.document ? [{ label: 'Rules & Laws document', text: `Recorded as “${e.agreementDocUrl}” — the file itself was not uploaded with this registration.` }] : []),
+          ...(!e.agreementDocUrl ? [{ label: 'Rules & Laws document', text: 'No agreement document was attached to this registration.' }] : []),
+        ],
+      };
     }
     case 'EDIR_UPDATE':
       return {
         icon: Building2, accent: 'info',
-        subject: { icon: Building2, title: ctx.edirName ?? 'Edir', subtitle: 'Profile update' },
-        facts: [], changes: changesFrom(p.changes),
+        subject: { icon: Building2, title: ctx.edir?.name ?? ctx.edirName ?? 'Edir', subtitle: 'Profile update' },
+        facts: [], changes: changesFrom(p.changes), document: ctx.document,
       };
     case 'USER_CREATION': {
       const facts: Fact[] = [];
