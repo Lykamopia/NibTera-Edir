@@ -16,11 +16,13 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import {
   ArrowLeft, Upload, Trash2, Check, X, FileText, ExternalLink, Plus, Pencil, ShieldCheck, AlertTriangle,
   Users, ScrollText, CreditCard, Siren, FolderOpen, Gauge, CircleUser, KeyRound, RotateCcw, Lock, Loader2,
+  Power, UserX, Receipt, Eye, Download, FileImage, Wallet, CalendarClock, TrendingDown,
 } from 'lucide-react';
 import { EmptyState } from '@/components/ui/states';
 import { CredentialsDialog, type Credentials } from '@/components/credentials-dialog';
+import { PaymentReceiptModal } from '@/components/payment-receipt-modal';
 import { useConfirm, usePrompt } from '@/components/ui/confirm-provider';
-import { getMemberProfile, updateMember, addRelative, updateRelative, removeRelative, addMemberDocument, deleteMemberDocument, reviewMemberDocument, resetMemberPassword } from '@/app/actions/members';
+import { getMemberProfile, updateMember, addRelative, updateRelative, removeRelative, addMemberDocument, deleteMemberDocument, reviewMemberDocument, resetMemberPassword, setMemberStatus, requestMemberRemoval } from '@/app/actions/members';
 import RelativeDocuments from './relative-documents-section';
 import { getActiveRelationshipCategories } from '@/app/actions/relationship-categories';
 import { getMemberRoles } from '@/app/actions/rule-config';
@@ -48,10 +50,52 @@ export default function MemberProfileClient({ initial, memberId }: { initial: Pr
   const [p, setP] = useState<Profile>(initial);
   const [cred, setCred] = useState<Credentials | null>(null);
   const [editing, setEditing] = useState(false);
+  const [receipt, setReceipt] = useState<any | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const confirm = useConfirm();
+  const prompt = usePrompt();
   const reload = useCallback(() => { getMemberProfile(memberId).then(r => { if (r) setP(r); }).catch(() => {}); }, [memberId]);
   const cur = p.rules?.currency ?? 'ETB';
   const m = p.member;
+  const caps = p.caps ?? ({} as Profile['caps']);
   const initials = (m.name || '?').split(' ').map(s => s[0]).slice(0, 2).join('').toUpperCase();
+
+  // ── Header actions — each is permission-gated (caps) and confirmed ─────────
+  const onStatus = async (status: 'SUSPENDED' | 'ACTIVE') => {
+    const suspending = status === 'SUSPENDED';
+    if (!(await confirm({
+      title: suspending ? `Suspend ${m.name}?` : `Reinstate ${m.name}?`,
+      description: suspending
+        ? 'The member is suspended and loses benefit eligibility until reinstated.'
+        : 'The member returns to active standing.',
+      destructive: suspending,
+      confirmText: suspending ? 'Suspend' : 'Reinstate',
+    }))) return;
+    setBusy('status');
+    const res = await setMemberStatus(memberId, status);
+    setBusy(null);
+    if (res?.success) { toast.success(suspending ? 'Member suspended.' : 'Member reinstated.'); reload(); }
+    else toast.error(res?.error || 'Failed to update status.');
+  };
+
+  const onResetPassword = async () => {
+    if (!(await confirm({ title: 'Reset password', description: 'Generate a new temporary password? Existing sessions are signed out and the member must change it on next login.', confirmText: 'Generate' }))) return;
+    setBusy('reset');
+    const res = await resetMemberPassword(memberId);
+    setBusy(null);
+    if (res?.success && res.credentials) { toast.success('New credentials generated.'); setCred(res.credentials as Credentials); reload(); }
+    else toast.error((res && !res.success && res.error) || 'Failed to reset password.');
+  };
+
+  const onRequestRemoval = async () => {
+    const reason = await prompt({ title: `Request removal of ${m.name}`, label: 'Reason (optional)', multiline: true, confirmText: 'Submit request' });
+    if (reason === null) return;
+    setBusy('remove');
+    const res = await requestMemberRemoval(memberId, reason || undefined);
+    setBusy(null);
+    if (res?.success) toast.success('Removal submitted for checker approval.');
+    else toast.error(res?.error || 'Failed to submit removal.');
+  };
 
   return (
     <div className="space-y-5">
@@ -75,13 +119,44 @@ export default function MemberProfileClient({ initial, memberId }: { initial: Pr
               </div>
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-1.5 sm:ml-auto">
-            {p.compliance.eligibleForBenefits
-              ? <Badge variant="outline" className="border-success/20 bg-success/10 text-success"><ShieldCheck className="mr-1 h-3.5 w-3.5" /> Benefit-eligible</Badge>
-              : <Badge variant="outline" className="bg-muted text-muted-foreground">Not yet eligible</Badge>}
-            {p.compliance.atTerminationRisk && <Badge variant="outline" className="border-destructive/20 bg-destructive/10 text-destructive"><AlertTriangle className="mr-1 h-3.5 w-3.5" /> Termination risk</Badge>}
-            {!p.compliance.atTerminationRisk && p.compliance.atSuspensionRisk && <Badge variant="outline" className="border-warning/20 bg-warning/10 text-warning"><AlertTriangle className="mr-1 h-3.5 w-3.5" /> Suspension risk</Badge>}
-            {p.canManage && <Button size="sm" variant="outline" className="ml-1" onClick={() => setEditing(true)}><Pencil className="mr-1.5 h-4 w-4" /> Edit</Button>}
+          <div className="flex flex-col gap-2 sm:ml-auto sm:items-end">
+            <div className="flex flex-wrap items-center gap-1.5">
+              {p.compliance.eligibleForBenefits
+                ? <Badge variant="outline" className="border-success/20 bg-success/10 text-success"><ShieldCheck className="mr-1 h-3.5 w-3.5" /> Benefit-eligible</Badge>
+                : <Badge variant="outline" className="bg-muted text-muted-foreground">Not yet eligible</Badge>}
+              {p.compliance.atTerminationRisk && <Badge variant="outline" className="border-destructive/20 bg-destructive/10 text-destructive"><AlertTriangle className="mr-1 h-3.5 w-3.5" /> Termination risk</Badge>}
+              {!p.compliance.atTerminationRisk && p.compliance.atSuspensionRisk && <Badge variant="outline" className="border-warning/20 bg-warning/10 text-warning"><AlertTriangle className="mr-1 h-3.5 w-3.5" /> Suspension risk</Badge>}
+            </div>
+            {/* Every action the signed-in user is permitted to take on this member */}
+            <div className="flex flex-wrap items-center gap-1.5 sm:justify-end">
+              {caps.canEdit && (
+                <Button size="sm" variant="outline" onClick={() => setEditing(true)}><Pencil className="mr-1.5 h-4 w-4" /> Edit</Button>
+              )}
+              {m.status === 'ACTIVE'
+                ? caps.canSuspend && (
+                    <Button size="sm" variant="outline" className="border-warning/40 text-warning hover:bg-warning/10 hover:text-warning" disabled={busy === 'status'} onClick={() => onStatus('SUSPENDED')}>
+                      {busy === 'status' ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Power className="mr-1.5 h-4 w-4" />} Suspend
+                    </Button>
+                  )
+                : caps.canReinstate && (
+                    <Button size="sm" variant="outline" className="border-success/40 text-success hover:bg-success/10 hover:text-success" disabled={busy === 'status'} onClick={() => onStatus('ACTIVE')}>
+                      {busy === 'status' ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Power className="mr-1.5 h-4 w-4" />} Reinstate
+                    </Button>
+                  )}
+              {caps.canResetPassword && (
+                <Button size="sm" variant="outline" disabled={busy === 'reset'} onClick={onResetPassword}>
+                  {busy === 'reset' ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <KeyRound className="mr-1.5 h-4 w-4" />} Reset password
+                </Button>
+              )}
+              {caps.canRecordPayment && (
+                <Link href="/dashboard/payments"><Button size="sm" variant="outline"><CreditCard className="mr-1.5 h-4 w-4" /> Record payment</Button></Link>
+              )}
+              {caps.canRemove && (
+                <Button size="sm" variant="ghost" className="text-destructive hover:bg-destructive/10 hover:text-destructive" disabled={busy === 'remove'} onClick={onRequestRemoval}>
+                  {busy === 'remove' ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <UserX className="mr-1.5 h-4 w-4" />} Request removal
+                </Button>
+              )}
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -147,20 +222,37 @@ export default function MemberProfileClient({ initial, memberId }: { initial: Pr
 
         {/* Payments */}
         <TabsContent value="payments" className="mt-4 space-y-4">
+          <PaymentStats profile={p} currency={cur} />
           <Card>
-            <CardHeader><CardTitle className="text-base">Payment History</CardTitle></CardHeader>
+            <CardHeader>
+              <CardTitle className="text-base">Payment History & Receipts</CardTitle>
+              <CardDescription>Open any payment for its formal receipt — previewable and downloadable as PDF.</CardDescription>
+            </CardHeader>
             <CardContent className="p-0">
               {p.payments.length === 0 ? <EmptyState icon={CreditCard} title="No payments yet" className="min-h-32" /> : (
                 <Table>
-                  <TableHeader><TableRow><TableHead>Date</TableHead><TableHead>Method</TableHead><TableHead>Transaction</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Amount</TableHead></TableRow></TableHeader>
+                  <TableHeader><TableRow><TableHead>Date</TableHead><TableHead>Method</TableHead><TableHead className="hidden md:table-cell">Transaction</TableHead><TableHead>Details</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Amount</TableHead><TableHead className="text-right">Receipt</TableHead></TableRow></TableHeader>
                   <TableBody>
-                    {p.payments.map(l => (
-                      <TableRow key={l.id}>
+                    {p.payments.map((l: any) => (
+                      <TableRow key={l.id} className="cursor-pointer" onClick={() => setReceipt(l)}>
                         <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{new Date(l.createdAt).toLocaleDateString()}</TableCell>
-                        <TableCell className="text-sm">{l.method}</TableCell>
-                        <TableCell className="font-mono text-xs text-muted-foreground">{l.transactionId}</TableCell>
-                        <TableCell><Badge variant="outline" className={PAY_STATUS[l.status] ?? ''}>{l.status}</Badge></TableCell>
-                        <TableCell className="text-right font-semibold">{money(l.amount, cur)}</TableCell>
+                        <TableCell className="text-sm">{String(l.method).replace(/_/g, ' ')}</TableCell>
+                        <TableCell className="hidden font-mono text-xs text-muted-foreground md:table-cell">{l.transactionId}</TableCell>
+                        <TableCell>
+                          <div className="flex flex-wrap gap-1">
+                            {l.contributionAmount != null && l.contributionAmount > 0 && <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">Contribution {money(l.contributionAmount, cur)}</span>}
+                            {l.penaltyAmount != null && l.penaltyAmount > 0 && <span className="rounded bg-warning/10 px-1.5 py-0.5 text-[10px] text-warning">Penalty {money(l.penaltyAmount, cur)}</span>}
+                            {l.coverage?.months > 0 && <span className="rounded bg-primary/5 px-1.5 py-0.5 text-[10px] text-primary">{l.coverage.months} mo covered</span>}
+                            {!(l.contributionAmount > 0) && !(l.penaltyAmount > 0) && !(l.coverage?.months > 0) && <span className="text-xs text-muted-foreground">—</span>}
+                          </div>
+                        </TableCell>
+                        <TableCell><Badge variant="outline" className={PAY_STATUS[l.status] ?? ''}>{l.displayStatus ?? l.status}</Badge></TableCell>
+                        <TableCell className="text-right font-semibold tabular-nums">{money(l.amount, cur)}</TableCell>
+                        <TableCell className="text-right" onClick={e => e.stopPropagation()}>
+                          <Button size="sm" variant="outline" className="h-7 gap-1 text-xs" onClick={() => setReceipt(l)}>
+                            <Receipt className="h-3.5 w-3.5" /> Receipt
+                          </Button>
+                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -235,6 +327,73 @@ export default function MemberProfileClient({ initial, memberId }: { initial: Pr
 
       {cred && <CredentialsDialog memberName={m.name} credentials={cred} onClose={() => setCred(null)} />}
       {editing && <EditMemberDialog member={m} onClose={() => setEditing(false)} onDone={() => { setEditing(false); reload(); }} />}
+      {receipt && <PaymentReceiptModal log={receipt} currency={cur} onClose={() => setReceipt(null)} />}
+    </div>
+  );
+}
+
+// ─── Payment reporting stats (Payments tab) ──────────────────────────────────
+
+function PaymentStats({ profile: p, currency }: { profile: Profile; currency: string }) {
+  const settled = (p.payments as any[]).filter(l => l.status === 'SUCCESS' || l.status === 'PARTIAL');
+  const totalSettled = settled.reduce((s, l) => s + Number(l.amount), 0);
+  const contributionPaid = settled.reduce((s, l) => s + (Number(l.contributionAmount) || 0), 0);
+  const lastPayment = p.paymentStatus?.lastPayment ?? null;
+
+  // Settled volume per payment method, for the breakdown chips.
+  const byMethod = new Map<string, { count: number; amount: number }>();
+  for (const l of settled) {
+    const k = String(l.method).replace(/_/g, ' ');
+    const cur = byMethod.get(k) ?? { count: 0, amount: 0 };
+    byMethod.set(k, { count: cur.count + 1, amount: cur.amount + Number(l.amount) });
+  }
+
+  const tiles = [
+    { label: 'Total Paid', value: money(totalSettled, currency), icon: Wallet, tone: 'text-success', hint: `${settled.length} settled of ${p.payments.length} transaction(s)` },
+    { label: 'Outstanding Balance', value: money(p.compliance.balance, currency), icon: TrendingDown, tone: p.compliance.balance > 0 ? 'text-warning' : 'text-success', hint: p.compliance.monthsBehind > 0 ? `${p.compliance.monthsBehind} month(s) behind` : 'up to date' },
+    { label: 'Months Paid', value: String(p.paymentStatus?.monthsPaid ?? 0), icon: CalendarClock, tone: 'text-info', hint: contributionPaid > 0 ? `${money(contributionPaid, currency)} in contributions` : undefined },
+    { label: 'Penalties Paid', value: money(p.compliance.penaltiesPaid, currency), icon: AlertTriangle, tone: p.compliance.penaltiesPaid > 0 ? 'text-warning' : 'text-success' },
+    { label: 'Last Payment', value: lastPayment ? new Date(lastPayment).toLocaleDateString() : 'Never', icon: CreditCard, tone: 'text-foreground' },
+  ];
+
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
+        {tiles.map(t => (
+          <div key={t.label} className="rounded-xl border bg-card p-3">
+            <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground"><t.icon className="h-3.5 w-3.5" /> {t.label}</div>
+            <div className={`mt-1 truncate text-lg font-bold tabular-nums ${t.tone}`}>{t.value}</div>
+            {t.hint && <div className="mt-0.5 truncate text-[11px] text-muted-foreground">{t.hint}</div>}
+          </div>
+        ))}
+      </div>
+      {byMethod.size > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-xs font-medium text-muted-foreground">By method:</span>
+          {Array.from(byMethod.entries()).map(([method, v]) => (
+            <span key={method} className="inline-flex items-center gap-1.5 rounded-full border bg-card px-2.5 py-1 text-xs">
+              <span className="font-medium">{method}</span>
+              <span className="text-muted-foreground">{v.count}× · {money(v.amount, currency)}</span>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Text field for the edit form. Defined at MODULE level — defining it inside
+ * EditMemberDialog recreated the component type on every keystroke, remounting
+ * the input and dropping focus after each character.
+ */
+function EditField({ label, type = 'text', value, onChange, full }: {
+  label: string; type?: string; value: string; onChange: (v: string) => void; full?: boolean;
+}) {
+  return (
+    <div className={`space-y-1.5 ${full ? 'sm:col-span-2' : ''}`}>
+      <Label className="text-xs">{label}</Label>
+      <Input type={type} value={value} onChange={e => onChange(e.target.value)} />
     </div>
   );
 }
@@ -271,22 +430,15 @@ function EditMemberDialog({ member, onClose, onDone }: { member: any; onClose: (
     else toast.error(res?.error || 'Failed to update member.');
   };
 
-  const F = ({ label, k, type = 'text', full }: { label: string; k: keyof typeof form; type?: string; full?: boolean }) => (
-    <div className={`space-y-1.5 ${full ? 'sm:col-span-2' : ''}`}>
-      <Label className="text-xs">{label}</Label>
-      <Input type={type} value={(form as any)[k]} onChange={e => set(k as string, e.target.value)} />
-    </div>
-  );
-
   return (
     <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
       <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
         <DialogHeader><DialogTitle>Edit Member</DialogTitle></DialogHeader>
         <div className="space-y-3" onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault(); }}>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <F label="Full Name" k="name" />
-            <F label="Occupation" k="occupation" />
-            <F label="Date of Birth" k="dateOfBirth" type="date" />
+            <EditField label="Full Name" value={form.name} onChange={v => set('name', v)} />
+            <EditField label="Occupation" value={form.occupation} onChange={v => set('occupation', v)} />
+            <EditField label="Date of Birth" type="date" value={form.dateOfBirth} onChange={v => set('dateOfBirth', v)} />
             <div className="space-y-1.5">
               <Label className="text-xs">Gender</Label>
               <Select value={form.gender || ''} onValueChange={v => set('gender', v)}>
@@ -294,7 +446,7 @@ function EditMemberDialog({ member, onClose, onDone }: { member: any; onClose: (
                 <SelectContent><SelectItem value="Male">Male</SelectItem><SelectItem value="Female">Female</SelectItem><SelectItem value="Other">Other</SelectItem></SelectContent>
               </Select>
             </div>
-            <F label="National ID" k="nationalId" />
+            <EditField label="National ID" value={form.nationalId} onChange={v => set('nationalId', v)} />
             <div className="space-y-1.5">
               <Label className="text-xs">Role</Label>
               <Select value={form.role} onValueChange={v => set('role', v)}>
@@ -302,14 +454,14 @@ function EditMemberDialog({ member, onClose, onDone }: { member: any; onClose: (
                 <SelectContent>{roles.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}</SelectContent>
               </Select>
             </div>
-            <F label="Phone" k="phone" />
-            <F label="Email" k="email" />
-            <F label="Address" k="address" full />
-            <F label="City" k="city" />
-            <F label="Sub-city" k="subcity" />
-            <F label="Woreda" k="woreda" />
-            <F label="Emergency Contact Name" k="emergencyContactName" />
-            <F label="Emergency Contact Phone" k="emergencyContactPhone" />
+            <EditField label="Phone" value={form.phone} onChange={v => set('phone', v)} />
+            <EditField label="Email" value={form.email} onChange={v => set('email', v)} />
+            <EditField label="Address" full value={form.address} onChange={v => set('address', v)} />
+            <EditField label="City" value={form.city} onChange={v => set('city', v)} />
+            <EditField label="Sub-city" value={form.subcity} onChange={v => set('subcity', v)} />
+            <EditField label="Woreda" value={form.woreda} onChange={v => set('woreda', v)} />
+            <EditField label="Emergency Contact Name" value={form.emergencyContactName} onChange={v => set('emergencyContactName', v)} />
+            <EditField label="Emergency Contact Phone" value={form.emergencyContactPhone} onChange={v => set('emergencyContactPhone', v)} />
           </div>
           <p className="text-xs text-muted-foreground">Editing the contact phone here updates the member record; it does not change an existing login username.</p>
         </div>
@@ -331,7 +483,7 @@ function AccountCard({ account, memberId, onCredentials, onChanged }: { account:
     const res = await resetMemberPassword(memberId);
     setBusy(false);
     if (res?.success && res.credentials) { toast.success('New credentials generated.'); onCredentials(res.credentials as Credentials); onChanged(); }
-    else toast.error(res?.error || 'Failed to reset password.');
+    else toast.error((res && !res.success && res.error) || 'Failed to reset password.');
   };
 
   return (
@@ -498,17 +650,29 @@ function RelativeDialog({ relative, memberId, onClose, onDone }: { relative: any
 
 const DOC_CATEGORIES = ['ID', 'CERTIFICATE', 'MEDICAL', 'PROOF_OF_RELATIONSHIP', 'PHOTO', 'OTHER'];
 
+/** File kind from the stored url/name — drives thumbnails and inline preview. */
+function docKind(d: { fileUrl: string; fileName?: string | null }): 'image' | 'pdf' | 'file' {
+  const ext = ((d.fileName || d.fileUrl).split('.').pop() || '').toLowerCase();
+  if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(ext)) return 'image';
+  if (ext === 'pdf') return 'pdf';
+  return 'file';
+}
+
 function MemberDocsTab({ profile, memberId, onChanged }: { profile: Profile; memberId: string; onChanged: () => void }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [category, setCategory] = useState('ID');
   const [busy, setBusy] = useState(false);
+  const [preview, setPreview] = useState<any | null>(null);
   const confirm = useConfirm();
   const prompt = usePrompt();
+  const caps = profile.caps ?? ({} as Profile['caps']);
+  const docs = profile.documents as any[];
+  const pendingCount = docs.filter(d => d.status === 'PENDING').length;
 
   const onUpload = async (file: File) => {
     setBusy(true);
     const up = await uploadFile(file, 'documents');
-    if (up) { const res = await addMemberDocument(memberId, { category: category as any, fileUrl: up.path, fileName: up.name }); if (res?.success) { toast.success('Document uploaded.'); onChanged(); } else toast.error(res?.error || 'Failed.'); }
+    if (up) { const res = await addMemberDocument(memberId, { category: category as any, fileUrl: up.path, fileName: up.name }); if (res?.success) { toast.success('Document uploaded — pending review.'); onChanged(); } else toast.error(res?.error || 'Failed.'); }
     setBusy(false); if (fileRef.current) fileRef.current.value = '';
   };
   const review = async (id: string, status: 'APPROVED' | 'REJECTED') => {
@@ -520,45 +684,118 @@ function MemberDocsTab({ profile, memberId, onChanged }: { profile: Profile; mem
   const del = async (id: string) => { if (!(await confirm({ title: 'Delete document', description: 'This document will be permanently deleted.', destructive: true, confirmText: 'Delete' }))) return; const res = await deleteMemberDocument(id); if (res?.success) { toast.success('Deleted.'); onChanged(); } else toast.error(res?.error || 'Failed.'); };
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Member Documents</CardTitle>
-        <CardDescription>This member’s own documents — IDs, certificates, and attachments. Each dependent’s documents are managed under the <span className="font-medium text-foreground">Dependents</span> tab.</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="flex flex-wrap items-end gap-2">
-          <div className="space-y-1.5"><Label className="text-xs">Category</Label>
-            <Select value={category} onValueChange={setCategory}>
-              <SelectTrigger className="w-52"><SelectValue /></SelectTrigger>
-              <SelectContent>{DOC_CATEGORIES.map(c => <SelectItem key={c} value={c}>{c.replace(/_/g, ' ')}</SelectItem>)}</SelectContent>
-            </Select>
-          </div>
-          <input ref={fileRef} type="file" accept="image/*,application/pdf" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) onUpload(f); }} />
-          <Button variant="outline" disabled={busy} onClick={() => fileRef.current?.click()}><Upload className="mr-1 h-4 w-4" /> Upload</Button>
-        </div>
-        {profile.documents.length === 0 ? (
-          <EmptyState icon={FolderOpen} title="No documents" description="Upload identification and supporting documents." className="min-h-32" />
-        ) : (
-          <div className="space-y-1.5">
-            {profile.documents.map(d => (
-              <div key={d.id} className="flex items-center justify-between rounded border bg-muted/30 px-3 py-2 text-sm">
-                <div className="flex items-center gap-2">
-                  <Badge variant="secondary">{d.category.replace(/_/g, ' ')}</Badge>
-                  <a href={d.fileUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 text-primary hover:underline"><FileText className="h-4 w-4" /> {d.fileName || 'Document'} <ExternalLink className="h-3 w-3" /></a>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <Badge variant="outline" className={DOC_STATUS[d.status] ?? ''}>{d.status}</Badge>
-                  {d.status === 'PENDING' && (<>
-                    <Button size="icon" variant="ghost" className="h-7 w-7 text-success" onClick={() => review(d.id, 'APPROVED')}><Check className="h-4 w-4" /></Button>
-                    <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive" onClick={() => review(d.id, 'REJECTED')}><X className="h-4 w-4" /></Button>
+    <div className="space-y-4">
+      {/* Upload */}
+      {caps.canManageDocs && (
+        <Card>
+          <CardContent className="flex flex-wrap items-end gap-3 p-4">
+            <div className="space-y-1.5">
+              <Label className="text-xs">Category</Label>
+              <Select value={category} onValueChange={setCategory}>
+                <SelectTrigger className="w-52"><SelectValue /></SelectTrigger>
+                <SelectContent>{DOC_CATEGORIES.map(c => <SelectItem key={c} value={c}>{c.replace(/_/g, ' ')}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <input ref={fileRef} type="file" accept="image/*,application/pdf" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) onUpload(f); }} />
+            <Button variant="outline" disabled={busy} onClick={() => fileRef.current?.click()} className="border-dashed">
+              {busy ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Upload className="mr-1.5 h-4 w-4" />} Upload document
+            </Button>
+            <p className="text-xs text-muted-foreground">Images or PDF, up to 10 MB. New uploads await review.</p>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Documents grid */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <FolderOpen className="h-4 w-4 text-primary" /> Member Documents
+            <span className="text-sm font-normal text-muted-foreground">({docs.length})</span>
+            {pendingCount > 0 && <Badge variant="outline" className="border-warning/20 bg-warning/10 text-warning">{pendingCount} pending review</Badge>}
+          </CardTitle>
+          <CardDescription>This member’s own documents — IDs, certificates, and attachments. Each dependent’s documents are managed under the <span className="font-medium text-foreground">Dependents</span> tab.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {docs.length === 0 ? (
+            <EmptyState icon={FolderOpen} title="No documents" description="Upload identification and supporting documents." className="min-h-32" />
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {docs.map(d => {
+                const kind = docKind(d);
+                return (
+                  <div key={d.id} className="group flex flex-col overflow-hidden rounded-xl border bg-card transition-colors hover:border-primary/40">
+                    {/* Thumbnail / type block — click to preview */}
+                    <button type="button" onClick={() => setPreview(d)} className="relative flex h-28 w-full items-center justify-center overflow-hidden border-b bg-muted/40">
+                      {kind === 'image'
+                        ? <img src={d.fileUrl} alt="" className="h-full w-full object-cover transition-transform group-hover:scale-105" />
+                        : <span className="flex h-14 w-14 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                            {kind === 'pdf' ? <FileText className="h-7 w-7" /> : <FileImage className="h-7 w-7" />}
+                          </span>}
+                      <span className="absolute right-2 top-2"><Badge variant="outline" className={`${DOC_STATUS[d.status] ?? ''} bg-card/90 backdrop-blur-sm`}>{d.status}</Badge></span>
+                    </button>
+                    <div className="flex flex-1 flex-col gap-1.5 p-3">
+                      <div className="flex items-center gap-1.5">
+                        <Badge variant="secondary" className="text-[10px]">{String(d.category).replace(/_/g, ' ')}</Badge>
+                        <span className="text-[11px] text-muted-foreground">{fmt(d.createdAt)}</span>
+                      </div>
+                      <p className="truncate text-sm font-medium" title={d.fileName || 'Document'}>{d.fileName || 'Document'}</p>
+                      <div className="mt-auto flex items-center gap-1 pt-1.5">
+                        <Button size="sm" variant="outline" className="h-7 flex-1 gap-1 text-xs" onClick={() => setPreview(d)}><Eye className="h-3.5 w-3.5" /> Preview</Button>
+                        <a href={d.fileUrl} download className="inline-flex h-7 items-center justify-center rounded-md border px-2 transition-colors hover:bg-accent" title="Download"><Download className="h-3.5 w-3.5" /></a>
+                        {d.status === 'PENDING' && caps.canReviewDocs && (<>
+                          <Button size="icon" variant="ghost" className="h-7 w-7 text-success" title="Approve" onClick={() => review(d.id, 'APPROVED')}><Check className="h-4 w-4" /></Button>
+                          <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive" title="Reject" onClick={() => review(d.id, 'REJECTED')}><X className="h-4 w-4" /></Button>
+                        </>)}
+                        {caps.canManageDocs && (
+                          <Button size="icon" variant="ghost" className="h-7 w-7 text-muted-foreground hover:text-destructive" title="Delete" onClick={() => del(d.id)}><Trash2 className="h-4 w-4" /></Button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Inline preview */}
+      <Dialog open={!!preview} onOpenChange={(o) => { if (!o) setPreview(null); }}>
+        <DialogContent className="max-h-[90vh] max-w-3xl overflow-hidden">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 pr-6 text-base">
+              <FileText className="h-4 w-4 text-primary" /> {preview?.fileName || 'Document'}
+              {preview && <Badge variant="outline" className={DOC_STATUS[preview.status] ?? ''}>{preview.status}</Badge>}
+            </DialogTitle>
+          </DialogHeader>
+          {preview && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-center overflow-auto rounded-lg border bg-muted/30" style={{ maxHeight: '68vh' }}>
+                {docKind(preview) === 'image' ? (
+                  <img src={preview.fileUrl} alt={preview.fileName || ''} className="max-h-[68vh] w-auto object-contain" />
+                ) : docKind(preview) === 'pdf' ? (
+                  <iframe src={preview.fileUrl} title={preview.fileName || 'Document'} className="h-[68vh] w-full" />
+                ) : (
+                  <div className="flex flex-col items-center gap-3 p-10 text-center">
+                    <FileText className="h-12 w-12 text-muted-foreground" />
+                    <p className="text-sm text-muted-foreground">Inline preview is not available for this file type.</p>
+                  </div>
+                )}
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-xs text-muted-foreground">{String(preview.category).replace(/_/g, ' ')} · uploaded {fmt(preview.createdAt)}</span>
+                <div className="flex gap-1.5">
+                  {preview.status === 'PENDING' && caps.canReviewDocs && (<>
+                    <Button size="sm" className="bg-success hover:bg-success/90" onClick={() => { review(preview.id, 'APPROVED'); setPreview(null); }}><Check className="mr-1 h-4 w-4" /> Approve</Button>
+                    <Button size="sm" variant="destructive" onClick={() => { review(preview.id, 'REJECTED'); setPreview(null); }}><X className="mr-1 h-4 w-4" /> Reject</Button>
                   </>)}
-                  <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => del(d.id)}><Trash2 className="h-4 w-4" /></Button>
+                  <a href={preview.fileUrl} download className="inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm transition-colors hover:bg-accent"><Download className="h-4 w-4" /> Download</a>
                 </div>
               </div>
-            ))}
-          </div>
-        )}
-      </CardContent>
-    </Card>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+    </div>
   );
 }

@@ -306,6 +306,94 @@ export async function setUserRole(userId: string, roleId: string | null) {
   }
 }
 
+const userAccountSchema = z.object({
+  name: z.string().trim().min(2, 'Name is required.').max(120),
+  email: z.string().trim().email('A valid email is required.').max(254),
+  phone: z.string().trim().min(7, 'Phone is required.').max(20),
+  roleId: z.string().trim().optional().nullable(),
+  status: z.enum(['ACTIVE', 'INACTIVE', 'SUSPENDED']).optional(),
+});
+
+/**
+ * Edit a user account's profile + access in one place (Platform Users "Edit"
+ * dialog): name, contact, role, and status. Scope follows assertCanAdministerUser
+ * (own tenant for Edir accounts; own org unit for platform accounts). Sessions
+ * are revoked when the role or status changes.
+ */
+export async function updateUserAccount(userId: string, input: z.infer<typeof userAccountSchema>) {
+  try {
+    const actor = await getActor();
+    await assertPermission(actor, 'manage_users');
+    const data = userAccountSchema.parse(input);
+
+    const user = await prisma.user.findUnique({ where: { id: userId }, include: { role: { select: { scope: true } } } });
+    if (!user) return { success: false as const, error: 'User not found.' };
+    if (user.role?.scope === 'SUPER_ADMIN' && !actor.isSuperAdmin) return { success: false as const, error: 'Platform Super-Admins cannot be edited here.' };
+    await assertCanAdministerUser(actor, user);
+
+    if (!isValidEthiopianPhone(data.phone)) return { success: false as const, error: 'Enter a valid Ethiopian phone number.' };
+    const phone = normalizeEthiopianPhone(data.phone);
+    const email = data.email.toLowerCase().trim();
+    const [emailTaken, phoneTaken] = await Promise.all([
+      prisma.user.findFirst({ where: { email, id: { not: userId } }, select: { id: true } }),
+      prisma.user.findFirst({ where: { phone, id: { not: userId } }, select: { id: true } }),
+    ]);
+    if (emailTaken) return { success: false as const, error: 'Another user already uses this email.' };
+    if (phoneTaken) return { success: false as const, error: 'Another user already uses this phone.' };
+
+    const roleId = data.roleId?.trim() || null;
+    if (roleId) {
+      const role = await prisma.role.findUnique({ where: { id: roleId }, select: { scope: true, edirId: true, branchId: true, districtId: true } });
+      if (!role) return { success: false as const, error: 'Role not found.' };
+      if (role.scope === 'SUPER_ADMIN') return { success: false as const, error: 'The platform Super-Admin role cannot be assigned here.' };
+      if (user.edirId) {
+        if (role.scope !== 'EDIR' || (role.edirId && role.edirId !== user.edirId)) {
+          return { success: false as const, error: 'Select a role that belongs to this Edir.' };
+        }
+      } else if (user.branchId) {
+        if (role.scope !== 'BRANCH' || (role.branchId && role.branchId !== user.branchId)) {
+          return { success: false as const, error: 'Select a branch-scoped role for a branch user.' };
+        }
+      } else if (user.districtId) {
+        if (role.scope !== 'DISTRICT' || (role.districtId && role.districtId !== user.districtId)) {
+          return { success: false as const, error: 'Select a district-scoped role for a district user.' };
+        }
+      }
+    }
+
+    const roleChanged = (user.roleId ?? null) !== roleId;
+    const statusChanged = !!data.status && user.status !== data.status;
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        name: data.name, email, phone, roleId,
+        ...(data.status ? { status: data.status } : {}),
+        // Privilege/status changes revoke existing sessions.
+        ...(roleChanged || statusChanged ? { tokenVersion: { increment: 1 } } : {}),
+      },
+    });
+
+    const parts = [
+      roleChanged ? 'role changed' : null,
+      statusChanged ? `status → ${data.status}` : null,
+    ].filter(Boolean).join('; ');
+    await writeAudit({ edirId: user.edirId, userId: actor.id, action: 'USER_ACCOUNT_UPDATED', targetType: 'User', targetId: userId, details: `Updated ${data.name} (${email})${parts ? ` — ${parts}` : ''}.` });
+    if (roleChanged) {
+      await logSecurityEvent({
+        event: SecurityEvent.USER_ROLE_CHANGED,
+        severity: LogSeverity.WARN,
+        actor,
+        details: `User '${actor.name}' changed the role of user ${userId} to ${roleId ?? '(none)'} via account edit.`,
+        targetId: userId, targetType: 'User',
+      });
+    }
+    revalidatePath('/dashboard/admin/users');
+    return { success: true as const };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
 export async function setUserStatus(userId: string, status: 'ACTIVE' | 'INACTIVE' | 'SUSPENDED') {
   try {
     const actor = await getActor();

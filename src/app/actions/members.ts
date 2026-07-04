@@ -3,7 +3,8 @@
 import { z } from 'zod';
 import prisma from '@/lib/prisma';
 import { Prisma } from '@prisma/client';
-import { getActor, assertPermission, assertSameTenant, tenantWhere, resolveEdirId } from '@/lib/tenant-scope';
+import { getActor, assertPermission, assertSameTenant, tenantWhere, resolveEdirId, actorHasPermission } from '@/lib/tenant-scope';
+import { paymentLogStatusLabel } from '@/lib/payment-log-status';
 import { writeAudit } from '@/lib/audit';
 import { submitForApproval } from '@/lib/approval-engine';
 import '@/lib/approval-modules';
@@ -183,12 +184,32 @@ export async function getMemberProfile(id: string) {
   if (!member) return null;
   await assertSameTenant(actor, member.edirId);
 
-  const [settings, audit] = await Promise.all([
+  const [settings, edir, audit] = await Promise.all([
     prisma.edirSettings.findUnique({ where: { edirId: member.edirId } }),
+    prisma.edir.findUnique({ where: { id: member.edirId }, select: { name: true, logoUrl: true, accountNumber: true } }),
     prisma.auditLog.findMany({ where: { edirId: member.edirId, targetId: id }, orderBy: { createdAt: 'desc' }, take: 50 }),
   ]);
 
   const canManage = actor.isSuperAdmin || actor.permissions.includes('manage_members');
+  // Fine-grained capabilities so the profile page shows exactly the actions this
+  // actor may take (each backed by the matching server-side permission check).
+  const caps = {
+    canManage,
+    canEdit: canManage || actorHasPermission(actor, 'edit_member'),
+    canSuspend: canManage || actorHasPermission(actor, 'suspend_member'),
+    canReinstate: canManage || actorHasPermission(actor, 'reinstate_member'),
+    canRemove: canManage || actorHasPermission(actor, 'remove_members'),
+    canReviewDocs: actorHasPermission(actor, ['review_member_documents', 'manage_members']),
+    canManageDocs: actorHasPermission(actor, ['manage_documents', 'manage_members']),
+    canResetPassword: canManage || actorHasPermission(actor, 'reset_password'),
+    canViewPayments: actorHasPermission(actor, ['view_payments', 'record_payment', 'view_payment_log', 'view_members', 'manage_members']),
+    canRecordPayment: actorHasPermission(actor, 'record_payment'),
+  };
+
+  const safeMeta = (s: string | null): Record<string, any> => {
+    if (!s) return {};
+    try { const v = JSON.parse(s); return typeof v === 'object' && v ? v : {}; } catch { return {}; }
+  };
   const num = (v: any) => (v == null ? 0 : Number(v));
   const monthlyFee = num(settings?.monthlyFee);
   const balance = num(member.paymentStatus?.balance);
@@ -206,6 +227,8 @@ export async function getMemberProfile(id: string) {
 
   return {
     canManage,
+    caps,
+    edir: { name: edir?.name ?? null, logoUrl: edir?.logoUrl ?? null, accountNumber: edir?.accountNumber ?? null },
     member: {
       id: member.id, memberId: member.memberId, name: member.name, role: member.role, status: member.status,
       photoUrl: member.photoUrl, occupation: member.occupation, gender: member.gender,
@@ -228,7 +251,37 @@ export async function getMemberProfile(id: string) {
       id: p.id, type: p.type, totalAmount: num(p.totalAmount),
       installments: p.installments.map(i => ({ id: i.id, sequence: i.sequence, amount: num(i.amount), dueDate: i.dueDate, status: i.status, paidAt: i.paidAt })),
     })),
-    payments: member.paymentLogs.map(l => ({ id: l.id, amount: num(l.amount), method: l.method, status: l.status, transactionId: l.transactionId, createdAt: l.createdAt, description: l.description })),
+    // Receipt-grade payment rows — every field the formal PaymentReceiptModal needs.
+    payments: member.paymentLogs.map(l => {
+      const meta = safeMeta(l.description);
+      const cov = meta.coverage as { months?: number; from?: string; to?: string } | undefined;
+      return {
+        id: l.id,
+        amount: num(l.amount),
+        method: l.method,
+        status: l.status,
+        displayStatus: paymentLogStatusLabel(l.status),
+        verificationType: l.verificationType,
+        transactionId: l.transactionId,
+        createdAt: l.createdAt,
+        description: l.description,
+        receiptUrl: l.receiptUrl,
+        coverage: cov ? { months: Number(cov.months ?? 0), from: cov.from ?? null, to: cov.to ?? null } : null,
+        memberName: member.name,
+        memberCode: member.memberId,
+        memberStatus: member.status,
+        edirName: edir?.name ?? null,
+        edirLogoUrl: edir?.logoUrl ?? null,
+        edirAccount: (meta.edirAccount as string) ?? edir?.accountNumber ?? null,
+        payerName: (meta.payerName as string) ?? null,
+        payerAccount: (meta.payerAccount as string) ?? null,
+        payerPhone: (meta.payerPhone as string) ?? null,
+        bankRef: l.receiptUrl ?? (meta.bankRef as string) ?? null,
+        contributionAmount: meta.installment != null ? Number(meta.installment) : null,
+        penaltyAmount: meta.latePenalty != null ? Number(meta.latePenalty) : null,
+        dueDate: cov?.to ?? null,
+      };
+    }),
     emergencyClaims: member.emergencyClaims.map(c => ({
       id: c.id, typeName: c.type?.name ?? null, status: c.status, affectedPerson: c.affectedPerson,
       approvedAmount: num(c.approvedAmount), disbursedAmount: num(c.disbursedAmount), createdAt: c.createdAt,

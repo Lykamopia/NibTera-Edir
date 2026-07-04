@@ -10,7 +10,8 @@
 
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
-import { X, Download } from 'lucide-react';
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { Download } from 'lucide-react';
 import { paymentLogStatusLabel, PAYMENT_LOG_STATUS_TONE } from '@/lib/payment-log-status';
 import { downloadPaymentReceiptPdf, amountInWords } from '@/lib/receipt-pdf';
 
@@ -59,9 +60,17 @@ export function PaymentReceiptModal({ log, currency = 'ETB', onClose }: { log: a
   const statusLabel = log.displayStatus ?? paymentLogStatusLabel(log.status);
   const receiptNo = `RCPT-${new Date(log.createdAt).toISOString().slice(0, 10).replace(/-/g, '')}-${String(log.id).slice(-6).toUpperCase()}`;
   const payerName = log.payerName || log.memberName || '—';
-  // The account line always carries a BANK account — never fall back to a phone
-  // number. The payer's phone gets its own row when known.
-  const payerAccount = log.payerAccount || '—';
+  // The account line always carries a BANK account — never a phone number. Legacy
+  // settlements stored the payer's phone in payerAccount, so filter those out too.
+  const sameTail = (a?: string | null, b?: string | null) => {
+    const t = (s?: string | null) => (s || '').replace(/\D/g, '').slice(-9);
+    const ta = t(a), tb = t(b);
+    return !!ta && ta === tb;
+  };
+  const payerAccountValue = log.payerAccount && !sameTail(log.payerAccount, log.payerPhone) && !sameTail(log.payerAccount, log.memberPhone)
+    ? log.payerAccount
+    : null;
+  const payerAccount = payerAccountValue || '—';
 
   const onDownload = () => {
     try {
@@ -81,7 +90,7 @@ export function PaymentReceiptModal({ log, currency = 'ETB', onClose }: { log: a
         hashId: log.bankRef ?? null,
         status: statusLabel,
         payerName: log.payerName ?? null,
-        payerAccount: log.payerAccount ?? null,
+        payerAccount: payerAccountValue,
         payerPhone: log.payerPhone ?? null,
         edirAccount: log.edirAccount ?? null,
         breakdown: breakdown.map(([label, v]) => ({ label, amount: v })),
@@ -93,11 +102,16 @@ export function PaymentReceiptModal({ log, currency = 'ETB', onClose }: { log: a
   };
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/50 p-0 sm:items-center sm:p-4" onClick={onClose}>
-      <div className="w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
-        <div className="flex max-h-[92dvh] flex-col overflow-hidden rounded-b-none border bg-card shadow-xl sm:max-h-[88vh] sm:rounded-xl">
+    // A real (nested) Radix dialog: it portals to the body with its own scroll
+    // container, so opening it from inside another dialog (e.g. the payment
+    // history dialog) keeps the receipt body scrollable — a plain fixed overlay
+    // would be scroll-locked by the parent dialog.
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="flex max-h-[92dvh] max-w-lg flex-col gap-0 overflow-hidden bg-card p-0 sm:max-h-[88vh]">
+        <DialogTitle className="sr-only">Payment receipt {receiptNo}</DialogTitle>
+        <DialogDescription className="sr-only">Formal receipt for this payment — preview the details or download the PDF.</DialogDescription>
           {/* Header */}
-          <div className="flex shrink-0 items-start justify-between gap-3 border-b-2 border-primary/70 px-5 py-4">
+          <div className="flex shrink-0 items-start justify-between gap-3 border-b-2 border-primary/70 px-5 py-4 pr-10">
             <div className="flex items-center gap-3">
               {log.edirLogoUrl
                 ? <img src={log.edirLogoUrl} alt="" className="h-10 w-10 rounded object-contain" />
@@ -113,7 +127,6 @@ export function PaymentReceiptModal({ log, currency = 'ETB', onClose }: { log: a
               <div className="mt-1 text-muted-foreground">Date</div>
               <div className="font-medium">{dateTime(log.createdAt)}</div>
             </div>
-            <button onClick={onClose} className="ml-1 shrink-0 rounded-md p-1 text-muted-foreground hover:bg-muted"><X className="h-5 w-5" /></button>
           </div>
 
           {/* Body */}
@@ -196,8 +209,7 @@ export function PaymentReceiptModal({ log, currency = 'ETB', onClose }: { log: a
             <Button variant="outline" className="flex-1" onClick={onClose}>Close</Button>
             <Button className="flex-1" onClick={onDownload}><Download className="mr-1.5 h-4 w-4" /> Download Receipt</Button>
           </div>
-        </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

@@ -279,7 +279,16 @@ export default function MembersClient() {
                     {isSuper && (
                       <TableCell>{r.edirName ? <Badge variant="secondary">{r.edirName}</Badge> : <Badge variant="outline" className="text-warning">Unassigned</Badge>}</TableCell>
                     )}
-                    <TableCell><span className="text-sm">{r.membershipRole || '—'}</span></TableCell>
+                    <TableCell>
+                      <div className="flex flex-wrap items-center gap-1">
+                        <span className="text-sm">{r.membershipRole || '—'}</span>
+                        {/* Operator accounts (Edir Admin, committee, …) are members too —
+                            surface their account role so they're identifiable here. */}
+                        {r.roleName && r.roleName !== r.membershipRole && r.roleName !== 'Member' && (
+                          <Badge variant="outline" className="border-primary/30 bg-primary/10 text-primary">{r.roleName}</Badge>
+                        )}
+                      </div>
+                    </TableCell>
                     <TableCell>
                       <div className="flex flex-wrap items-center gap-1">
                         {r.membershipStatus && <Badge variant="outline" className={STATUS_COLORS[r.membershipStatus] || ''}>{r.membershipStatus}</Badge>}

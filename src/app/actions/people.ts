@@ -5,6 +5,7 @@ import { Prisma } from '@prisma/client';
 import { getActor, actorHasPermission, tenantWhere } from '@/lib/tenant-scope';
 import { isSystemUserRole } from '@/lib/permissions';
 import { AccessDeniedError } from '@/lib/errors';
+import { ensureMembershipForUser } from '@/app/actions/members';
 import { dateWhere, type DateRangeParam } from '@/lib/date-range';
 
 /**
@@ -256,6 +257,28 @@ async function roleOptions(actor: Awaited<ReturnType<typeof getActor>>, edirId?:
 
 // ─── Members directory (Edir Members page) ───────────────────────────────────
 
+/**
+ * Policy: EVERY Edir-scoped user — Edir Admins, committee, operators — is also a
+ * regular member of their Edir with the same contribution obligations (monthly
+ * fees, penalties, eligibility); their role only adds responsibility. Accounts
+ * created before this policy may lack a Member record, so heal them here so the
+ * Members page always shows the full membership including the administrators.
+ */
+async function ensureEdirUserMemberships(edirId: string): Promise<void> {
+  const missing = await prisma.user.findMany({
+    where: {
+      edirId,
+      member: { is: null },
+      role: { isNot: null, is: { scope: { not: 'SUPER_ADMIN' } } },
+    },
+    select: { id: true },
+    take: 50,
+  });
+  for (const u of missing) {
+    try { await ensureMembershipForUser(u.id); } catch { /* best-effort */ }
+  }
+}
+
 export async function getMembersDirectory(params: { edirId?: string; range?: DateRangeParam } = {}): Promise<{
   rows: PersonRow[]; context: DirectoryContext; stats: MembersStats;
 }> {
@@ -265,6 +288,12 @@ export async function getMembersDirectory(params: { edirId?: string; range?: Dat
 
   const crossTenant = caps.isSuperAdmin;
   const baseWhere = resolveScope(actor, params.edirId, crossTenant);
+  // Single-Edir scope → make sure the Edir's operator accounts (Edir Admin,
+  // committee, …) are enrolled as members before listing.
+  const scopedEdirId = (baseWhere as { edirId?: unknown }).edirId;
+  if (caps.canManageMembers && typeof scopedEdirId === 'string' && scopedEdirId !== '__none__') {
+    try { await ensureEdirUserMemberships(scopedEdirId); } catch { /* best-effort */ }
+  }
   const rows = await collectMemberRows(baseWhere, dateWhere('createdAt', params.range));
   const [edirs, roles] = await Promise.all([edirOptions(actor, crossTenant), roleOptions(actor, params.edirId, crossTenant)]);
   return { rows, context: { ...caps, edirs, roles }, stats: summarizeMembers(rows) };

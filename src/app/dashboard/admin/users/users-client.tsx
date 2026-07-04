@@ -21,12 +21,13 @@ import {
 import { CredentialsDialog, type Credentials } from '@/components/credentials-dialog';
 import { CreateUserDialog, EditAssociationDialog } from './association-dialogs';
 import { OrgUserDialog } from './org-user-dialog';
+import { EditUserDialog } from './edit-user-dialog';
 import { UserProfileDialog } from './user-profile-dialog';
 import { useConfirm } from '@/components/ui/confirm-provider';
 import { DateRangeFilter, ALL_TIME, toParam, type DateRangeValue } from '@/components/ui/date-range-filter';
 import { Avatar, SortHead, STATUS_COLORS } from '@/app/dashboard/_directory/shared';
 import { getUsersDirectory, exportUsersDirectoryCsv, type PersonRow, type DirectoryContext, type UsersStats } from '@/app/actions/people';
-import { setUserRole, setUserStatus, lockUser, unlockUser, adminResetUserPassword, adminGenerateTempPassword, bulkInviteUsers, inviteUser } from '@/app/actions/admin';
+import { setUserStatus, lockUser, unlockUser, adminResetUserPassword, adminGenerateTempPassword, bulkInviteUsers, inviteUser } from '@/app/actions/admin';
 import { deleteOrgUser } from '@/app/actions/user-management';
 import { removeUserFromEdir, getAssociationAudit } from '@/app/actions/associations';
 
@@ -54,6 +55,7 @@ export default function UsersClient() {
   const [addUser, setAddUser] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [orgDialog, setOrgDialog] = useState<{ edit: PersonRow | null } | null>(null);
+  const [editUser, setEditUser] = useState<PersonRow | null>(null);
   const [showActivity, setShowActivity] = useState(false);
   const [cred, setCred] = useState<{ name: string; credentials: Credentials } | null>(null);
   const confirm = useConfirm();
@@ -161,6 +163,15 @@ export default function UsersClient() {
   // account. The server enforces the exact branch/district scope.
   const isOrgManageable = (r: PersonRow) =>
     !!ctx?.canManageOrgUsers && !r.edirId && r.roleScope !== 'SUPER_ADMIN' && (!!r.branchId || !!r.districtId);
+
+  // A row editable via the Edit dialog: an Edir account (identity + role + status)
+  // or an org-unit platform account. Role changes only ever go through this dialog.
+  const isEditable = (r: PersonRow) =>
+    (!!r.edirId && !!ctx?.canManageUsers && r.roleScope !== 'SUPER_ADMIN') || isOrgManageable(r);
+  const onEditUser = (r: PersonRow) => {
+    if (r.edirId) setEditUser(r);
+    else setOrgDialog({ edit: r });
+  };
 
   const statCards = [
     { label: 'Users', value: stats?.total ?? 0, icon: UserCog, accent: 'text-primary bg-primary/10' },
@@ -317,18 +328,12 @@ export default function UsersClient() {
                         ? <Badge variant="secondary">{r.edirName}</Badge>
                         : <Badge variant="outline" className="text-muted-foreground">{r.placement || 'Unassigned'}</Badge>}
                     </TableCell>
-                    <TableCell onClick={e => e.stopPropagation()}>
-                      {r.edirId && ctx?.canManageUsers ? (
-                        <Select value={r.roleId ?? 'none'} onValueChange={v => act(() => setUserRole(r.userId!, v === 'none' ? null : v), 'Role updated.')}>
-                          <SelectTrigger className="h-8 w-40"><SelectValue placeholder="No role" /></SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="none">No role</SelectItem>
-                            {rolesForEdir(r.edirId).map(role => <SelectItem key={role.id} value={role.id}>{role.name}</SelectItem>)}
-                          </SelectContent>
-                        </Select>
-                      ) : (
-                        <span className="text-sm text-muted-foreground">{r.roleName || '—'}</span>
-                      )}
+                    <TableCell>
+                      {/* Role is read-only here — changes go through the Edit dialog
+                          (with review + session-revocation notice), never inline. */}
+                      {r.roleName
+                        ? <Badge variant="outline" className="font-normal">{r.roleName}</Badge>
+                        : <span className="text-sm text-muted-foreground">No role</span>}
                     </TableCell>
                     <TableCell>
                       <div className="flex flex-wrap items-center gap-1">
@@ -341,11 +346,12 @@ export default function UsersClient() {
                       <RowActions
                         r={r} ctx={ctx!} canAssociate={crossTenant}
                         orgManageable={isOrgManageable(r)}
+                        editable={isEditable(r)}
                         onView={() => setDetail(r)}
                         onReassign={() => setEditAccess(r)}
                         onRemoveFromEdir={() => onRemoveFromEdir(r)}
                         onTempPassword={() => onTempPassword(r)}
-                        onEditOrgUser={() => setOrgDialog({ edit: r })}
+                        onEdit={() => onEditUser(r)}
                         onDeleteOrgUser={() => onDeleteOrgUser(r)}
                         act={act}
                       />
@@ -383,8 +389,8 @@ export default function UsersClient() {
                   <Button size="sm" variant="outline" onClick={() => { const r = detail; setDetail(null); onTempPassword(r); }}><KeyRound className="mr-1 h-4 w-4" /> Temp password</Button>
                 </>
               )}
-              {isOrgManageable(detail) && (
-                <Button size="sm" variant="outline" onClick={() => { setOrgDialog({ edit: detail }); setDetail(null); }}><Pencil className="mr-1 h-4 w-4" /> Edit</Button>
+              {isEditable(detail) && (
+                <Button size="sm" variant="outline" onClick={() => { const r = detail; setDetail(null); onEditUser(r); }}><Pencil className="mr-1 h-4 w-4" /> Edit</Button>
               )}
               {crossTenant && (
                 <Button size="sm" variant="outline" onClick={() => { setEditAccess(detail); setDetail(null); }}><ArrowRightLeft className="mr-1 h-4 w-4" /> Manage access</Button>
@@ -406,6 +412,14 @@ export default function UsersClient() {
           onDone={(c) => { setOrgDialog(null); if (c) setCred(c); load(); }}
         />
       )}
+      {editUser && (
+        <EditUserDialog
+          row={editUser}
+          roles={rolesForEdir(editUser.edirId)}
+          onClose={() => setEditUser(null)}
+          onDone={() => { setEditUser(null); load(); }}
+        />
+      )}
       {showActivity && <ActivityDialog onClose={() => setShowActivity(false)} />}
     </div>
   );
@@ -413,10 +427,10 @@ export default function UsersClient() {
 
 // ─── Row pieces ──────────────────────────────────────────────────────────────
 
-function RowActions({ r, ctx, canAssociate, orgManageable, onView, onReassign, onRemoveFromEdir, onTempPassword, onEditOrgUser, onDeleteOrgUser, act }: {
-  r: PersonRow; ctx: DirectoryContext; canAssociate: boolean; orgManageable: boolean;
+function RowActions({ r, ctx, canAssociate, orgManageable, editable, onView, onReassign, onRemoveFromEdir, onTempPassword, onEdit, onDeleteOrgUser, act }: {
+  r: PersonRow; ctx: DirectoryContext; canAssociate: boolean; orgManageable: boolean; editable: boolean;
   onView: () => void; onReassign: () => void; onRemoveFromEdir: () => void;
-  onTempPassword: () => void; onEditOrgUser: () => void; onDeleteOrgUser: () => void;
+  onTempPassword: () => void; onEdit: () => void; onDeleteOrgUser: () => void;
   act: (fn: () => Promise<any>, ok: string) => void;
 }) {
   return (
@@ -424,8 +438,8 @@ function RowActions({ r, ctx, canAssociate, orgManageable, onView, onReassign, o
       <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="h-8 w-8"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
         <DropdownMenuItem onClick={onView}><Eye className="mr-2 h-4 w-4" /> 360° profile</DropdownMenuItem>
-        {orgManageable && (
-          <DropdownMenuItem onClick={onEditOrgUser}><Pencil className="mr-2 h-4 w-4" /> Edit user</DropdownMenuItem>
+        {editable && (
+          <DropdownMenuItem onClick={onEdit}><Pencil className="mr-2 h-4 w-4" /> Edit user</DropdownMenuItem>
         )}
 
         {(ctx.canManageUsers || ctx.canLock || ctx.canResetPassword) && (

@@ -143,11 +143,19 @@ export async function POST(request: NextRequest) {
     });
 
     // ── Parties + destination account, captured from the mini-app payment ────────
-    //  • PAYER  — account number the bank debited (paidByNumber) + resolved name.
+    //  • PAYER  — the BANK ACCOUNT the payment was made from + resolved name.
     //  • PAID TO — the credited Edir account number + the Edir's name.
     // Persisted on the PaymentLog so the payment log shows who paid (name/account)
     // and which Edir account received the funds.
-    const payerAccount = (paidByNumber && String(paidByNumber).trim()) || null;
+    //
+    // `paidByNumber` is env-dependent: in some environments the bank sends the
+    // payer's PHONE there rather than an account. A receipt must never show a
+    // phone as "Payer Account No.", so when paidByNumber looks like the payer's
+    // phone, fall back to the bank token's `accountNo` claim — the account number
+    // the bank echoes back for the transaction.
+    const paidBy = (paidByNumber && String(paidByNumber).trim()) || null;
+    const paidByIsPhone = !!paidBy && (sameTail(paidBy, payerPhone) || sameTail(paidBy, claims?.phone));
+    const payerAccount = (!paidByIsPhone && paidBy) || claimAcct || null;
     let payerName: string | null = null;
     if (payerPhone) {
       const pm = await prisma.member.findFirst({ where: { phone: payerPhone }, select: { name: true } });
