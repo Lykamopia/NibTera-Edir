@@ -33,11 +33,14 @@ export const PAGE_SECTIONS = [
 export const pagePermissions: PagePermissionDef[] = [
   {
     id: 'dashboard', label: 'Dashboard', path: '/dashboard', icon: 'LayoutDashboard', section: 'main',
-    accessPermissions: ['view_dashboard'],
+    // The branch/district dashboard permissions grant the page on their own —
+    // an org role holding only view_branch_dashboard must still see Dashboard
+    // in the nav and land there after login.
+    accessPermissions: ['view_dashboard', 'view_branch_dashboard', 'view_district_dashboard'],
     actions: [
       { id: 'view_dashboard', label: 'View Dashboard', description: 'Access the dashboard', isAccess: true },
-      { id: 'view_branch_dashboard', label: 'View Branch Dashboard', description: 'See analytics scoped to your branch' },
-      { id: 'view_district_dashboard', label: 'View District Dashboard', description: 'See analytics scoped to your district (summed across its branches)' },
+      { id: 'view_branch_dashboard', label: 'View Branch Dashboard', description: 'See analytics scoped to your branch', isAccess: true },
+      { id: 'view_district_dashboard', label: 'View District Dashboard', description: 'See analytics scoped to your district (summed across its branches)', isAccess: true },
     ],
   },
   {
@@ -48,8 +51,9 @@ export const pagePermissions: PagePermissionDef[] = [
       { id: 'manage_members', label: 'Manage Members', description: 'Umbrella: all member operations below' },
       { id: 'create_member', label: 'Create Member', description: 'Add new members' },
       { id: 'edit_member', label: 'Edit Member', description: 'Edit member profiles' },
-      { id: 'suspend_member', label: 'Suspend Member', description: 'Suspend a member' },
-      { id: 'reinstate_member', label: 'Reinstate Member', description: 'Reactivate a suspended/inactive member' },
+      { id: 'suspend_member', label: 'Suspend Member', description: 'Suspend a member (temporary loss of standing)' },
+      { id: 'reinstate_member', label: 'Reinstate Member', description: 'Reactivate a suspended/inactive/terminated member' },
+      { id: 'terminate_member', label: 'Terminate Member', description: 'End a membership (final stage — record and history are kept)' },
       { id: 'approve_member', label: 'Approve Member', description: 'Approve pending member applications' },
       { id: 'manage_relatives', label: 'Manage Relatives', description: 'Add/edit/remove member relatives' },
       { id: 'manage_documents', label: 'Manage Documents', description: 'Upload/delete member & relative documents' },
@@ -354,8 +358,23 @@ export const PLATFORM_PERMISSION_IDS: Permission[] = Array.from(new Set<Permissi
   'view_edir', 'manage_edirs', 'create_edir', 'edit_edir', 'revoke_edir', 'delete_edir',
   'manage_edir_users', 'manage_edir_associations', 'view_edir_reports',
   'approve_edir_registration', 'approve_edir_update',
+  // Org-unit dashboards belong to branch/district (platform) operators — an
+  // Edir-scoped role must never carry them.
+  'view_branch_dashboard', 'view_district_dashboard',
   'super_admin',
 ])) as Permission[];
+
+/**
+ * Edir-scoped permissions that platform roles MAY also be granted. These stay in
+ * the Edir catalog (Edir Admins keep them) but additionally appear in the
+ * platform role editor — e.g. a head-office "Reconciliation" role holding only
+ * the Payment Log. Extend this list whenever another Edir page should become
+ * grantable to platform users.
+ */
+export const PLATFORM_GRANTABLE_EDIR_PERMISSION_IDS: Permission[] = [
+  'view_payment_log', 'export_payments', 'void_payment',
+];
+const PLATFORM_GRANTABLE_SET = new Set(PLATFORM_GRANTABLE_EDIR_PERMISSION_IDS as string[]);
 
 /** Permission groups assignable by the given actor scope. Edir (non-super) roles
  *  never see platform/global permissions. */
@@ -430,7 +449,7 @@ const MATRIX_OVERRIDES: Record<string, MatrixAction> = {
   manage_associations: 'Assign', manage_committee: 'Assign', manage_edir_associations: 'Assign', manage_edir_users: 'Assign',
   issue_asset: 'Assign', request_disbursement: 'Update', return_asset: 'Update',
   manage_edir_settings: 'Settings', manage_asset_categories: 'Settings',
-  suspend_member: 'Update', reinstate_member: 'Update', handle_member_requests: 'Update',
+  suspend_member: 'Update', reinstate_member: 'Update', terminate_member: 'Delete', handle_member_requests: 'Update',
   reset_password: 'Update', lock_user: 'Update', unlock_user: 'Update',
   super_admin: 'Other',
 };
@@ -458,7 +477,7 @@ export function permissionMatrixAction(id: string): MatrixAction {
 /** Destructive / high-blast-radius permissions — flagged red in the matrix. */
 export function isDangerousPermission(id: string): boolean {
   if (id === 'super_admin') return true;
-  return /^(delete_|remove_|revoke_|void_|suspend_)/.test(id) || id === 'waive_penalty';
+  return /^(delete_|remove_|revoke_|void_|suspend_|terminate_)/.test(id) || id === 'waive_penalty';
 }
 
 /** Checker (approval) permissions — the second half of a maker–checker pair. */
@@ -504,17 +523,22 @@ export type RoleScopeKind = 'EDIR' | 'PLATFORM';
 const PLATFORM_SET = new Set(PLATFORM_PERMISSION_IDS as string[]);
 
 /** Permission groups to show in the editor for a given role scope. Edir roles get
- *  every non-platform capability; Platform roles get only platform capabilities. */
+ *  every non-platform capability; Platform roles get the platform capabilities
+ *  PLUS the explicitly platform-grantable Edir pages (e.g. Payment Log). */
 export function getPermissionGroupsForScope(scope: RoleScopeKind): PermissionGroup[] {
+  const inScope = (id: string) =>
+    scope === 'PLATFORM' ? (PLATFORM_SET.has(id) || PLATFORM_GRANTABLE_SET.has(id)) : !PLATFORM_SET.has(id);
   return permissionGroups
-    .map(g => ({ ...g, permissions: g.permissions.filter(p => (scope === 'PLATFORM' ? PLATFORM_SET.has(p.id) : !PLATFORM_SET.has(p.id))) }))
+    .map(g => ({ ...g, permissions: g.permissions.filter(p => inScope(p.id)) }))
     .filter(g => g.permissions.length > 0);
 }
 
 /** Keep only permission ids valid for the given scope (server-side hardening). */
 export function filterPermissionsForScope(ids: string[], scope: RoleScopeKind): string[] {
   const valid = new Set(ALL_PERMISSION_IDS as string[]);
-  return ids.filter(p => valid.has(p) && (scope === 'PLATFORM' ? PLATFORM_SET.has(p) : !PLATFORM_SET.has(p)));
+  const inScope = (p: string) =>
+    scope === 'PLATFORM' ? (PLATFORM_SET.has(p) || PLATFORM_GRANTABLE_SET.has(p)) : !PLATFORM_SET.has(p);
+  return ids.filter(p => valid.has(p) && inScope(p));
 }
 
 // Baseline permissions a plain Edir member's login may hold. A role limited to

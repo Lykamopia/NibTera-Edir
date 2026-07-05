@@ -198,6 +198,7 @@ export async function getMemberProfile(id: string) {
     canEdit: canManage || actorHasPermission(actor, 'edit_member'),
     canSuspend: canManage || actorHasPermission(actor, 'suspend_member'),
     canReinstate: canManage || actorHasPermission(actor, 'reinstate_member'),
+    canTerminate: canManage || actorHasPermission(actor, 'terminate_member'),
     canRemove: canManage || actorHasPermission(actor, 'remove_members'),
     canReviewDocs: actorHasPermission(actor, ['review_member_documents', 'manage_members']),
     canManageDocs: actorHasPermission(actor, ['manage_documents', 'manage_members']),
@@ -308,7 +309,9 @@ export async function getMemberProfile(id: string) {
     } : null,
     compliance: {
       tenureMonths, monthsBehind, balance,
-      eligibleForBenefits: tenureMonths >= num(settings?.minMembershipMonths),
+      // Standing gates eligibility: a suspended or terminated member is never
+      // benefit-eligible, regardless of tenure.
+      eligibleForBenefits: member.status === 'ACTIVE' && tenureMonths >= num(settings?.minMembershipMonths),
       atSuspensionRisk: !!settings && monthsBehind >= settings.autoSuspendMonths,
       atTerminationRisk: !!settings && monthsBehind >= settings.autoTerminateMonths,
       totalBenefitsReceived: totalDisbursed,
@@ -702,6 +705,8 @@ export async function updateMember(id: string, input: MemberInput) {
         emergencyContactName: data.emergencyContactName || null,
         emergencyContactPhone: data.emergencyContactPhone ? normalizeEthiopianPhone(data.emergencyContactPhone) : null,
         role: data.role || 'Member',
+        // Official registration date is editable (e.g. correcting an import).
+        ...(data.joinDate ? { joinDate: new Date(data.joinDate) } : {}),
       },
     });
     await writeAudit({ edirId: existing.edirId, userId: actor.id, action: 'MEMBER_UPDATED', targetType: 'Member', targetId: id, details: `Updated ${updated.name}.` });
@@ -728,6 +733,12 @@ export async function resetMemberPassword(memberId: string) {
     if (!member) return { success: false as const, error: 'Member not found.' };
     await assertSameTenant(actor, member.edirId);
     const edirId = member.edirId;
+
+    // A terminated membership's login stays blocked — resetting credentials would
+    // silently re-open it. Reinstate the member first.
+    if (member.status === 'TERMINATED') {
+      return { success: false as const, error: 'This membership is terminated — reinstate the member before issuing login credentials.' };
+    }
 
     const username = member.user?.phone ?? member.phone ?? member.user?.email ?? member.email ?? null;
     if (!username) return { success: false as const, error: 'This member has no phone or email to use as a login username.' };
@@ -768,22 +779,56 @@ export async function resetMemberPassword(memberId: string) {
   }
 }
 
-export async function setMemberStatus(id: string, status: 'ACTIVE' | 'INACTIVE' | 'SUSPENDED') {
+export async function setMemberStatus(id: string, status: 'ACTIVE' | 'INACTIVE' | 'SUSPENDED' | 'TERMINATED') {
   try {
     const actor = await getActor();
-    // Suspending vs reinstating are separately grantable; manage_members is the umbrella.
+    // Suspend / reinstate / terminate are separately grantable; manage_members is the umbrella.
     const perm = status === 'SUSPENDED'
       ? ['suspend_member', 'manage_members'] as const
-      : status === 'ACTIVE'
-        ? ['reinstate_member', 'manage_members'] as const
-        : ['edit_member', 'manage_members'] as const;
+      : status === 'TERMINATED'
+        ? ['terminate_member', 'manage_members'] as const
+        : status === 'ACTIVE'
+          ? ['reinstate_member', 'manage_members'] as const
+          : ['edit_member', 'manage_members'] as const;
     await assertPermission(actor, [...perm]);
-    const existing = await prisma.member.findUnique({ where: { id } });
+    const existing = await prisma.member.findUnique({ where: { id }, include: { user: { select: { id: true, status: true } } } });
     if (!existing) return { success: false as const, error: 'Member not found.' };
     await assertSameTenant(actor, existing.edirId);
+    if (existing.status === status) return { success: false as const, error: `The member is already ${status.toLowerCase()}.` };
     await prisma.member.update({ where: { id }, data: { status } });
-    await writeAudit({ edirId: existing.edirId, userId: actor.id, action: 'MEMBER_STATUS_CHANGED', targetType: 'Member', targetId: id, details: `Status → ${status}` });
+
+    // Login-account consequences:
+    //  • TERMINATED — the member is no longer part of the Edir: block their login
+    //    entirely (portal AND mini app session) and revoke active sessions.
+    //  • Reinstated (ACTIVE) — restore a login that was blocked by termination.
+    //  • SUSPENDED — login stays open on purpose: a suspended member signs in and
+    //    pays their dues (incl. the reinstatement fee) to come back.
+    if (existing.user?.id) {
+      if (status === 'TERMINATED') {
+        await prisma.user.update({ where: { id: existing.user.id }, data: { status: 'TERMINATED', tokenVersion: { increment: 1 } } });
+      } else if (status === 'ACTIVE' && existing.user.status === 'TERMINATED') {
+        await prisma.user.update({ where: { id: existing.user.id }, data: { status: 'ACTIVE', tokenVersion: { increment: 1 } } });
+      }
+    }
+
+    await writeAudit({ edirId: existing.edirId, userId: actor.id, action: 'MEMBER_STATUS_CHANGED', targetType: 'Member', targetId: id, details: `${existing.name}: ${existing.status} → ${status}${status === 'TERMINATED' && existing.user ? ' (login blocked)' : ''}` });
+
+    // Tell the member what happened to their standing (mirrors the auto cron).
+    if (existing.user?.id && (status === 'SUSPENDED' || status === 'TERMINATED' || status === 'ACTIVE')) {
+      const copy = status === 'SUSPENDED'
+        ? { title: 'Membership suspended', body: 'Your membership has been suspended. Please contact your Edir administrator for details.', priority: 'high' as const }
+        : status === 'TERMINATED'
+          ? { title: 'Membership terminated', body: 'Your membership has been terminated. Please contact your Edir administrator for details.', priority: 'critical' as const }
+          : { title: 'Membership reinstated', body: 'Your membership is active again — welcome back.', priority: 'normal' as const };
+      try {
+        await prisma.notification.create({
+          data: { userId: existing.user.id, edirId: existing.edirId, type: 'member', ...copy, linkUrl: '/dashboard/account' },
+        });
+      } catch { /* non-fatal */ }
+    }
+
     revalidatePath('/dashboard/members');
+    revalidatePath(`/dashboard/members/${id}`);
     return { success: true as const };
   } catch (error) {
     return failure(error);

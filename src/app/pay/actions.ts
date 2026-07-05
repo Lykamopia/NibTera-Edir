@@ -132,12 +132,20 @@ export async function getPaymentToken(amount: number, token: string, memberId: s
   const payerPhone = v.ok ? (v.phone ?? null) : null;
   const beneficiary = await prisma.member.findUnique({
     where: { id: memberId },
-    select: { phone: true, edirId: true, memberId: true, name: true },
+    select: { phone: true, edirId: true, memberId: true, name: true, status: true },
   });
   // Always trust the member's actual Edir over a client-supplied one.
   const resolvedEdirId = beneficiary?.edirId ?? edirId;
   const beneficiaryPhone = beneficiary?.phone ?? null;
   payLog('getPaymentToken', 'STEP 3 START', { amount, memberId, edirId: resolvedEdirId, beneficiaryPhone, payerPhone, transactionId, transactionTime, token: maskToken(token) });
+
+  // A TERMINATED membership can no longer transact — the person is no longer a
+  // member of the Edir. (SUSPENDED members deliberately CAN pay: settling their
+  // dues + reinstatement fee is the path back to active standing.)
+  if (beneficiary?.status === 'TERMINATED') {
+    payLog('getPaymentToken', 'BLOCKED — membership terminated', { memberId });
+    return { status: 'error', message: 'This membership has been terminated and can no longer receive payments. Please contact the Edir administrator.', transactionId };
+  }
 
   // ── Strict duplicate prevention ──────────────────────────────────────────────
   // A payment for this member+amount that was initiated moments ago and hasn't

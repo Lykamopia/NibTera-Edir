@@ -182,7 +182,7 @@ export function UserProfileDialog({ row, onClose, actions }: { row: PersonRow; o
                       {profile.membership.status} · joined {fmtDate(profile.membership.joinDate)} · balance {profile.membership.balance.toLocaleString()}
                     </div>
                   </div>
-                  <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-primary"><ExternalLink className="h-3.5 w-3.5" /> Member 360°</span>
+                  <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-primary"><ExternalLink className="h-3.5 w-3.5" /> Open member profile</span>
                 </Link>
               </div>
             )}

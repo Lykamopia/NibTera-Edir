@@ -1,6 +1,7 @@
 
 'use client';
 import { useState, useEffect, useCallback } from 'react';
+import Link from 'next/link';
 import { signIn } from 'next-auth/react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useForm } from 'react-hook-form';
@@ -460,9 +461,17 @@ export default function LoginClientPage() {
                                             {errors.password && (
                                                 <p className="text-xs text-destructive dark:text-red-400 mt-1 ml-1">{errors.password.message}</p>
                                             )}
+                                            <div className="flex justify-end">
+                                                <Link
+                                                    href="/forgot-password"
+                                                    className="text-xs font-medium text-primary hover:underline"
+                                                >
+                                                    Forgot password?
+                                                </Link>
+                                            </div>
                                         </div>
                                         <Button
-                                            type="submit" 
+                                            type="submit"
                                             className="w-full h-12 bg-primary hover:bg-primary/90 text-primary-foreground font-bold text-base shadow-xl shadow-primary/20 transition-all active:scale-[0.98] group/btn mt-1" 
                                             disabled={loading}
                                         >

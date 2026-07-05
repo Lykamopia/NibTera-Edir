@@ -13,6 +13,7 @@ import {
 import { PageHeader, StatCard, LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
 import { DateRangeFilter, ALL_TIME, toParam, dateRangeLabel, type DateRangeValue } from '@/components/ui/date-range-filter';
 import { getDashboardData, getEdirReport, exportEdirReportCsv, type DashboardData } from '../actions/dashboard';
+import { CollectionsBreakdown } from './collections-breakdown';
 
 const money = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 2 });
 
@@ -86,6 +87,9 @@ export default function DashboardClient() {
         <StatCard title="Total Disbursed" value={money(kpis.totalDisbursed)} icon={HandCoins} accent="warning" />
         <StatCard title="Active Emergencies" value={kpis.activeEmergencies} icon={Siren} href="/dashboard/emergencies" accent="destructive" />
       </div>
+
+      {/* Collections by source (contributions / penalties / fees / …) and channel */}
+      <CollectionsBreakdown data={data.collections} currency={cur} />
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between space-y-0">

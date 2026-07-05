@@ -61,20 +61,17 @@ export default function MemberProfileClient({ initial, memberId }: { initial: Pr
   const initials = (m.name || '?').split(' ').map(s => s[0]).slice(0, 2).join('').toUpperCase();
 
   // ── Header actions — each is permission-gated (caps) and confirmed ─────────
-  const onStatus = async (status: 'SUSPENDED' | 'ACTIVE') => {
-    const suspending = status === 'SUSPENDED';
-    if (!(await confirm({
-      title: suspending ? `Suspend ${m.name}?` : `Reinstate ${m.name}?`,
-      description: suspending
-        ? 'The member is suspended and loses benefit eligibility until reinstated.'
-        : 'The member returns to active standing.',
-      destructive: suspending,
-      confirmText: suspending ? 'Suspend' : 'Reinstate',
-    }))) return;
+  const onStatus = async (status: 'SUSPENDED' | 'ACTIVE' | 'TERMINATED') => {
+    const copy = status === 'SUSPENDED'
+      ? { title: `Suspend ${m.name}?`, description: 'The member is suspended and loses benefit eligibility until reinstated. They are notified.', confirmText: 'Suspend', ok: 'Member suspended.', destructive: true }
+      : status === 'TERMINATED'
+        ? { title: `Terminate ${m.name}'s membership?`, description: 'This formally ENDS the membership — the final stage after suspension. The record and full history are kept, and the member can only return via reinstatement (a reinstatement fee may apply). They are notified.', confirmText: 'Terminate membership', ok: 'Membership terminated.', destructive: true }
+        : { title: `Reinstate ${m.name}?`, description: 'The member returns to active standing.', confirmText: 'Reinstate', ok: 'Member reinstated.', destructive: false };
+    if (!(await confirm({ title: copy.title, description: copy.description, destructive: copy.destructive, confirmText: copy.confirmText }))) return;
     setBusy('status');
     const res = await setMemberStatus(memberId, status);
     setBusy(null);
-    if (res?.success) { toast.success(suspending ? 'Member suspended.' : 'Member reinstated.'); reload(); }
+    if (res?.success) { toast.success(copy.ok); reload(); }
     else toast.error(res?.error || 'Failed to update status.');
   };
 
@@ -143,6 +140,11 @@ export default function MemberProfileClient({ initial, memberId }: { initial: Pr
                       {busy === 'status' ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Power className="mr-1.5 h-4 w-4" />} Reinstate
                     </Button>
                   )}
+              {m.status !== 'TERMINATED' && caps.canTerminate && (
+                <Button size="sm" variant="outline" className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive" disabled={busy === 'status'} onClick={() => onStatus('TERMINATED')}>
+                  {busy === 'status' ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <UserX className="mr-1.5 h-4 w-4" />} Terminate
+                </Button>
+              )}
               {caps.canResetPassword && (
                 <Button size="sm" variant="outline" disabled={busy === 'reset'} onClick={onResetPassword}>
                   {busy === 'reset' ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <KeyRound className="mr-1.5 h-4 w-4" />} Reset password
@@ -408,22 +410,36 @@ function EditMemberDialog({ member, onClose, onDone }: { member: any; onClose: (
     city: member.city ?? '', subcity: member.subcity ?? '', woreda: member.woreda ?? '',
     emergencyContactName: member.emergencyContactName ?? '', emergencyContactPhone: member.emergencyContactPhone ?? '',
     role: member.role ?? 'Member',
+    photoUrl: member.photoUrl ?? '',
+    joinDate: member.joinDate ? new Date(member.joinDate).toISOString().slice(0, 10) : '',
   });
   const [saving, setSaving] = useState(false);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const photoRef = useRef<HTMLInputElement>(null);
   const set = (k: string, v: any) => setForm(f => ({ ...f, [k]: v }));
 
   useEffect(() => { getMemberRoles().then(r => setRoles(Array.from(new Set([member.role, ...r].filter(Boolean))))).catch(() => {}); }, [member.role]);
+
+  const onPhoto = async (file: File) => {
+    setUploadingPhoto(true);
+    const up = await uploadFile(file, 'profile');
+    if (up) { set('photoUrl', up.path); toast.success('Photo updated.'); }
+    setUploadingPhoto(false);
+    if (photoRef.current) photoRef.current.value = '';
+  };
 
   const submit = async () => {
     if (form.name.trim().length < 2) { toast.error('Name is required.'); return; }
     setSaving(true);
     const res = await updateMember(member.id, {
       name: form.name.trim(), occupation: form.occupation || null,
+      photoUrl: form.photoUrl || null,
       dateOfBirth: form.dateOfBirth || null, gender: form.gender || null, nationalId: form.nationalId || null,
       phone: form.phone || null, email: form.email || null, address: form.address || null,
       city: form.city || null, subcity: form.subcity || null, woreda: form.woreda || null,
       emergencyContactName: form.emergencyContactName || null, emergencyContactPhone: form.emergencyContactPhone || null,
       role: form.role, registrationInstallmentCount: 1,
+      joinDate: form.joinDate || null,
     } as any);
     setSaving(false);
     if (res?.success) { toast.success('Member updated.'); onDone(); }
@@ -435,9 +451,25 @@ function EditMemberDialog({ member, onClose, onDone }: { member: any; onClose: (
       <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
         <DialogHeader><DialogTitle>Edit Member</DialogTitle></DialogHeader>
         <div className="space-y-3" onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault(); }}>
+          {/* Profile photo */}
+          <div className="flex items-center gap-4">
+            {form.photoUrl
+              ? <img src={form.photoUrl} alt="" className="h-16 w-16 rounded-2xl border object-cover" />
+              : <span className="flex h-16 w-16 items-center justify-center rounded-2xl bg-muted text-lg font-bold text-muted-foreground">{(form.name || '?').slice(0, 2).toUpperCase()}</span>}
+            <div>
+              <input ref={photoRef} type="file" accept="image/*" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) onPhoto(f); }} />
+              <Button type="button" variant="outline" size="sm" disabled={uploadingPhoto} onClick={() => photoRef.current?.click()}>
+                {uploadingPhoto ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Upload className="mr-1 h-4 w-4" />} Change photo
+              </Button>
+              {form.photoUrl && (
+                <Button type="button" variant="ghost" size="sm" className="ml-1 text-muted-foreground" onClick={() => set('photoUrl', '')}>Remove</Button>
+              )}
+            </div>
+          </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <EditField label="Full Name" value={form.name} onChange={v => set('name', v)} />
             <EditField label="Occupation" value={form.occupation} onChange={v => set('occupation', v)} />
+            <EditField label="Registration Date" type="date" value={form.joinDate} onChange={v => set('joinDate', v)} />
             <EditField label="Date of Birth" type="date" value={form.dateOfBirth} onChange={v => set('dateOfBirth', v)} />
             <div className="space-y-1.5">
               <Label className="text-xs">Gender</Label>

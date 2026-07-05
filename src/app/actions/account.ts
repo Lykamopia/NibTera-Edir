@@ -247,7 +247,9 @@ export async function getMyPortal() {
     emergencyClaims: m.emergencyClaims.map(c => ({ id: c.id, typeName: c.type?.name ?? null, status: c.status, affectedPerson: c.affectedPerson, approvedAmount: num(c.approvedAmount), disbursedAmount: num(c.disbursedAmount), createdAt: c.createdAt })),
     eligibility: {
       tenureMonths, monthsBehind,
-      eligibleForBenefits: tenureMonths >= (settings?.minMembershipMonths ?? 0),
+      // Standing gates eligibility: suspended/terminated members are never
+      // benefit-eligible, regardless of tenure.
+      eligibleForBenefits: m.status === 'ACTIVE' && tenureMonths >= (settings?.minMembershipMonths ?? 0),
       minMembershipMonths: settings?.minMembershipMonths ?? 0,
       atSuspensionRisk: !!settings && monthsBehind >= settings.autoSuspendMonths,
       atTerminationRisk: !!settings && monthsBehind >= settings.autoTerminateMonths,

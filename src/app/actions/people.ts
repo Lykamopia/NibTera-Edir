@@ -53,13 +53,22 @@ export interface DirectoryContext {
   orgScope: 'HEAD_OFFICE' | 'DISTRICT' | 'BRANCH' | 'EDIR';
   canMembers: boolean;
   canManageMembers: boolean;
+  /** Fine-grained membership standing actions (manage_members is the umbrella). */
+  canSuspend: boolean;
+  canReinstate: boolean;
+  canTerminate: boolean;
   canUsers: boolean;
   canManageUsers: boolean;
-  /** District/Branch operators managing the platform users of their own org unit. */
+  /** Create/edit/delete platform (non-Edir) user accounts — head-office level
+   *  only. Branch/district users manage their unit's EDIR users, never other
+   *  platform users. */
   canManageOrgUsers: boolean;
   canAssociate: boolean; // cross-tenant user association (assign/transfer/remove, assign Edir Admins)
   canLock: boolean;
   canResetPassword: boolean;
+  /** Issue one-time temp passwords — reset_password holders AND Edir provisioners
+   *  (branch/district creators recovering the Edir Admins they provisioned). */
+  canTempPassword: boolean;
   edirs: { id: string; name: string }[];
   roles: { id: string; name: string; scope: string; edirId: string | null }[];
   /** Branches selectable when a district user creates/edits an org user. */
@@ -90,12 +99,16 @@ function buildCaps(actor: Awaited<ReturnType<typeof getActor>>): DirectoryContex
     orgScope: actor.orgScope,
     canMembers: isSuperAdmin || actorHasPermission(actor, ['view_members', 'manage_members']),
     canManageMembers: isSuperAdmin || actorHasPermission(actor, ['manage_members']),
+    canSuspend: isSuperAdmin || actorHasPermission(actor, ['suspend_member', 'manage_members']),
+    canReinstate: isSuperAdmin || actorHasPermission(actor, ['reinstate_member', 'manage_members']),
+    canTerminate: isSuperAdmin || actorHasPermission(actor, ['terminate_member', 'manage_members']),
     canUsers: isSuperAdmin || actorHasPermission(actor, ['view_users', 'manage_users']),
     canManageUsers,
-    canManageOrgUsers: canManageUsers && (actor.orgScope === 'BRANCH' || actor.orgScope === 'DISTRICT'),
+    canManageOrgUsers: isSuperAdmin || (canManageUsers && actor.orgScope === 'HEAD_OFFICE'),
     canAssociate: isSuperAdmin || actorHasPermission(actor, ['manage_associations', 'manage_edir_associations', 'manage_edir_users']),
     canLock: isSuperAdmin || actorHasPermission(actor, ['lock_user', 'unlock_user']),
     canResetPassword: isSuperAdmin || actorHasPermission(actor, ['reset_password']),
+    canTempPassword: isSuperAdmin || actorHasPermission(actor, ['reset_password', 'manage_edirs', 'create_edir', 'register_edir', 'manage_edir_users']),
     edirs: [],
     roles: [],
     branches: [],
@@ -349,11 +362,10 @@ export async function getUsersDirectory(params: { edirId?: string; range?: DateR
   const [edirs, roles, branches] = await Promise.all([
     edirOptions(actor, crossTenant),
     roleOptions(actor, params.edirId, crossTenant),
-    caps.canManageOrgUsers && actor.orgScope === 'DISTRICT' && actor.districtId
-      ? prisma.branch.findMany({ where: { districtId: actor.districtId }, orderBy: { name: 'asc' }, select: { id: true, name: true, code: true } })
-      : caps.canManageOrgUsers && actor.orgScope === 'BRANCH' && actor.branchId
-        ? prisma.branch.findMany({ where: { id: actor.branchId }, select: { id: true, name: true, code: true } })
-        : Promise.resolve([]),
+    // Placement options for head-office platform-user management.
+    caps.canManageOrgUsers
+      ? prisma.branch.findMany({ orderBy: { name: 'asc' }, select: { id: true, name: true, code: true } })
+      : Promise.resolve([]),
   ]);
   return { rows, context: { ...caps, edirs, roles, branches }, stats: summarizeUsers(rows) };
 }

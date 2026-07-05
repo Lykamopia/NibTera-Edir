@@ -124,6 +124,19 @@ export default function MembersClient() {
     else toast.error(res?.error || 'Failed to reset password.');
   };
 
+  // Membership standing changes — every one is confirmed, with terminate spelled
+  // out as the final stage (login blocked; reinstatement is the only way back).
+  const onStatusChange = async (r: PersonRow, status: 'SUSPENDED' | 'ACTIVE' | 'TERMINATED') => {
+    if (!r.memberId) return;
+    const copy = status === 'SUSPENDED'
+      ? { title: `Suspend ${r.name}?`, description: 'The member loses benefit eligibility until reinstated (they can still sign in and pay their dues). They are notified.', confirmText: 'Suspend', ok: 'Member suspended.', destructive: true }
+      : status === 'TERMINATED'
+        ? { title: `Terminate ${r.name}'s membership?`, description: 'This formally ENDS the membership and BLOCKS their login (portal and mini app). The record and history are kept; only reinstatement brings them back. They are notified.', confirmText: 'Terminate membership', ok: 'Membership terminated.', destructive: true }
+        : { title: `Reinstate ${r.name}?`, description: 'The member returns to active standing and their login is restored.', confirmText: 'Reinstate', ok: 'Member reinstated.', destructive: false };
+    if (!(await confirm({ title: copy.title, description: copy.description, destructive: copy.destructive, confirmText: copy.confirmText }))) return;
+    await act(() => setMemberStatus(r.memberId!, status), copy.ok);
+  };
+
   const statCards = [
     { label: 'Members', value: stats?.total ?? 0, icon: Users, accent: 'text-primary bg-primary/10' },
     { label: 'Active', value: stats?.active ?? 0, icon: Users, accent: 'text-success bg-success/10' },
@@ -299,7 +312,7 @@ export default function MembersClient() {
                     <TableCell className="text-sm text-muted-foreground">{r.joinDate ? new Date(r.joinDate).toLocaleDateString() : '—'}</TableCell>
                     <TableCell className="text-right tabular-nums">{r.balance.toLocaleString()}</TableCell>
                     <TableCell className="text-right" onClick={e => e.stopPropagation()}>
-                      <RowActions r={r} ctx={ctx!} onView={() => openProfile(r)} onRemoveMember={() => onRemoveMember(r)} onResetPassword={() => onResetPassword(r)} act={act} />
+                      <RowActions r={r} ctx={ctx!} onView={() => openProfile(r)} onRemoveMember={() => onRemoveMember(r)} onResetPassword={() => onResetPassword(r)} onStatusChange={(s) => onStatusChange(r, s)} />
                     </TableCell>
                   </TableRow>
                 ))}
@@ -318,29 +331,41 @@ export default function MembersClient() {
 
 // ─── Row pieces ──────────────────────────────────────────────────────────────
 
-function RowActions({ r, ctx, onView, onRemoveMember, onResetPassword, act }: {
+function RowActions({ r, ctx, onView, onRemoveMember, onResetPassword, onStatusChange }: {
   r: PersonRow; ctx: DirectoryContext; onView: () => void;
-  onRemoveMember: () => void; onResetPassword: () => void; act: (fn: () => Promise<any>, ok: string) => void;
+  onRemoveMember: () => void; onResetPassword: () => void;
+  onStatusChange: (status: 'SUSPENDED' | 'ACTIVE' | 'TERMINATED') => void;
 }) {
+  const canStanding = ctx.canSuspend || ctx.canReinstate || ctx.canTerminate;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="h-8 w-8"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-52">
+      <DropdownMenuContent align="end" className="w-56">
         {/* Single entry point: View details opens the full 360° profile page. */}
         <DropdownMenuItem onClick={onView} disabled={!r.memberId}><Eye className="mr-2 h-4 w-4" /> View details</DropdownMenuItem>
 
-        {ctx.canManageMembers && (
+        {(canStanding || ctx.canManageMembers || ctx.canResetPassword) && (
           <>
             <DropdownMenuSeparator />
             <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">Membership</DropdownMenuLabel>
-            {r.membershipStatus === 'ACTIVE'
-              ? <DropdownMenuItem onClick={() => act(() => setMemberStatus(r.memberId!, 'SUSPENDED'), 'Member suspended.')}><Power className="mr-2 h-4 w-4" /> Suspend</DropdownMenuItem>
-              : <DropdownMenuItem onClick={() => act(() => setMemberStatus(r.memberId!, 'ACTIVE'), 'Member reinstated.')}><Power className="mr-2 h-4 w-4" /> Reinstate</DropdownMenuItem>}
+            {r.membershipStatus === 'ACTIVE' && ctx.canSuspend && (
+              <DropdownMenuItem onClick={() => onStatusChange('SUSPENDED')}><Power className="mr-2 h-4 w-4" /> Suspend</DropdownMenuItem>
+            )}
+            {r.membershipStatus !== 'ACTIVE' && ctx.canReinstate && (
+              <DropdownMenuItem onClick={() => onStatusChange('ACTIVE')}><Power className="mr-2 h-4 w-4" /> Reinstate</DropdownMenuItem>
+            )}
+            {r.membershipStatus !== 'TERMINATED' && ctx.canTerminate && (
+              <DropdownMenuItem className="text-destructive" onClick={() => onStatusChange('TERMINATED')}><UserX className="mr-2 h-4 w-4" /> Terminate membership</DropdownMenuItem>
+            )}
             {(ctx.canManageMembers || ctx.canResetPassword) && (
               <DropdownMenuItem onClick={onResetPassword}><KeyRound className="mr-2 h-4 w-4" /> Reset login password</DropdownMenuItem>
             )}
-            <DropdownMenuSeparator />
-            <DropdownMenuItem className="text-destructive" onClick={onRemoveMember}><UserX className="mr-2 h-4 w-4" /> Request member removal</DropdownMenuItem>
+            {ctx.canManageMembers && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem className="text-destructive" onClick={onRemoveMember}><UserX className="mr-2 h-4 w-4" /> Request member removal</DropdownMenuItem>
+              </>
+            )}
           </>
         )}
       </DropdownMenuContent>

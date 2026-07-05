@@ -19,6 +19,7 @@ import { LoadingState } from '@/components/ui/states';
 import { DateRangeFilter, ALL_TIME, toParam, type DateRangeValue } from '@/components/ui/date-range-filter';
 import { getDistrictDashboard, exportOrgDashboardCsv } from '@/app/actions/dashboard';
 import { OrgEdirRegistry } from './org-edir-registry';
+import { CollectionsBreakdown } from './collections-breakdown';
 
 const money = (n: number) => `ETB ${Number(n || 0).toLocaleString()}`;
 const pct = (num: number, den: number) => (den > 0 ? (num / den) * 100 : 0);
@@ -103,6 +104,9 @@ export default function DistrictDashboard({ actor }: { actor: Actor }) {
             <StatCard icon={ReceiptText} label="Transactions" value={stats.txCount} subtext="settled in period" variant="default" />
             <StatCard icon={DollarSign} label="Collected" value={money(stats.collected)} subtext={`${money(stats.outstanding)} outstanding`} variant="warning" />
           </div>
+
+          {/* Collections by source (contributions / penalties / fees) and channel */}
+          <CollectionsBreakdown data={stats.collections} />
 
           {/* Edir registry — placement, transactions, created/approved by */}
           <OrgEdirRegistry edirs={stats.edirs ?? []} showBranch />

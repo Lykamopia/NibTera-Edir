@@ -4,7 +4,7 @@ import { z } from 'zod';
 import crypto from 'crypto';
 import prisma from '@/lib/prisma';
 import { Prisma } from '@prisma/client';
-import { requireActor, getActor, assertPermission, assertSameTenant, resolveEdirId, tenantWhere } from '@/lib/tenant-scope';
+import { requireActor, getActor, assertPermission, assertSameTenant, resolveEdirId, tenantWhere, tenantEdirIds } from '@/lib/tenant-scope';
 import { writeAudit } from '@/lib/audit';
 import { submitForApproval } from '@/lib/approval-engine';
 import '@/lib/approval-modules';
@@ -413,26 +413,110 @@ export async function recordManualPayment(memberId: string, breakdownInput: z.in
 
 // ─── Payment log (read) ──────────────────────────────────────────────────────
 
-function paymentLogWhere(actor: Awaited<ReturnType<typeof getActor>>, params: { status?: string; query?: string; from?: string; to?: string; range?: DateRangeParam }): Prisma.PaymentLogWhereInput {
+export interface PaymentLogFilters {
+  status?: string;
+  query?: string;
+  method?: string;
+  verification?: string;
+  /** Narrow to one Edir (validated against the actor's tenant scope via AND). */
+  edirId?: string;
+  from?: string;
+  to?: string;
+  range?: DateRangeParam;
+}
+
+export interface PaymentLogSort { key?: 'date' | 'amount' | 'member' | 'status' | 'method'; dir?: 'asc' | 'desc' }
+
+function paymentLogWhere(actor: Awaited<ReturnType<typeof getActor>>, params: PaymentLogFilters): Prisma.PaymentLogWhereInput {
   // Prefer the standardized range; fall back to legacy from/to for older callers.
   const legacy: Prisma.DateTimeFilter = {};
   if (params.from) legacy.gte = new Date(params.from);
   if (params.to) legacy.lte = new Date(params.to);
   const rangeWhere = params.range ? dateWhere('createdAt', params.range) : (params.from || params.to ? { createdAt: legacy } : {});
+  const q = params.query?.trim();
+
+  // AND-composed so an explicit Edir filter INTERSECTS the tenant scope (a
+  // branch/district actor can only ever narrow within their own unit).
+  const clauses: Prisma.PaymentLogWhereInput[] = [
+    tenantWhere(actor),
+    rangeWhere,
+    ...(params.edirId && params.edirId !== 'all' ? [{ edirId: params.edirId }] : []),
+    ...(params.status && params.status !== 'all' ? [{ status: params.status as any }] : []),
+    ...(params.method && params.method !== 'all' ? [{ method: params.method }] : []),
+    ...(params.verification && params.verification !== 'all' ? [{ verificationType: params.verification }] : []),
+    ...(q
+      ? [{
+          // Reconciliation search: our reference, the bank reference, member
+          // name/code, and the settlement meta (payer phone/account, bank ref).
+          OR: [
+            { transactionId: { contains: q } },
+            { receiptUrl: { contains: q } },
+            { member: { name: { contains: q, mode: 'insensitive' as const } } },
+            { member: { memberId: { contains: q, mode: 'insensitive' as const } } },
+            { description: { contains: q } },
+          ],
+        }]
+      : []),
+  ];
+  return { AND: clauses };
+}
+
+const PAYMENT_LOG_SORTS: Record<string, (dir: 'asc' | 'desc') => Prisma.PaymentLogOrderByWithRelationInput> = {
+  date: dir => ({ createdAt: dir }),
+  amount: dir => ({ amount: dir }),
+  status: dir => ({ status: dir }),
+  method: dir => ({ method: dir }),
+  member: dir => ({ member: { name: dir } }),
+};
+
+/** Reconciliation KPIs + filter options for the Payment Log page. Respects the
+ *  same filters as the list so the stat band always mirrors what is shown. */
+export async function getPaymentLogSummary(params: PaymentLogFilters = {}) {
+  const actor = await getActor();
+  await assertPermission(actor, ['view_payment_log', 'view_payments']);
+  const where = paymentLogWhere(actor, params);
+  const scopeIds = tenantEdirIds(actor);
+
+  const [byStatus, byMethod, byVerification, edirs] = await Promise.all([
+    prisma.paymentLog.groupBy({ by: ['status'], where, _count: { _all: true }, _sum: { amount: true } }),
+    prisma.paymentLog.groupBy({ by: ['method'], where, _count: { _all: true }, _sum: { amount: true } }),
+    prisma.paymentLog.groupBy({ by: ['verificationType'], where, _count: { _all: true } }),
+    prisma.edir.findMany({
+      where: scopeIds === null ? {} : { id: { in: scopeIds } },
+      orderBy: { name: 'asc' }, select: { id: true, name: true },
+    }),
+  ]);
+
+  const num = (v: any) => (v == null ? 0 : Number(v));
+  const s = Object.fromEntries(byStatus.map(r => [r.status, { count: r._count._all, amount: num(r._sum.amount) }]));
+  const verif = Object.fromEntries(byVerification.map(r => [r.verificationType ?? 'UNKNOWN', r._count._all]));
+
   return {
-    ...tenantWhere(actor),
-    ...rangeWhere,
-    ...(params.status && params.status !== 'all' ? { status: params.status as any } : {}),
-    ...(params.query ? { OR: [{ transactionId: { contains: params.query } }, { member: { name: { contains: params.query, mode: 'insensitive' } } }] } : {}),
+    total: byStatus.reduce((acc, r) => acc + r._count._all, 0),
+    totalAmount: byStatus.reduce((acc, r) => acc + num(r._sum.amount), 0),
+    settledCount: (s.SUCCESS?.count ?? 0) + (s.PARTIAL?.count ?? 0),
+    settledAmount: (s.SUCCESS?.amount ?? 0) + (s.PARTIAL?.amount ?? 0),
+    partialCount: s.PARTIAL?.count ?? 0,
+    partialAmount: s.PARTIAL?.amount ?? 0,
+    pendingCount: s.PENDING?.count ?? 0,
+    pendingAmount: s.PENDING?.amount ?? 0,
+    failedCount: s.FAILED?.count ?? 0,
+    failedAmount: s.FAILED?.amount ?? 0,
+    voidCount: s.VOID?.count ?? 0,
+    automaticCount: verif.AUTOMATIC ?? 0,
+    manualCount: verif.MANUAL ?? 0,
+    byMethod: byMethod.map(r => ({ method: r.method, count: r._count._all, amount: num(r._sum.amount) })).sort((a, b) => b.amount - a.amount),
+    edirs,
   };
 }
 
-export async function getPaymentLogs(params: { status?: string; query?: string; page?: number; from?: string; to?: string; range?: DateRangeParam } = {}) {
+export async function getPaymentLogs(params: PaymentLogFilters & { page?: number; sort?: PaymentLogSort } = {}) {
   const actor = await getActor();
   await assertPermission(actor, ['view_payment_log', 'view_payments']);
   const page = Math.max(1, params.page ?? 1);
   const pageSize = 25;
   const where = paymentLogWhere(actor, params);
+  const orderBy = (PAYMENT_LOG_SORTS[params.sort?.key ?? 'date'] ?? PAYMENT_LOG_SORTS.date)(params.sort?.dir === 'asc' ? 'asc' : 'desc');
   const [logs, total] = await Promise.all([
     prisma.paymentLog.findMany({
       where,
@@ -440,7 +524,7 @@ export async function getPaymentLogs(params: { status?: string; query?: string; 
         member: { select: { name: true, memberId: true, phone: true, status: true } },
         edir: { select: { name: true, accountNumber: true, logoUrl: true } },
       },
-      orderBy: { createdAt: 'desc' }, skip: (page - 1) * pageSize, take: pageSize,
+      orderBy, skip: (page - 1) * pageSize, take: pageSize,
     }),
     prisma.paymentLog.count({ where }),
   ]);
@@ -503,21 +587,24 @@ async function resolvePayerNames(actor: Awaited<ReturnType<typeof getActor>>, me
   return new Map(members.filter(m => m.phone).map(m => [m.phone as string, m.name]));
 }
 
-export async function exportPaymentLogCsv(params: { status?: string; query?: string; from?: string; to?: string; range?: DateRangeParam } = {}) {
+export async function exportPaymentLogCsv(params: PaymentLogFilters = {}) {
   const actor = await getActor();
   await assertPermission(actor, ['export_payments', 'view_payment_log']);
   const logs = await prisma.paymentLog.findMany({
     where: paymentLogWhere(actor, params),
-    include: { member: { select: { name: true, memberId: true, phone: true, status: true } } },
+    include: {
+      member: { select: { name: true, memberId: true, phone: true, status: true } },
+      edir: { select: { name: true, accountNumber: true } },
+    },
     orderBy: { createdAt: 'desc' }, take: 5000,
   });
   const metas = logs.map(l => safeParse(l.description));
   const payerNameByPhone = await resolvePayerNames(actor, metas);
 
   const header = [
-    'Member ID', 'Member Name', 'Membership Status', 'Contribution Period', 'Contribution Amount', 'Penalty Amount',
-    'Total Amount Paid', 'Payment Date & Time', 'Payer Account Number', 'Payer Account Name',
-    'Transaction Reference', 'Bank Reference', 'Payment Method', 'Due Date', 'Payment Status',
+    'Edir', 'Member ID', 'Member Name', 'Membership Status', 'Contribution Period', 'Contribution Amount', 'Penalty Amount',
+    'Total Amount Paid', 'Payment Date & Time', 'Payer Account Number', 'Payer Account Name', 'Payer Phone',
+    'Transaction Reference', 'Bank Reference', 'Payment Method', 'Channel', 'Edir Account', 'Due Date', 'Payment Status',
   ];
   const rows = logs.map((l, i) => {
     const meta = metas[i];
@@ -525,6 +612,7 @@ export async function exportPaymentLogCsv(params: { status?: string; query?: str
     const period = cov ? `${cov.from ?? ''}${cov.to ? ` - ${cov.to}` : ''}${cov.months ? ` (${cov.months} mo)` : ''}` : '';
     const payerPhone = (meta.payerPhone as string) || '';
     return [
+      l.edir?.name ?? '',
       l.member?.memberId ?? '',
       l.member?.name ?? '',
       l.member?.status ?? '',
@@ -533,11 +621,14 @@ export async function exportPaymentLogCsv(params: { status?: string; query?: str
       meta.latePenalty != null ? String(Number(meta.latePenalty)) : '',
       String(Number(l.amount)),
       l.createdAt.toISOString(),
-      (meta.payerAccount as string) || payerPhone,
+      (meta.payerAccount as string) || '',
       (meta.payerName as string) || (payerPhone ? (payerNameByPhone.get(payerPhone) ?? '') : ''),
+      payerPhone,
       l.transactionId,
-      l.receiptUrl ?? '',
+      l.receiptUrl ?? (meta.bankRef as string) ?? '',
       l.method,
+      l.verificationType ?? '',
+      (meta.edirAccount as string) || l.edir?.accountNumber || '',
       cov?.to ?? '',
       paymentLogStatusLabel(l.status),
     ];

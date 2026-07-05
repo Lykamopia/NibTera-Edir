@@ -95,6 +95,11 @@ const en: Record<string, string> = {
   payWindowNoPay: 'No payment is needed right now — please come back after that date.',
   payWindowOpens: 'Next payment opens on {date}',
   payWindowBadge: 'Settled',
+  // membership standing
+  terminatedTitle: 'Membership terminated',
+  terminatedMsg: 'This membership has been terminated — the person is no longer a member of {edir}. Payments are not possible. Please contact the Edir administrator for assistance.',
+  suspendedTitle: 'Membership suspended',
+  suspendedMsg: 'This membership is suspended. Settle the outstanding dues below — including the reinstatement fee — to return to active standing.',
   // receipt
   receiptTitle: 'Payment Receipt',
   viewReceipt: 'View Receipt',
@@ -209,6 +214,10 @@ const am: Record<string, string> = {
   payWindowNoPay: 'አሁን ምንም ክፍያ አያስፈልግም — እባክዎ ከዚያ ቀን በኋላ ይመለሱ።',
   payWindowOpens: 'ቀጣዩ ክፍያ የሚከፈተው {date} ነው',
   payWindowBadge: 'ተከፍሏል',
+  terminatedTitle: 'አባልነት ተቋርጧል',
+  terminatedMsg: 'ይህ አባልነት ተቋርጧል — ግለሰቡ ከ{edir} አባል አይደለም። ክፍያ ማድረግ አይቻልም። እባክዎ የእድር አስተዳዳሪውን ያነጋግሩ።',
+  suspendedTitle: 'አባልነት ታግዷል',
+  suspendedMsg: 'ይህ አባልነት ታግዷል። ወደ ንቁ አባልነት ለመመለስ ከታች ያለውን ቀሪ ዕዳ — የመመለሻ ክፍያን ጨምሮ — ይክፈሉ።',
   payAheadFor: 'አስቀድመው መክፈል የሚችሉት',
   receiptTitle: 'የክፍያ ደረሰኝ',
   viewReceipt: 'ደረሰኝ ይመልከቱ',

@@ -28,6 +28,7 @@ export type Permission =
   | 'edit_member'
   | 'suspend_member'
   | 'reinstate_member'
+  | 'terminate_member'
   | 'approve_member'
   | 'manage_relatives'
   | 'manage_documents'

@@ -158,6 +158,15 @@ async function autoTerminateMembers(edir: any, today: Date) {
       data: { status: "TERMINATED" }
     })
 
+    // Termination blocks the login entirely (portal + mini-app session) and
+    // revokes active sessions — mirrors the manual terminate action.
+    if (member.user) {
+      await prisma.user.update({
+        where: { id: member.user.id },
+        data: { status: "TERMINATED", tokenVersion: { increment: 1 } }
+      })
+    }
+
     if (member.user) {
       await createNotification({
         userId: member.user.id,

@@ -96,6 +96,10 @@ export const authOptions: NextAuthOptions = {
             throw new Error(`Account locked. Please try again in ${remainingMinutes} minutes.`);
           }
 
+          if (user.status === 'TERMINATED') {
+            // Termination blocks the login entirely (portal and mini-app session).
+            throw new Error("Your membership has been terminated and this account can no longer sign in. Please contact your Edir administrator.");
+          }
           if (user.status !== 'ACTIVE') {
             throw new Error("Your account is not active. Please contact an administrator or complete your invitation.");
           }

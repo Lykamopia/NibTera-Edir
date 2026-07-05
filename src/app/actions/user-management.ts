@@ -251,31 +251,19 @@ export async function listBranchUsers(branchId: string) {
   }
 }
 
-// ─── Org-unit platform user management (District / Branch operators) ──────────
-// District and Branch users manage the operator accounts of their OWN org unit:
-// a district user manages district-level users and the users of branches in the
-// district; a branch user manages the users of their own branch. Every action
-// requires the `manage_users` permission and is audited.
+// ─── Org-unit platform user management (Head Office) ──────────────────────────
+// Platform (non-Edir) user accounts — branch/district/head-office operators —
+// are created, edited and deleted ONLY at head-office level. Branch and district
+// users manage the EDIR users of their unit (via the Platform Users page account
+// actions), never other platform users. Every action requires `manage_users`.
 
-/** The org placement (branch/district) the actor may manage. Throws on mismatch. */
+/** Platform-user CRUD is a head-office capability. Throws for org-unit actors. */
 async function assertOrgUnitScope(
   actor: Actor,
-  placement: { branchId: string | null; districtId: string | null },
+  _placement: { branchId: string | null; districtId: string | null },
 ): Promise<void> {
   if (actor.isSuperAdmin || actor.orgScope === 'HEAD_OFFICE') return;
-  if (actor.orgScope === 'BRANCH') {
-    if (placement.branchId && placement.branchId === actor.branchId) return;
-    throw new Error('You can only manage users of your own branch.');
-  }
-  if (actor.orgScope === 'DISTRICT') {
-    if (placement.districtId && placement.districtId === actor.districtId && !placement.branchId) return;
-    if (placement.branchId) {
-      const branch = await prisma.branch.findUnique({ where: { id: placement.branchId }, select: { districtId: true } });
-      if (branch?.districtId === actor.districtId) return;
-    }
-    throw new Error('You can only manage users within your own district.');
-  }
-  throw new Error('Permission denied.');
+  throw new Error('Platform user accounts are managed at head-office level.');
 }
 
 /** Roles assignable to a platform user at the given branch/district placement.

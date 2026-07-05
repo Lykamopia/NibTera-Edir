@@ -208,8 +208,9 @@ export async function getEdirProfile(edirId: string) {
       canViewAudit: oversight || has(['view_audit_log', 'view_payment_log']),
       // Recover a manager who can't sign in (e.g. their invite email failed): issue
       // a temporary password to hand over manually. Available to user managers
-      // (reset_password) and Edir managers (manage_edirs — they provisioned the admin).
-      canResetPassword: has(['reset_password', 'manage_edirs', 'super_admin']),
+      // (reset_password) and Edir provisioners (manage_edirs / create_edir /
+      // register_edir / manage_edir_users — they provisioned the admin).
+      canResetPassword: has(['reset_password', 'manage_edirs', 'create_edir', 'register_edir', 'manage_edir_users', 'super_admin']),
     },
   };
 }

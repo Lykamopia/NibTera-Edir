@@ -273,9 +273,12 @@ export default function UsersClient() {
           {ctx?.canManageUsers && (ctx.isSuperAdmin || ctx.orgScope === 'EDIR') && <BulkImportDialog ctx={ctx} onDone={load} />}
           {crossTenant
             ? <Button size="sm" onClick={() => setAddUser(true)}><UserPlus className="mr-1 h-4 w-4" /> Add User</Button>
-            : ctx?.canManageOrgUsers
+            : ctx?.canManageOrgUsers && ctx.branches.length > 0
               ? <Button size="sm" onClick={() => setOrgDialog({ edit: null })}><UserPlus className="mr-1 h-4 w-4" /> Add User</Button>
-              : ctx?.canManageUsers && <Button size="sm" onClick={() => setInviteOpen(true)}><UserPlus className="mr-1 h-4 w-4" /> Invite User</Button>}
+              // Invite creates an account inside the actor's own Edir — only
+              // meaningful for Edir-scoped managers (branch/district users don't
+              // create platform users; that's head-office work).
+              : ctx?.canManageUsers && ctx.orgScope === 'EDIR' && <Button size="sm" onClick={() => setInviteOpen(true)}><UserPlus className="mr-1 h-4 w-4" /> Invite User</Button>}
         </div>
       </div>
 
@@ -384,10 +387,10 @@ export default function UsersClient() {
                 </Button>
               )}
               {ctx.canResetPassword && detail.userId && (
-                <>
-                  <Button size="sm" variant="outline" onClick={() => act(() => adminResetUserPassword(detail.userId!), 'Reset email sent.')}><KeyRound className="mr-1 h-4 w-4" /> Reset password</Button>
-                  <Button size="sm" variant="outline" onClick={() => { const r = detail; setDetail(null); onTempPassword(r); }}><KeyRound className="mr-1 h-4 w-4" /> Temp password</Button>
-                </>
+                <Button size="sm" variant="outline" onClick={() => act(() => adminResetUserPassword(detail.userId!), 'Reset email sent.')}><KeyRound className="mr-1 h-4 w-4" /> Reset password</Button>
+              )}
+              {ctx.canTempPassword && detail.userId && (
+                <Button size="sm" variant="outline" onClick={() => { const r = detail; setDetail(null); onTempPassword(r); }}><KeyRound className="mr-1 h-4 w-4" /> Temp password</Button>
               )}
               {isEditable(detail) && (
                 <Button size="sm" variant="outline" onClick={() => { const r = detail; setDetail(null); onEditUser(r); }}><Pencil className="mr-1 h-4 w-4" /> Edit</Button>
@@ -437,12 +440,12 @@ function RowActions({ r, ctx, canAssociate, orgManageable, editable, onView, onR
     <DropdownMenu>
       <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="h-8 w-8"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
-        <DropdownMenuItem onClick={onView}><Eye className="mr-2 h-4 w-4" /> 360° profile</DropdownMenuItem>
+        <DropdownMenuItem onClick={onView}><Eye className="mr-2 h-4 w-4" /> View details</DropdownMenuItem>
         {editable && (
           <DropdownMenuItem onClick={onEdit}><Pencil className="mr-2 h-4 w-4" /> Edit user</DropdownMenuItem>
         )}
 
-        {(ctx.canManageUsers || ctx.canLock || ctx.canResetPassword) && (
+        {(ctx.canManageUsers || ctx.canLock || ctx.canResetPassword || ctx.canTempPassword) && (
           <>
             <DropdownMenuSeparator />
             <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-muted-foreground">Account</DropdownMenuLabel>
@@ -455,10 +458,12 @@ function RowActions({ r, ctx, canAssociate, orgManageable, editable, onView, onR
               ? <DropdownMenuItem onClick={() => act(() => unlockUser(r.userId!), 'User unlocked.')}><Unlock className="mr-2 h-4 w-4" /> Unlock</DropdownMenuItem>
               : <DropdownMenuItem onClick={() => act(() => lockUser(r.userId!), 'User locked.')}><Lock className="mr-2 h-4 w-4" /> Lock</DropdownMenuItem>)}
             {ctx.canResetPassword && (
-              <>
-                <DropdownMenuItem onClick={() => act(() => adminResetUserPassword(r.userId!), 'Reset email sent.')}><KeyRound className="mr-2 h-4 w-4" /> Reset password (email)</DropdownMenuItem>
-                <DropdownMenuItem onClick={onTempPassword}><KeyRound className="mr-2 h-4 w-4" /> Temporary password</DropdownMenuItem>
-              </>
+              <DropdownMenuItem onClick={() => act(() => adminResetUserPassword(r.userId!), 'Reset email sent.')}><KeyRound className="mr-2 h-4 w-4" /> Reset password (email)</DropdownMenuItem>
+            )}
+            {/* Edir provisioners (branch/district creators) may recover the admins
+                they provisioned even without the reset_password permission. */}
+            {ctx.canTempPassword && (
+              <DropdownMenuItem onClick={onTempPassword}><KeyRound className="mr-2 h-4 w-4" /> Temporary password</DropdownMenuItem>
             )}
           </>
         )}

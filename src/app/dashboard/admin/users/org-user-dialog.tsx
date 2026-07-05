@@ -1,11 +1,11 @@
 'use client';
 
 /**
- * Create / edit dialog for the platform users of an org unit — used by District
- * and Branch operators on the Platform Users page. A district user may place the
- * account at the district office or in one of the district's branches; a branch
- * user always creates accounts in their own branch. Server actions enforce the
- * org-unit scope and return one-time credentials on creation.
+ * Create / edit dialog for platform (branch/district) user accounts — a
+ * HEAD-OFFICE capability on the Platform Users page. Branch and district users
+ * never manage other platform users (they manage their unit's Edir users
+ * instead); the server actions enforce this. Returns one-time credentials on
+ * creation.
  */
 
 import { useEffect, useState } from 'react';
@@ -29,12 +29,13 @@ export function OrgUserDialog({ ctx, edit, onClose, onDone }: {
   onDone: (cred?: { name: string; credentials: Credentials }) => void;
 }) {
   const isDistrict = ctx.orgScope === 'DISTRICT';
+  const showPlacement = true; // head-office managers always pick the target branch
   const [form, setForm] = useState({
     name: edit?.name ?? '',
     email: edit?.email ?? '',
     phone: edit?.phone ?? '',
     roleId: edit?.roleId ?? '',
-    // Create mode: where the account lives. Branch actors are fixed to their branch.
+    // Create mode: which branch the operator account belongs to.
     placement: edit
       ? (edit.branchId ?? DISTRICT_OFFICE)
       : isDistrict ? DISTRICT_OFFICE : (ctx.branches[0]?.id ?? ''),
@@ -107,13 +108,13 @@ export function OrgUserDialog({ ctx, edit, onClose, onDone }: {
             <div className="space-y-1.5"><Label className="text-xs">Phone</Label><Input value={form.phone ?? ''} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} placeholder="0912345678" /></div>
           </div>
 
-          {!edit && isDistrict && (
+          {!edit && showPlacement && (
             <div className="space-y-1.5">
               <Label className="text-xs">Placement</Label>
               <Select value={form.placement} onValueChange={v => setForm(f => ({ ...f, placement: v, roleId: '' }))}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectTrigger><SelectValue placeholder="Select a branch…" /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value={DISTRICT_OFFICE}>District office (whole district)</SelectItem>
+                  {isDistrict && <SelectItem value={DISTRICT_OFFICE}>District office (whole district)</SelectItem>}
                   {ctx.branches.map(b => <SelectItem key={b.id} value={b.id}>Branch · {b.name}{b.code ? ` (${b.code})` : ''}</SelectItem>)}
                 </SelectContent>
               </Select>

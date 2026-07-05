@@ -246,9 +246,10 @@ export async function bulkInviteUsers(input: { edirId?: string | null; rows: Bul
 
 /**
  * Account-administration scope check. Edir accounts fall under tenant scoping
- * (assertSameTenant); platform accounts (no Edir) may additionally be managed by
- * the district/branch operators of their own org unit. Super-Admin-role targets
- * are only ever administered by a full Super-Admin.
+ * (assertSameTenant) — so branch/district operators administer the EDIR users of
+ * their unit. Platform accounts (no Edir — head-office/district/branch operators)
+ * are administered ONLY at head-office level; branch/district users never manage
+ * other platform users. Super-Admin-role targets require a full Super-Admin.
  */
 async function assertCanAdministerUser(
   actor: Actor,
@@ -263,15 +264,7 @@ async function assertCanAdministerUser(
     return;
   }
   if (actor.isSuperAdmin || actor.orgScope === 'HEAD_OFFICE') return;
-  if (actor.orgScope === 'BRANCH' && user.branchId && user.branchId === actor.branchId) return;
-  if (actor.orgScope === 'DISTRICT') {
-    if (user.districtId && user.districtId === actor.districtId) return;
-    if (user.branchId) {
-      const branch = await prisma.branch.findUnique({ where: { id: user.branchId }, select: { districtId: true } });
-      if (branch?.districtId === actor.districtId) return;
-    }
-  }
-  throw new Error('Access Denied: this account is outside your organizational scope.');
+  throw new Error('Access Denied: platform user accounts are managed at head-office level.');
 }
 
 export async function setUserRole(userId: string, roleId: string | null) {
@@ -458,14 +451,16 @@ export async function adminResetUserPassword(userId: string) {
  * email to a newly-activated Edir manager failed to send. The account is also
  * ACTIVATED so the user can sign in immediately (auth rejects non-ACTIVE accounts)
  * and is forced to change the password on first login. Existing sessions are
- * revoked. Restricted to `reset_password` or `manage_edirs` (the Edir-provisioning
- * umbrella — so whoever creates an Edir + its admin can also recover that admin);
- * super_admin bypasses. Audited.
+ * revoked. Restricted to `reset_password` or an Edir-provisioning permission
+ * (manage_edirs / create_edir / register_edir / manage_edir_users) — whoever
+ * creates or registers an Edir and its admin can also recover that admin;
+ * super_admin bypasses. Org scope still applies (assertCanAdministerUser), so a
+ * branch/district provisioner only reaches the Edirs of their own unit. Audited.
  */
 export async function adminGenerateTempPassword(userId: string) {
   try {
     const actor = await getActor();
-    await assertPermission(actor, ['reset_password', 'manage_edirs']);
+    await assertPermission(actor, ['reset_password', 'manage_edirs', 'create_edir', 'register_edir', 'manage_edir_users']);
     const user = await prisma.user.findUnique({ where: { id: userId }, include: { role: { select: { scope: true } } } });
     if (!user) return { success: false as const, error: 'User not found.' };
     if (user.role?.scope === 'SUPER_ADMIN') return { success: false as const, error: 'Platform Super-Admins cannot be reset here.' };
@@ -602,8 +597,18 @@ export async function saveRole(input: z.infer<typeof roleSchema>) {
           return { success: false as const, error: 'You can only manage roles within your own Edir.' };
         }
       }
-      const scopeKind: RoleScopeKind = (existing.scope === 'SUPER_ADMIN' || existing.scope === 'PLATFORM') ? 'PLATFORM' : 'EDIR';
-      const permissions = filterPermissionsForScope(data.permissions, scopeKind).join(',');
+      // Validation catalog depends on the role's scope:
+      //  • SUPER_ADMIN / PLATFORM → platform catalog (incl. platform-grantable Edir pages)
+      //  • EDIR                   → Edir catalog (no platform permissions)
+      //  • HEAD_OFFICE / DISTRICT / BRANCH → org roles legitimately mix both
+      //    (dashboards + registration approvals + member/payment operations), so
+      //    only validate ids and block the super_admin master switch.
+      const validIds = new Set(ALL_PERMISSION_IDS as string[]);
+      const permissions = (existing.scope === 'SUPER_ADMIN' || existing.scope === 'PLATFORM')
+        ? filterPermissionsForScope(data.permissions, 'PLATFORM').join(',')
+        : existing.scope === 'EDIR'
+          ? filterPermissionsForScope(data.permissions, 'EDIR').join(',')
+          : data.permissions.filter(p => validIds.has(p) && p !== 'super_admin').join(',');
       await prisma.role.update({ where: { id: data.id }, data: { name: data.name, permissions } });
       await writeAudit({ edirId: existing.edirId, userId: actor.id, action: 'ROLE_SAVED', targetType: 'Role', targetId: data.id, details: data.name });
       await logSecurityEvent({
@@ -665,7 +670,13 @@ export async function deleteRole(id: string) {
     await assertPermission(actor, 'manage_roles');
     const role = await prisma.role.findUnique({ where: { id }, include: { _count: { select: { users: true } } } });
     if (!role) return { success: false as const, error: 'Role not found.' };
-    if (!actor.isSuperAdmin) await assertSameTenant(actor, role.edirId);
+    // Platform/org roles are managed at head-office (Super-Admin) level only —
+    // mirrors saveRole: non-supers may only touch EDIR roles of their own tenant.
+    if (!actor.isSuperAdmin) {
+      if (role.scope !== 'EDIR' || role.edirId !== actor.edirId) {
+        return { success: false as const, error: 'You can only manage roles within your own Edir.' };
+      }
+    }
     if (role._count.users > 0) return { success: false as const, error: 'Cannot delete a role still assigned to users.' };
     await prisma.role.delete({ where: { id } });
     await writeAudit({ edirId: role.edirId, userId: actor.id, action: 'ROLE_DELETED', targetType: 'Role', targetId: id, details: role.name });

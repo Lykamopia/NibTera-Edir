@@ -279,8 +279,13 @@ function MemberPanel({ member, payerPhone, amount, setAmount, paying, error, txn
   // settled and the pay option is hidden entirely — only the settled state and
   // when the next payment opens are shown. The server enforces the same gate.
   const win = m.payWindow || {};
-  const payClosed = !!win.blocked;
   const opensDate = win.availableAt ? new Date(win.availableAt).toLocaleDateString(undefined, { dateStyle: 'long' }) : '';
+
+  // Membership standing: a TERMINATED membership can never pay (the server
+  // enforces this too); a SUSPENDED member CAN pay — that's the path back.
+  const terminated = m.status === 'TERMINATED';
+  const suspended = m.status === 'SUSPENDED';
+  const payClosed = !!win.blocked || terminated;
 
   return (
     <>
@@ -333,8 +338,30 @@ function MemberPanel({ member, payerPhone, amount, setAmount, paying, error, txn
         </CardContent>
       </Card>
 
+      {/* Membership terminated — no longer a member, NO pay option */}
+      {terminated && (
+        <Card className="page-enter overflow-hidden border-destructive/30">
+          <div className="flex flex-col items-center gap-2 bg-destructive/10 p-5 text-center">
+            <span className="flex h-14 w-14 items-center justify-center rounded-full bg-destructive/15 text-destructive"><AlertTriangle className="h-8 w-8" /></span>
+            <h3 className="text-base font-bold text-destructive">{t('terminatedTitle')}</h3>
+            <p className="max-w-sm text-sm text-foreground/80">{t('terminatedMsg').replace('{edir}', m.edirName ?? 'the Edir')}</p>
+          </div>
+        </Card>
+      )}
+
+      {/* Membership suspended — paying the dues (incl. reinstatement fee) is the way back */}
+      {suspended && (
+        <div className="page-enter flex items-start gap-2.5 rounded-xl border border-warning/30 bg-warning/10 p-3.5 text-warning">
+          <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
+          <div className="min-w-0">
+            <div className="text-sm font-semibold">{t('suspendedTitle')}</div>
+            <div className="mt-0.5 text-xs text-foreground/80">{t('suspendedMsg')}</div>
+          </div>
+        </div>
+      )}
+
       {/* Advance-payment window closed — settled state, descriptive message, NO pay option */}
-      {payClosed && (
+      {!terminated && payClosed && (
         <Card className="page-enter overflow-hidden border-success/30">
           <div className="flex flex-col items-center gap-2 bg-success/10 p-5 text-center">
             <span className="flex h-14 w-14 items-center justify-center rounded-full bg-success/15 text-success"><CheckCircle2 className="h-8 w-8" /></span>
@@ -452,7 +479,12 @@ function MemberPanel({ member, payerPhone, amount, setAmount, paying, error, txn
       {/* Sticky pay bar — replaced by an informational strip while the pay window is closed */}
       <div className="fixed inset-x-0 bottom-0 z-20 border-t bg-card/90 p-3 backdrop-blur-md">
         <div className="mx-auto w-full max-w-md">
-          {payClosed ? (
+          {terminated ? (
+            <div className="flex h-14 items-center justify-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 text-sm font-medium text-destructive">
+              <AlertTriangle className="h-5 w-5 shrink-0" />
+              <span className="truncate">{t('terminatedTitle')}</span>
+            </div>
+          ) : payClosed ? (
             <div className="flex h-14 items-center justify-center gap-2 rounded-lg border border-success/30 bg-success/10 px-3 text-sm font-medium text-success">
               <CheckCircle2 className="h-5 w-5 shrink-0" />
               <span className="truncate">{t('payWindowOpens').replace('{date}', opensDate)}</span>

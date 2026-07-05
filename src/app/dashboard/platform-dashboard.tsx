@@ -16,6 +16,7 @@ import {
 import { LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
 import { DateRangeFilter, ALL_TIME, toParam, type DateRangeValue } from '@/components/ui/date-range-filter';
 import { getPlatformDashboard } from '@/app/actions/dashboard';
+import { CollectionsBreakdown } from './collections-breakdown';
 
 const money = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 0 });
 const C = { primary: 'hsl(var(--primary))', success: 'hsl(var(--success))', warning: 'hsl(var(--warning))', info: 'hsl(var(--info))', destructive: 'hsl(var(--destructive))', accent: 'hsl(var(--accent))', muted: 'hsl(var(--muted-foreground))' };
@@ -136,6 +137,9 @@ export default function PlatformDashboard() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Collections by source (contributions / penalties / fees) and channel */}
+      <CollectionsBreakdown data={data.collections} currency={k.currency} />
 
       {/* Top / Attention */}
       <div className="grid gap-4 lg:grid-cols-3">

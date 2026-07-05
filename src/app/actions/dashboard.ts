@@ -1,6 +1,7 @@
 'use server';
 
 import prisma from '@/lib/prisma';
+import type { Prisma } from '@prisma/client';
 import { getActor, tenantWhere, actorHasPermission, assertPermission } from '@/lib/tenant-scope';
 import { AccessDeniedError } from '@/lib/errors';
 import { pendingApprovalCountForActor } from '@/lib/approval-engine';
@@ -19,6 +20,7 @@ export type DashboardData = {
     pendingApprovals: number;
   };
   recentPayments: { id: string; amount: number; method: string; status: string; memberName: string | null; createdAt: Date }[];
+  collections: CollectionAnalytics;
 };
 
 /** Generic Edir oversight KPIs, scoped to the actor's tenant and date range. */
@@ -28,7 +30,7 @@ export async function getDashboardData(range?: DateRangeParam): Promise<Dashboar
   const memDate = dateWhere('joinDate', range);     // members joined in range
   const txDate = dateWhere('createdAt', range);     // payments / claims created in range
 
-  const [totalMembers, activeMembers, paidAgg, disbursedAgg, activeEmergencies, recent, pendingApprovals] = await Promise.all([
+  const [totalMembers, activeMembers, paidAgg, disbursedAgg, activeEmergencies, recent, pendingApprovals, collections] = await Promise.all([
     prisma.member.count({ where: { ...where, ...memDate } }),
     prisma.member.count({ where: { ...where, ...memDate, status: 'ACTIVE' } }),
     prisma.paymentLog.aggregate({ _sum: { amount: true }, where: { ...where, ...txDate, status: 'SUCCESS' } }),
@@ -36,6 +38,7 @@ export async function getDashboardData(range?: DateRangeParam): Promise<Dashboar
     prisma.emergencyClaim.count({ where: { ...where, ...txDate, status: 'ACTIVE' } }),
     prisma.paymentLog.findMany({ where: { ...where, ...txDate }, include: { member: true }, orderBy: { createdAt: 'desc' }, take: 8 }),
     pendingApprovalCountForActor(actor),
+    collectionAnalytics(where, range),
   ]);
 
   const totalPaid = Number(paidAgg._sum.amount ?? 0);
@@ -57,6 +60,109 @@ export async function getDashboardData(range?: DateRangeParam): Promise<Dashboar
       id: p.id, amount: Number(p.amount), method: p.method, status: p.status,
       memberName: p.member?.name ?? null, createdAt: p.createdAt,
     })),
+    collections,
+  };
+}
+
+// ─── Collection source analytics (shared by every dashboard) ──────────────────
+
+export interface CollectionAnalytics {
+  totalSettled: number;
+  /** Settled volume split by WHERE the money came from (per-payment breakdown meta). */
+  bySource: { key: string; label: string; amount: number }[];
+  /** Settled volume split by payment method / channel. */
+  byMethod: { method: string; count: number; amount: number }[];
+  /** Trailing-12-month stacked series (one column per month, one key per source). */
+  monthly: ({ month: string } & Record<string, number | string>)[];
+}
+
+const SOURCE_LABELS: Record<string, string> = {
+  contributions: 'Monthly contributions',
+  latePenalty: 'Late penalties',
+  interest: 'Interest',
+  serviceFees: 'Service fees',
+  other: 'Other charges',
+  unclassified: 'Unclassified',
+};
+const SOURCE_KEYS = Object.keys(SOURCE_LABELS);
+
+/**
+ * Split settled collections by SOURCE using each payment's breakdown meta:
+ * installment+arrears → monthly contributions, latePenalty → late penalties,
+ * plus interest / service fees / other. Any settled amount the meta does not
+ * account for (e.g. mini-app payments initiated without a line breakdown, or
+ * partial settlements) is reported honestly as "Unclassified" rather than being
+ * silently folded into a category. Also returns the method/channel split and a
+ * trailing-12-month stacked series for the trend chart.
+ */
+async function collectionAnalytics(where: Prisma.PaymentLogWhereInput, range?: DateRangeParam): Promise<CollectionAnalytics> {
+  const logs = await prisma.paymentLog.findMany({
+    where: { ...where, status: { in: ['SUCCESS', 'PARTIAL'] }, ...dateWhere('createdAt', range) },
+    select: { amount: true, method: true, createdAt: true, description: true },
+    orderBy: { createdAt: 'desc' },
+    take: 5000,
+  });
+
+  const totals: Record<string, number> = Object.fromEntries(SOURCE_KEYS.map(k => [k, 0]));
+  const byMethod = new Map<string, { count: number; amount: number }>();
+
+  // Trailing 12 calendar months, oldest → newest.
+  const now = new Date();
+  const monthKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  const months: { key: string; label: string }[] = [];
+  for (let i = 11; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    months.push({ key: monthKey(d), label: d.toLocaleDateString(undefined, { month: 'short' }) });
+  }
+  const buckets = new Map(months.map(m => [m.key, Object.fromEntries(SOURCE_KEYS.map(k => [k, 0])) as Record<string, number>]));
+
+  let totalSettled = 0;
+  for (const l of logs) {
+    const amount = Number(l.amount);
+    totalSettled += amount;
+
+    let meta: Record<string, any> = {};
+    try { const v = JSON.parse(l.description || '{}'); meta = typeof v === 'object' && v ? v : {}; } catch { /* unclassified */ }
+    const num = (v: any) => (v == null || isNaN(Number(v)) ? 0 : Number(v));
+    const parts: Record<string, number> = {
+      contributions: num(meta.installment) + num(meta.arrears),
+      latePenalty: num(meta.latePenalty),
+      interest: num(meta.interest),
+      serviceFees: num(meta.serviceFees),
+      other: num(meta.other),
+      unclassified: 0,
+    };
+    const classified = parts.contributions + parts.latePenalty + parts.interest + parts.serviceFees + parts.other;
+    // The breakdown records the INITIATED intent; cap it at the settled amount
+    // (partials) and put any un-itemized remainder into "Unclassified".
+    if (classified > amount + 0.009) {
+      const scale = classified > 0 ? amount / classified : 0;
+      for (const k of SOURCE_KEYS) parts[k] *= scale;
+    } else {
+      parts.unclassified = Math.max(0, amount - classified);
+    }
+
+    const bucket = buckets.get(monthKey(new Date(l.createdAt)));
+    for (const k of SOURCE_KEYS) {
+      totals[k] += parts[k];
+      if (bucket) bucket[k] += parts[k];
+    }
+
+    const m = byMethod.get(l.method) ?? { count: 0, amount: 0 };
+    byMethod.set(l.method, { count: m.count + 1, amount: m.amount + amount });
+  }
+
+  const round = (n: number) => Math.round(n * 100) / 100;
+  return {
+    totalSettled: round(totalSettled),
+    bySource: SOURCE_KEYS.map(k => ({ key: k, label: SOURCE_LABELS[k], amount: round(totals[k]) })),
+    byMethod: Array.from(byMethod.entries())
+      .map(([method, v]) => ({ method, count: v.count, amount: round(v.amount) }))
+      .sort((a, b) => b.amount - a.amount),
+    monthly: months.map(m => {
+      const b = buckets.get(m.key)!;
+      return { month: m.label, ...Object.fromEntries(SOURCE_KEYS.map(k => [k, round(b[k])])) };
+    }),
   };
 }
 
@@ -175,8 +281,11 @@ export async function getBranchDashboard(range?: DateRangeParam) {
     branchId ? prisma.edir.findMany({ where: { branchId }, select: { id: true } }) : Promise.resolve([]),
   ]);
   const ids = edirs.map(e => e.id);
-  const [metrics, registry] = await Promise.all([scopedMetrics(ids, range), orgEdirRegistry(ids, range)]);
-  return { branchName: branch?.name ?? 'Branch', branchCode: branch?.code ?? null, ...metrics, edirs: registry };
+  const scope = { edirId: ids.length ? { in: ids } : '__none__' } as Prisma.PaymentLogWhereInput;
+  const [metrics, registry, collections] = await Promise.all([
+    scopedMetrics(ids, range), orgEdirRegistry(ids, range), collectionAnalytics(scope, range),
+  ]);
+  return { branchName: branch?.name ?? 'Branch', branchCode: branch?.code ?? null, ...metrics, edirs: registry, collections };
 }
 
 /** District-scoped dashboard — analytics summed across the district's branches,
@@ -192,13 +301,16 @@ export async function getDistrictDashboard(range?: DateRangeParam) {
   ]);
 
   const ids = edirs.map(e => e.id);
-  const [total, registry] = await Promise.all([scopedMetrics(ids, range), orgEdirRegistry(ids, range)]);
+  const scope = { edirId: ids.length ? { in: ids } : '__none__' } as Prisma.PaymentLogWhereInput;
+  const [total, registry, collections] = await Promise.all([
+    scopedMetrics(ids, range), orgEdirRegistry(ids, range), collectionAnalytics(scope, range),
+  ]);
   const perBranch = await Promise.all(branches.map(async b => {
     const m = await scopedMetrics(edirs.filter(e => e.branchId === b.id).map(e => e.id), range);
     return { id: b.id, name: b.name, code: b.code, edirs: m.totalEdirs, activeEdirs: m.activeEdirs, members: m.totalMembers, collected: m.collected, txCount: m.txCount };
   }));
 
-  return { districtName: district?.name ?? 'District', totalBranches: branches.length, ...total, branches: perBranch, edirs: registry };
+  return { districtName: district?.name ?? 'District', totalBranches: branches.length, ...total, branches: perBranch, edirs: registry, collections };
 }
 
 /**
@@ -342,7 +454,11 @@ export async function getPlatformDashboard(range?: DateRangeParam) {
   const emptyEdirs = perEdir.filter(e => e.members === 0);
   if (emptyEdirs.length) alerts.push({ level: 'info', text: `${emptyEdirs.length} Edir(s) have no members yet.` });
 
+  // Platform-wide collection source/method analytics for the breakdown charts.
+  const collections = await collectionAnalytics({}, range);
+
   return {
+    collections,
     kpis: {
       totalEdirs: edirs.length, activeEdirs, totalMembers, newMembers, activeUsers,
       totalCollected, totalOutstanding,
