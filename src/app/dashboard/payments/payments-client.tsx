@@ -393,8 +393,11 @@ function RecordDialog({ member, onClose, onDone }: { member: any; onClose: () =>
               </div>
               <div className="mt-2 flex flex-wrap gap-2 text-xs">
                 <Badge variant="outline">Balance {money(info.balance)}</Badge>
+                {info.contributionArrears > 0 && <Badge variant="outline" className="border-warning/20 bg-warning/10 text-warning">Arrears {money(info.contributionArrears)}</Badge>}
                 {info.monthsBehind > 0 && <Badge variant="outline" className="border-warning/20 bg-warning/10 text-warning">{info.monthsBehind} mo behind</Badge>}
                 {info.penalty && <Badge variant="outline" className="border-warning/20 bg-warning/10 text-warning">Penalty {money(info.penalty.amount)}</Badge>}
+                {info.reinstatementFee > 0 && <Badge variant="outline" className="border-destructive/20 bg-destructive/10 text-destructive">Reinstatement {money(info.reinstatementFee)}</Badge>}
+                {info.status && info.status !== 'ACTIVE' && <Badge variant="outline" className="border-destructive/20 bg-destructive/10 text-destructive">{info.status}</Badge>}
               </div>
             </div>
 

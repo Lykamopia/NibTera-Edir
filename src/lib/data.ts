@@ -50,6 +50,8 @@ export interface DetailedMember {
   reinstatementFee: number;
   dueInstallments: { id: string; amount: number; dueDate: Date; overdue: boolean }[];
   monthsPaid: number;
+  /** Canonical itemized dues — the suggested total covers ALL obligations. */
+  dues: MemberDues;
   // Contribution coverage in calendar months (indexed from the member's join month).
   contributionCoverage: { monthsPaid: number; paidThrough: Date | null; nextDue: Date | null };
   /**
@@ -159,6 +161,17 @@ export async function fetchDetailedMemberByPhone(phone: string): Promise<Detaile
     },
   });
 
+  // ── Canonical dues — ALL obligations summed into one suggested total ─────────
+  const dues = computeMemberDues({
+    status: member.status,
+    joinDate: member.joinDate,
+    balance,
+    monthsPaid,
+    settings,
+    nextInstallmentDue: pendingInstallments[0] ? Number(pendingInstallments[0].amount) : 0,
+    now,
+  });
+
   // ── Advance-payment window (nextPaymentDelayDays) ────────────────────────────
   // Only gates a member with NOTHING due: contributions covered, zero balance, no
   // pending installments, no penalty, no reinstatement fee. Anyone who still owes
@@ -201,6 +214,7 @@ export async function fetchDetailedMemberByPhone(phone: string): Promise<Detaile
     reinstatementFee,
     dueInstallments,
     monthsPaid,
+    dues,
     contributionCoverage,
     payWindow,
     paymentHistory: member.paymentLogs.map(l => {
@@ -364,6 +378,92 @@ export function computePenalty(opts: { monthsBehind: number; arrears: number; du
   return {
     amount, reason: 'Late contribution payment', rule, type, value,
     overdueDays, gracePeriodDays, monthsBehind, calculation, dailyAccrual,
+  };
+}
+
+/**
+ * Canonical, itemized "what this member owes right now" — the single source of
+ * truth for the suggested payment total, shared by the public pay page
+ * (fetchDetailedMemberByPhone) and the staff record-payment dialog
+ * (getMemberOutstanding) so both always agree. Everything a member could owe is
+ * summed here:
+ *   • contribution arrears  — every unpaid monthly contribution (monthsBehind × fee)
+ *   • late penalty          — tier + daily accrual on the overdue contributions
+ *   • reinstatement fee     — only when SUSPENDED or TERMINATED
+ *   • other charges         — the pooled balance: unpaid registration fee (incl.
+ *                             its installments), event-absence penalties, and
+ *                             asset-compensation charges
+ * total = contributionArrears + latePenalty + reinstatementFee + otherCharges.
+ */
+export interface MemberDues {
+  currency: string;
+  monthlyFee: number;
+  monthsBehind: number;
+  contributionArrears: number;
+  latePenalty: number;
+  penalty: PenaltyBreakdown | null;
+  reinstatementFee: number;
+  otherCharges: number;        // = paymentStatus.balance (registration + event/asset)
+  registrationInstallmentDue: number; // due registration installment (subset of otherCharges)
+  total: number;
+  /** Line breakdown for recordManualPayment / settlement; sums to `total`. */
+  breakdown: { installment: number; arrears: number; latePenalty: number; interest: number; serviceFees: number; other: number };
+}
+
+export function computeMemberDues(input: {
+  status: string;
+  joinDate: Date;
+  balance: number;
+  monthsPaid: number;
+  settings: {
+    monthlyFee?: unknown; currency?: string | null; dueDay?: number | null; gracePeriodDays?: number | null;
+    reinstatementFee?: unknown; penaltyTiers?: unknown;
+    dailyPenaltyEnabled?: boolean | null; dailyPenaltyType?: string | null; dailyPenaltyValue?: unknown; dailyPenaltyMaxDays?: unknown;
+  } | null | undefined;
+  nextInstallmentDue?: number; // amount of the next PENDING installment, if any
+  now?: Date;
+}): MemberDues {
+  const now = input.now ?? new Date();
+  const num = (v: unknown) => (v == null || isNaN(Number(v)) ? 0 : Number(v));
+  const s = input.settings ?? {};
+  const monthlyFee = num(s.monthlyFee);
+  const currency = s.currency ?? 'ETB';
+  const dueDay = s.dueDay ?? 1;
+  const gracePeriodDays = s.gracePeriodDays ?? 0;
+  const balance = Math.max(0, num(input.balance));
+
+  const { monthsBehind, arrears: contributionArrears } = computeContributionArrears({
+    joinDate: input.joinDate, dueDay, monthsPaid: input.monthsPaid, monthlyFee, now,
+  });
+
+  const penalty = computePenalty({
+    monthsBehind, arrears: contributionArrears, dueDay, gracePeriodDays, currency,
+    tiers: s.penaltyTiers, now,
+    daily: {
+      enabled: !!s.dailyPenaltyEnabled,
+      type: s.dailyPenaltyType === 'PERCENT' ? 'PERCENT' : 'FIXED',
+      value: num(s.dailyPenaltyValue),
+      maxDays: num(s.dailyPenaltyMaxDays),
+    },
+  });
+  const latePenalty = penalty?.amount ?? 0;
+
+  const reinstatementFee = (input.status === 'SUSPENDED' || input.status === 'TERMINATED') ? num(s.reinstatementFee) : 0;
+
+  const total = contributionArrears + latePenalty + reinstatementFee + balance;
+
+  // Line breakdown for the record dialog / settlement (sums to total):
+  //  • installment — a due registration installment (part of the pooled balance)
+  //  • arrears     — the monthly contributions owed
+  //  • other       — the rest of the pooled balance PLUS the reinstatement fee
+  const installmentLine = input.nextInstallmentDue && balance >= input.nextInstallmentDue ? input.nextInstallmentDue : 0;
+  const other = Math.max(0, balance - installmentLine) + reinstatementFee;
+
+  return {
+    currency, monthlyFee, monthsBehind,
+    contributionArrears, latePenalty, penalty, reinstatementFee,
+    otherCharges: balance, registrationInstallmentDue: installmentLine, total,
+    breakdown: { installment: installmentLine, arrears: contributionArrears, latePenalty, interest: 0, serviceFees: 0, other },
   };
 }
 

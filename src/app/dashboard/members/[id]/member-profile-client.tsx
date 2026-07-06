@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -21,8 +22,10 @@ import {
 import { EmptyState } from '@/components/ui/states';
 import { CredentialsDialog, type Credentials } from '@/components/credentials-dialog';
 import { PaymentReceiptModal } from '@/components/payment-receipt-modal';
+import { ReceiptUpload, type ReceiptFile } from '@/components/ui/receipt-upload';
 import { useConfirm, usePrompt } from '@/components/ui/confirm-provider';
 import { getMemberProfile, updateMember, addRelative, updateRelative, removeRelative, addMemberDocument, deleteMemberDocument, reviewMemberDocument, resetMemberPassword, setMemberStatus, requestMemberRemoval } from '@/app/actions/members';
+import { getReinstatementQuote, requestMemberReinstatement } from '@/app/actions/payments';
 import RelativeDocuments from './relative-documents-section';
 import { getActiveRelationshipCategories } from '@/app/actions/relationship-categories';
 import { getMemberRoles } from '@/app/actions/rule-config';
@@ -51,6 +54,7 @@ export default function MemberProfileClient({ initial, memberId }: { initial: Pr
   const [cred, setCred] = useState<Credentials | null>(null);
   const [editing, setEditing] = useState(false);
   const [receipt, setReceipt] = useState<any | null>(null);
+  const [reinstating, setReinstating] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const confirm = useConfirm();
   const prompt = usePrompt();
@@ -58,10 +62,26 @@ export default function MemberProfileClient({ initial, memberId }: { initial: Pr
   const cur = p.rules?.currency ?? 'ETB';
   const m = p.member;
   const caps = p.caps ?? ({} as Profile['caps']);
+  const searchParams = useSearchParams();
+
+  // Deep-link from the members list "Reinstate" action opens the dialog directly.
+  useEffect(() => {
+    if (searchParams.get('reinstate') === '1' && (m.status === 'SUSPENDED' || m.status === 'TERMINATED') && (caps.canReinstate)) {
+      setReinstating(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, m.status]);
   const initials = (m.name || '?').split(' ').map(s => s[0]).slice(0, 2).join('').toUpperCase();
 
   // ── Header actions — each is permission-gated (caps) and confirmed ─────────
   const onStatus = async (status: 'SUSPENDED' | 'ACTIVE' | 'TERMINATED') => {
+    // Reinstating a SUSPENDED/TERMINATED member goes through the receipt-backed
+    // maker–checker reinstatement flow (dues must be settled). An INACTIVE member
+    // has no dues, so reinstate directly.
+    if (status === 'ACTIVE' && (m.status === 'SUSPENDED' || m.status === 'TERMINATED')) {
+      setReinstating(true);
+      return;
+    }
     const copy = status === 'SUSPENDED'
       ? { title: `Suspend ${m.name}?`, description: 'The member is suspended and loses benefit eligibility until reinstated. They are notified.', confirmText: 'Suspend', ok: 'Member suspended.', destructive: true }
       : status === 'TERMINATED'
@@ -330,7 +350,89 @@ export default function MemberProfileClient({ initial, memberId }: { initial: Pr
       {cred && <CredentialsDialog memberName={m.name} credentials={cred} onClose={() => setCred(null)} />}
       {editing && <EditMemberDialog member={m} onClose={() => setEditing(false)} onDone={() => { setEditing(false); reload(); }} />}
       {receipt && <PaymentReceiptModal log={receipt} currency={cur} onClose={() => setReceipt(null)} />}
+      {reinstating && <ReinstateDialog memberId={memberId} currency={cur} onClose={() => setReinstating(false)} onDone={() => { setReinstating(false); reload(); }} />}
     </div>
+  );
+}
+
+// ─── Manual reinstatement (dues + receipt → maker–checker) ────────────────────
+
+function ReinstateDialog({ memberId, currency, onClose, onDone }: { memberId: string; currency: string; onClose: () => void; onDone: () => void }) {
+  const [quote, setQuote] = useState<any | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [breakdown, setBreakdown] = useState<Record<string, number>>({ installment: 0, arrears: 0, latePenalty: 0, interest: 0, serviceFees: 0, other: 0 });
+  const [rcpt, setRcpt] = useState<ReceiptFile | null>(null);
+  const [saving, setSaving] = useState(false);
+  const cur = quote?.dues?.currency ?? currency;
+  const cash = (n: number) => money(Number(n || 0), cur);
+
+  useEffect(() => {
+    getReinstatementQuote(memberId)
+      .then(q => { setQuote(q); if (q && !q.alreadyActive) setBreakdown({ ...q.dues.breakdown }); })
+      .catch(() => {}).finally(() => setLoading(false));
+  }, [memberId]);
+
+  const total = Object.values(breakdown).reduce((a, b) => a + (Number(b) || 0), 0);
+  const set = (k: string, v: string) => setBreakdown(b => ({ ...b, [k]: Number(v) || 0 }));
+
+  const submit = async () => {
+    if (total <= 0) { toast.error('The reinstatement total must be greater than zero.'); return; }
+    if (!rcpt?.path) { toast.error('Attach the payment receipt.'); return; }
+    setSaving(true);
+    const res = await requestMemberReinstatement(memberId, breakdown as any, rcpt.path);
+    setSaving(false);
+    if (res?.success) { toast.success('Reinstatement submitted for checker approval.'); onDone(); }
+    else toast.error((res && !res.success && res.error) || 'Failed to submit reinstatement.');
+  };
+
+  const LINES: [string, string][] = [
+    ['arrears', 'Contribution arrears'], ['latePenalty', 'Late penalty'], ['other', 'Reinstatement & other charges'],
+    ['installment', 'Registration installment'], ['interest', 'Interest'], ['serviceFees', 'Service fees'],
+  ];
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-h-[88vh] max-w-lg overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Reinstate {quote?.name ?? 'member'}</DialogTitle>
+        </DialogHeader>
+        {loading ? (
+          <div className="flex h-40 items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
+        ) : !quote ? (
+          <p className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">Could not load the outstanding dues.</p>
+        ) : quote.alreadyActive ? (
+          <p className="rounded-md bg-success/10 p-3 text-sm text-success">This member is already active.</p>
+        ) : (
+          <div className="space-y-4">
+            <div className="rounded-lg border bg-muted/30 p-3 text-sm">
+              <p>To return <span className="font-medium">{quote.name}</span> ({quote.status.toLowerCase()}) to active standing, the outstanding dues below must be settled. Attach the payment receipt — the reinstatement is applied only after a checker approves.</p>
+            </div>
+
+            <div className="space-y-2.5">
+              {LINES.map(([key, label]) => (
+                <div key={key} className="flex items-center justify-between gap-3">
+                  <Label className="text-sm text-muted-foreground">{label}</Label>
+                  <Input type="number" min={0} className="w-36 text-right" value={breakdown[key]} onChange={e => set(key, e.target.value)} />
+                </div>
+              ))}
+            </div>
+
+            <div className="flex items-center justify-between border-t pt-3">
+              <span className="text-sm font-medium">Total to reinstate</span>
+              <span className="text-lg font-bold">{cash(total)}</span>
+            </div>
+
+            <ReceiptUpload value={rcpt} onChange={setRcpt} label="Payment receipt (required)" />
+          </div>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
+          {quote && !quote.alreadyActive && (
+            <Button onClick={submit} disabled={saving || loading}>{saving && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />} Submit for approval</Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

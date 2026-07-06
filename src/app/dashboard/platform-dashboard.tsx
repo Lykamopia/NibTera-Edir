@@ -15,7 +15,9 @@ import {
 } from 'lucide-react';
 import { LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
 import { DateRangeFilter, ALL_TIME, toParam, type DateRangeValue } from '@/components/ui/date-range-filter';
-import { getPlatformDashboard } from '@/app/actions/dashboard';
+import { getPlatformDashboard, exportOrgDashboardCsv } from '@/app/actions/dashboard';
+import { toast } from 'sonner';
+import { Download } from 'lucide-react';
 import { CollectionsBreakdown } from './collections-breakdown';
 
 const money = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 0 });
@@ -49,6 +51,14 @@ export default function PlatformDashboard() {
   const load = useCallback(() => { setLoading(true); setError(false); getPlatformDashboard(toParam(dateRange)).then(setData).catch(() => setError(true)).finally(() => setLoading(false)); }, [dateRange]);
   useEffect(() => { load(); }, [load]);
 
+  const onExport = async () => {
+    try {
+      const csv = await exportOrgDashboardCsv(toParam(dateRange));
+      const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+      const a = document.createElement('a'); a.href = url; a.download = 'platform-report.csv'; a.click(); URL.revokeObjectURL(url);
+    } catch { toast.error('Export failed.'); }
+  };
+
   const trend = useMemo(() => (data ? data.trend.slice(-range) : []), [data, range]);
   const collectionTrendPct = useMemo(() => {
     if (trend.length < 2) return undefined;
@@ -75,6 +85,7 @@ export default function PlatformDashboard() {
           <div className="flex items-center gap-1 rounded-lg border p-0.5" title="Trend chart window">
             {RANGES.map(r => <button key={r.n} onClick={() => setRange(r.n)} className={`rounded-md px-2.5 py-1 text-xs font-medium ${range === r.n ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}`}>{r.label}</button>)}
           </div>
+          <Button size="sm" variant="outline" onClick={onExport}><Download className="mr-1.5 h-4 w-4" /> Export Report</Button>
           <Link href="/dashboard/admin/users"><Button size="sm" variant="outline"><Network className="mr-1.5 h-4 w-4" /> User Management</Button></Link>
         </div>
       </div>

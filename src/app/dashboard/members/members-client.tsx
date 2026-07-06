@@ -128,6 +128,12 @@ export default function MembersClient() {
   // out as the final stage (login blocked; reinstatement is the only way back).
   const onStatusChange = async (r: PersonRow, status: 'SUSPENDED' | 'ACTIVE' | 'TERMINATED') => {
     if (!r.memberId) return;
+    // Reinstating a suspended/terminated member requires the receipt-backed
+    // maker–checker flow, which lives on the member profile page — go there.
+    if (status === 'ACTIVE' && (r.membershipStatus === 'SUSPENDED' || r.membershipStatus === 'TERMINATED')) {
+      router.push(`/dashboard/members/${r.memberId}?reinstate=1`);
+      return;
+    }
     const copy = status === 'SUSPENDED'
       ? { title: `Suspend ${r.name}?`, description: 'The member loses benefit eligibility until reinstated (they can still sign in and pay their dues). They are notified.', confirmText: 'Suspend', ok: 'Member suspended.', destructive: true }
       : status === 'TERMINATED'

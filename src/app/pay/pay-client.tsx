@@ -79,10 +79,11 @@ function PayInner() {
     if (res.status === 'success' && res.member) {
       setMember(res.member);
       if (res.token) setToken(res.token);
-      // Default the payable amount to the outstanding balance + this month's fee +
-      // any late penalty (which already folds in the daily accrual), so the penalty
-      // shown in the charges card is actually included in what the member pays.
-      setAmount(String(Number(res.member.totalOutstanding) + Number(res.member.monthlyFee) + Number((res.member as any).penalty?.amount ?? 0)));
+      // Default the payable amount to the FULL dues total — every obligation the
+      // shared calculator summed: contribution arrears (all unpaid months), late
+      // penalty, reinstatement fee (if suspended/terminated), and the pooled
+      // balance (registration + event/asset charges).
+      setAmount(String(Number((res.member as any).dues?.total ?? res.member.totalOutstanding)));
     } else {
       setError(t(`err_${res.status}`));
     }
@@ -100,7 +101,17 @@ function PayInner() {
     setPaidAmount(amt); setPrevOutstanding(Number(member.totalOutstanding));
     const memberPhone = member.phone || '';
 
-    const res = await getPaymentToken(amt, token || '', member.id, member.edirId, { source: 'mini-app', outstanding: member.totalOutstanding, monthlyFee: member.monthlyFee, latePenalty: Number((member as any).penalty?.amount ?? 0) });
+    // Carry the itemized breakdown so settlement (and the receipt) records exactly
+    // what each birr paid for — contributions, late penalty, reinstatement, and
+    // pooled charges — from the shared dues calculator.
+    const bd = (member as any).dues?.breakdown ?? {};
+    const res = await getPaymentToken(amt, token || '', member.id, member.edirId, {
+      source: 'mini-app',
+      outstanding: member.totalOutstanding, monthlyFee: member.monthlyFee,
+      installment: Number(bd.installment ?? 0), arrears: Number(bd.arrears ?? 0),
+      latePenalty: Number(bd.latePenalty ?? (member as any).penalty?.amount ?? 0),
+      serviceFees: Number(bd.serviceFees ?? 0), other: Number(bd.other ?? 0),
+    });
     payLog('client/pay', 'getPaymentToken result', { status: res.status, transactionId: res.transactionId, paymentToken: maskToken((res as any).paymentToken) });
     if (res.status !== 'success' || !res.transactionId) { setPaying(false); setError(res.message || t('err_startFailed')); return; }
     setTxn(res.transactionId);
@@ -259,7 +270,10 @@ function MemberPanel({ member, payerPhone, amount, setAmount, paying, error, txn
   const { t } = useLang();
   const cur = member.currency;
   const m = member as any;
-  const amountDue = Number(m.totalOutstanding) + Number(m.monthlyFee);
+  // Suggested total = the full itemized dues (all obligations), consistent with
+  // the default amount and the staff record dialog.
+  const dues = m.dues ?? {};
+  const amountDue = Number(dues.total ?? (Number(m.totalOutstanding) + Number(m.monthlyFee)));
   // On-behalf detection: the fetched member's phone differs from the payer's phone.
   const onBehalf = !!payerPhone && !sameNumber(payerPhone, m.phone);
   // Per-tenant payment availability — the member's Edir must be active with a
@@ -403,10 +417,15 @@ function MemberPanel({ member, payerPhone, amount, setAmount, paying, error, txn
         <CardContent className="space-y-3 p-4">
           <h3 className="text-sm font-semibold">{t('obligations')}</h3>
 
-          {/* Contributions & arrears */}
+          {/* Itemized dues — every line adds up to the suggested total below. */}
           <div className="space-y-1.5">
-            <Line label={t('outstandingBalance')} value={money(m.totalOutstanding, cur)} />
-            <Line label={t('thisMonth')} value={money(m.monthlyFee, cur)} />
+            {Number(dues.contributionArrears) > 0 && (
+              <Line label={`${t('contributionsArrears')}${dues.monthsBehind ? ` (${dues.monthsBehind} ${t('monthsUnit')})` : ''}`} value={money(dues.contributionArrears, cur)} />
+            )}
+            {Number(dues.latePenalty) > 0 && <Line label={t('penaltyTitle')} value={money(dues.latePenalty, cur)} warn />}
+            {Number(dues.reinstatementFee) > 0 && <Line label={t('reinstatementFee')} value={money(dues.reinstatementFee, cur)} warn />}
+            {Number(dues.otherCharges) > 0 && <Line label={t('outstandingBalance')} value={money(dues.otherCharges, cur)} />}
+            {Number(dues.total || 0) === 0 && <Line label={t('thisMonth')} value={money(m.monthlyFee, cur)} />}
           </div>
 
           {/* Installment summary */}

@@ -25,6 +25,9 @@ export interface ManualPaymentPayload {
   paymentLogId: string;
   total: number;
   breakdown: PaymentBreakdown;
+  /** When set, approving this payment also reinstates the member to ACTIVE
+   *  standing (and restores a terminated login) — the manual reinstatement flow. */
+  reinstate?: boolean;
 }
 
 export interface SettleInput {

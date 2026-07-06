@@ -260,7 +260,8 @@ async function orgEdirRegistry(edirIds: string[], range?: DateRangeParam) {
   });
 }
 
-/** Edir ids within the actor's org unit (all statuses — includes PENDING/CLOSED). */
+/** Edir ids within the actor's org unit (all statuses — includes PENDING/CLOSED).
+ *  Head office / Super-Admin see every Edir. */
 async function orgUnitEdirIds(actor: Awaited<ReturnType<typeof getActor>>): Promise<string[]> {
   if (actor.orgScope === 'BRANCH' && actor.branchId) {
     return (await prisma.edir.findMany({ where: { branchId: actor.branchId }, select: { id: true } })).map(e => e.id);
@@ -268,7 +269,63 @@ async function orgUnitEdirIds(actor: Awaited<ReturnType<typeof getActor>>): Prom
   if (actor.orgScope === 'DISTRICT' && actor.districtId) {
     return (await prisma.edir.findMany({ where: { branch: { districtId: actor.districtId } }, select: { id: true } })).map(e => e.id);
   }
+  if (actor.isSuperAdmin || actor.orgScope === 'HEAD_OFFICE') {
+    return (await prisma.edir.findMany({ select: { id: true } })).map(e => e.id);
+  }
   return [];
+}
+
+/**
+ * Per-member aggregates for the "Corporate User Report" export section: every
+ * member in scope with their contribution collections, payment transaction
+ * count, penalties paid, emergency requests, emergency disbursements, asset
+ * issuances, and event participations — for the selected period.
+ */
+async function memberReportRows(edirIds: string[], range?: DateRangeParam) {
+  if (edirIds.length === 0) return [];
+  const inScope = { edirId: { in: edirIds } };
+  const txDate = dateWhere('createdAt', range);
+  const num = (v: any) => (v == null ? 0 : Number(v));
+
+  const [members, settledLogs, emergencyReq, emergencyDisb, assetIssues, eventParts] = await Promise.all([
+    prisma.member.findMany({ where: inScope, select: { id: true, name: true, memberId: true, status: true, edir: { select: { name: true } } }, orderBy: { name: 'asc' }, take: 5000 }),
+    prisma.paymentLog.findMany({ where: { ...inScope, ...txDate, status: { in: ['SUCCESS', 'PARTIAL'] } }, select: { memberId: true, amount: true, description: true } }),
+    prisma.memberRequest.groupBy({ by: ['memberId'], where: { ...inScope, type: 'EMERGENCY', ...txDate }, _count: { _all: true } }),
+    prisma.emergencyClaim.groupBy({ by: ['memberId'], where: { ...inScope, status: 'RESOLVED', ...txDate }, _sum: { disbursedAmount: true } }),
+    prisma.assetIssuance.groupBy({ by: ['memberId'], where: { asset: inScope, ...txDate }, _count: { _all: true } }),
+    prisma.eventParticipant.groupBy({ by: ['memberId'], where: { event: inScope }, _count: { _all: true } }),
+  ]);
+
+  // Aggregate settled payments per member into total, contribution portion, penalties.
+  const pay = new Map<string, { count: number; total: number; contributions: number; penalties: number }>();
+  for (const l of settledLogs) {
+    if (!l.memberId) continue;
+    let meta: any = {};
+    try { meta = JSON.parse(l.description || '{}') || {}; } catch { /* ignore */ }
+    const amount = num(l.amount);
+    const penalty = num(meta.latePenalty);
+    const contrib = num(meta.installment) + num(meta.arrears);
+    const cur = pay.get(l.memberId) ?? { count: 0, total: 0, contributions: 0, penalties: 0 };
+    cur.count += 1; cur.total += amount; cur.penalties += penalty;
+    cur.contributions += contrib > 0 ? contrib : Math.max(0, amount - penalty);
+    pay.set(l.memberId, cur);
+  }
+  const reqCount = new Map(emergencyReq.map(r => [r.memberId, r._count._all]));
+  const disb = new Map(emergencyDisb.map(r => [r.memberId, num(r._sum.disbursedAmount)]));
+  const assets = new Map(assetIssues.map(r => [r.memberId, r._count._all]));
+  const events = new Map(eventParts.map(r => [r.memberId, r._count._all]));
+
+  return members.map(m => {
+    const p = pay.get(m.id) ?? { count: 0, total: 0, contributions: 0, penalties: 0 };
+    return {
+      name: m.name, memberCode: m.memberId, status: m.status, edirName: m.edir?.name ?? '',
+      contributions: p.contributions, txCount: p.count, penalties: p.penalties,
+      emergencyRequests: reqCount.get(m.id) ?? 0,
+      emergencyDisbursed: disb.get(m.id) ?? 0,
+      assetIssuances: assets.get(m.id) ?? 0,
+      eventParticipations: events.get(m.id) ?? 0,
+    };
+  });
 }
 
 /** Branch-scoped dashboard — analytics for the Edirs in the actor's branch. */
@@ -322,17 +379,24 @@ export async function exportOrgDashboardCsv(range?: DateRangeParam) {
   const actor = await getActor();
   await assertPermission(actor, ['view_branch_dashboard', 'view_district_dashboard', 'super_admin']);
   const ids = await orgUnitEdirIds(actor);
-  const [metrics, registry] = await Promise.all([scopedMetrics(ids, range), orgEdirRegistry(ids, range)]);
+  const [metrics, registry, memberRows] = await Promise.all([
+    scopedMetrics(ids, range), orgEdirRegistry(ids, range), memberReportRows(ids, range),
+  ]);
 
+  const scopeLabel = actor.orgScope === 'BRANCH' ? 'Branch' : actor.orgScope === 'DISTRICT' ? 'District' : 'Head Office';
   const unit = actor.orgScope === 'BRANCH'
     ? (actor.branchId ? await prisma.branch.findUnique({ where: { id: actor.branchId }, select: { name: true } }) : null)
-    : (actor.districtId ? await prisma.district.findUnique({ where: { id: actor.districtId }, select: { name: true } }) : null);
+    : actor.orgScope === 'DISTRICT'
+      ? (actor.districtId ? await prisma.district.findUnique({ where: { id: actor.districtId }, select: { name: true } }) : null)
+      : null;
+  const rangeLabel = range && range.preset !== 'all' ? range.preset.replace(/_/g, ' ') : 'All time';
 
   const esc = (c: unknown) => `"${String(c ?? '').replace(/"/g, '""')}"`;
   const line = (cells: unknown[]) => cells.map(esc).join(',');
   const rows: string[] = [];
-  rows.push(line([`${actor.orgScope === 'BRANCH' ? 'Branch' : 'District'} Dashboard Report`, unit?.name ?? '']));
+  rows.push(line([`${scopeLabel} Dashboard Report`, unit?.name ?? scopeLabel]));
   rows.push(line(['Generated', new Date().toISOString()]));
+  rows.push(line(['Period', rangeLabel]));
   rows.push('');
   rows.push(line(['Summary']));
   rows.push(line(['Total Edirs', metrics.totalEdirs]));
@@ -344,14 +408,32 @@ export async function exportOrgDashboardCsv(range?: DateRangeParam) {
   rows.push(line(['Amount Collected (period, ETB)', metrics.collected]));
   rows.push(line(['Outstanding (ETB)', metrics.outstanding]));
   rows.push(line(['Pending Approvals', metrics.pendingApprovals]));
+
+  // ── Section 1 — "Report for bank staffs" (per-Edir org view) ─────────────────
   rows.push('');
-  rows.push(line(['Edir', 'Status', 'Branch', 'District', 'Members', 'Transactions', 'Amount Collected (ETB)', 'Created By', 'Approved By', 'Registered On']));
-  for (const e of registry) {
+  rows.push(line(['Report for bank staffs']));
+  rows.push(line(['SN', 'Edir (with associated branch)', 'District', 'Branch Name', 'Created By', 'Approved By', 'Number of Transactions', 'Amount Collected (ETB)', 'Date Range']));
+  registry.forEach((e, i) => {
     rows.push(line([
-      e.name, e.status, e.branchName ?? '', e.districtName ?? '', e.members, e.txCount, e.collected,
-      e.createdBy ?? '', e.approvedBy ?? '', new Date(e.createdAt).toISOString().slice(0, 10),
+      i + 1,
+      `${e.name}${e.branchName ? ` — ${e.branchName}` : ''}`,
+      e.districtName ?? '', e.branchName ?? '',
+      e.createdBy ?? '', e.approvedBy ?? '', e.txCount, e.collected, rangeLabel,
     ]));
-  }
+  });
+
+  // ── Section 2 — "Corporate User Report" (per-member view) ────────────────────
+  rows.push('');
+  rows.push(line(['Corporate User Report']));
+  rows.push(line(['SN', 'Member (Name)', 'Member ID', 'Edir', 'Status', 'Contribution Collections (ETB)', 'Payment Transactions', 'Penalties (ETB)', 'Emergency Requests', 'Emergency Disbursements (ETB)', 'Assets', 'Events', 'Date Range']));
+  memberRows.forEach((m, i) => {
+    rows.push(line([
+      i + 1, m.name, m.memberCode, m.edirName, m.status,
+      m.contributions, m.txCount, m.penalties, m.emergencyRequests, m.emergencyDisbursed,
+      m.assetIssuances, m.eventParticipations, rangeLabel,
+    ]));
+  });
+
   return rows.join('\n');
 }
 

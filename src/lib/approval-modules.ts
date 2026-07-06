@@ -34,6 +34,24 @@ export function ensureApprovalModules() {
         method: 'MANUAL',
       });
 
+      // Manual reinstatement: approving a reinstatement payment returns the member
+      // to ACTIVE standing and restores a terminated login (mirrors setMemberStatus).
+      if (payload.reinstate) {
+        const member = await tx.member.findUnique({ where: { id: payload.memberId }, select: { status: true, name: true, edirId: true, user: { select: { id: true, status: true } } } });
+        if (member && member.status !== 'ACTIVE') {
+          await tx.member.update({ where: { id: payload.memberId }, data: { status: 'ACTIVE' } });
+          if (member.user?.id && member.user.status === 'TERMINATED') {
+            await tx.user.update({ where: { id: member.user.id }, data: { status: 'ACTIVE', tokenVersion: { increment: 1 } } });
+          }
+          if (member.user?.id) {
+            await tx.notification.create({
+              data: { userId: member.user.id, edirId: member.edirId, type: 'member', priority: 'normal', title: 'Membership reinstated', body: 'Your membership is active again — welcome back.', linkUrl: '/dashboard/account' },
+            });
+          }
+          await writeAudit({ edirId: request.edirId, userId: actor.id, action: 'MEMBER_REINSTATED', targetType: 'Member', targetId: payload.memberId, details: `${member.name}: reinstated on approved payment.` }, tx);
+        }
+      }
+
       // File the payment evidence (receipt/attachment) into the central document
       // repository as an APPROVED record, so it is findable long after approval.
       const log = await tx.paymentLog.findUnique({

@@ -12,7 +12,7 @@ import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
 import { dateWhere, type DateRangeParam } from '@/lib/date-range';
 import { paymentLogStatusLabel } from '@/lib/payment-log-status';
-import { computePenalty, computeContributionArrears } from '@/lib/data';
+import { computePenalty, computeContributionArrears, computeMemberDues } from '@/lib/data';
 
 // ─── Edir settings ───────────────────────────────────────────────────────────
 
@@ -73,49 +73,36 @@ export async function getMemberOutstanding(memberId: string) {
   const dueInstallments = member.installmentPlans.flatMap(p => p.installments);
   const nextInstallment = dueInstallments.sort((a, b) => +a.dueDate - +b.dueDate)[0];
   const balance = Number(member.paymentStatus?.balance ?? 0);
-  const monthlyFee = Number(settings?.monthlyFee ?? 0);
-  const gracePeriodDays = settings?.gracePeriodDays ?? 0;
-  const dueDay = settings?.dueDay ?? 1;
   const monthsPaid = member.paymentStatus?.monthsPaid ?? 0;
-  // Contribution arrears (months due since join vs months paid) — the correct
-  // basis for the late penalty, independent of the pooled balance.
-  const { monthsBehind, arrears: contributionArrears } = computeContributionArrears({ joinDate: member.joinDate, dueDay, monthsPaid, monthlyFee });
 
-  // ── Auto-calculate the suggested payment ─────────────────────────────────────
-  // Split the outstanding into an installment line (when a plan installment is
-  // due) and arrears, then add the applicable late penalty computed from the
-  // Edir tiers on the overdue contribution amount (shared engine in lib/data).
-  const penalty = computePenalty({
-    monthsBehind, arrears: contributionArrears, dueDay, gracePeriodDays,
-    currency: settings?.currency ?? 'ETB', tiers: settings?.penaltyTiers, now: new Date(),
-    daily: {
-      enabled: !!settings?.dailyPenaltyEnabled,
-      type: settings?.dailyPenaltyType === 'PERCENT' ? 'PERCENT' : 'FIXED',
-      value: Number(settings?.dailyPenaltyValue ?? 0),
-      maxDays: Number(settings?.dailyPenaltyMaxDays ?? 0),
-    },
+  // Canonical dues — the shared calculator sums EVERYTHING owed (contribution
+  // arrears + late penalty + reinstatement fee + pooled balance) so the record
+  // dialog and the public pay page always show the same suggested total.
+  const dues = computeMemberDues({
+    status: member.status,
+    joinDate: member.joinDate,
+    balance,
+    monthsPaid,
+    settings,
+    nextInstallmentDue: nextInstallment ? Number(nextInstallment.amount) : 0,
   });
-  const installmentLine = nextInstallment && balance >= Number(nextInstallment.amount) ? Number(nextInstallment.amount) : 0;
-  const arrears = Math.max(0, balance - installmentLine);
 
   return {
     memberId: member.id,
     name: member.name,
     memberCode: member.memberId,
+    status: member.status,
     balance,
-    monthlyFee,
-    monthsBehind,
-    currency: settings?.currency ?? 'ETB',
-    penalty, // { amount, rule, overdueDays } | null
-    // Auto-filled breakdown: covers the full amount due (arrears + penalty).
-    breakdown: {
-      installment: installmentLine,
-      arrears,
-      latePenalty: penalty?.amount ?? 0,
-      interest: 0,
-      serviceFees: 0,
-      other: 0,
-    },
+    monthlyFee: dues.monthlyFee,
+    monthsBehind: dues.monthsBehind,
+    currency: dues.currency,
+    penalty: dues.penalty, // { amount, rule, overdueDays } | null
+    reinstatementFee: dues.reinstatementFee,
+    contributionArrears: dues.contributionArrears,
+    dues, // full itemized dues (total = sum of all lines)
+    // Auto-filled breakdown covers the full amount due (arrears + penalty +
+    // reinstatement + pooled balance).
+    breakdown: dues.breakdown,
     dueInstallmentCount: dueInstallments.length,
   };
 }
@@ -182,6 +169,7 @@ export async function getPaymentsMatrix(params: { query?: string; status?: strin
       },
     });
     const penaltyAmount = penalty?.amount ?? 0;
+    const reinstatementFee = (m.status === 'SUSPENDED' || m.status === 'TERMINATED') ? Number(s?.reinstatementFee ?? 0) : 0;
     return {
       id: m.id,
       memberId: m.memberId,
@@ -197,8 +185,9 @@ export async function getPaymentsMatrix(params: { query?: string; status?: strin
       latePenalty: penaltyAmount,
       penaltyRule: penalty?.rule ?? null,
       overdueDays: penalty?.overdueDays ?? 0,
+      reinstatementFee,
       otherCharges: balance,
-      totalDue: balance + arrears + penaltyAmount,
+      totalDue: balance + arrears + penaltyAmount + reinstatementFee,
     };
   });
 
@@ -404,6 +393,104 @@ export async function recordManualPayment(memberId: string, breakdownInput: z.in
 
     await writeAudit({ edirId, userId: actor.id, action: 'PAYMENT_RECORDED_PENDING', targetType: 'PaymentLog', targetId: log.id, details: `Total ${total} pending approval.` });
     revalidatePath('/dashboard/payments');
+    revalidatePath('/dashboard/approvals');
+    return { success: true as const, requestId, paymentLogId: log.id };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+// ─── Manual reinstatement (Maker–Checker, receipt-backed) ────────────────────
+
+/**
+ * Reinstatement quote for the dialog: the member's full outstanding dues (the
+ * amount they must clear to return to active standing) — arrears, late penalty,
+ * reinstatement fee, and pooled charges, itemized by the shared calculator.
+ */
+export async function getReinstatementQuote(memberId: string) {
+  const actor = await getActor();
+  await assertPermission(actor, ['reinstate_member', 'manage_members']);
+  const member = await prisma.member.findUnique({
+    where: { id: memberId },
+    include: { paymentStatus: true, installmentPlans: { include: { installments: { where: { status: 'PENDING' } } } } },
+  });
+  if (!member) return null;
+  await assertSameTenant(actor, member.edirId);
+  if (member.status === 'ACTIVE') return { alreadyActive: true as const };
+
+  const settings = await prisma.edirSettings.findUnique({ where: { edirId: member.edirId } });
+  const dueInstallments = member.installmentPlans.flatMap(p => p.installments).sort((a, b) => +a.dueDate - +b.dueDate);
+  const dues = computeMemberDues({
+    status: member.status,
+    joinDate: member.joinDate,
+    balance: Number(member.paymentStatus?.balance ?? 0),
+    monthsPaid: member.paymentStatus?.monthsPaid ?? 0,
+    settings,
+    nextInstallmentDue: dueInstallments[0] ? Number(dueInstallments[0].amount) : 0,
+  });
+  return {
+    alreadyActive: false as const,
+    memberId: member.id, name: member.name, memberCode: member.memberId, status: member.status,
+    dues,
+  };
+}
+
+/**
+ * Submit a MANUAL reinstatement: records the dues payment (receipt attached) and
+ * routes it through the SAME Maker–Checker flow as a manual payment, flagged so
+ * approval also returns the member to ACTIVE standing (and restores a terminated
+ * login). On approval the receipt is filed into the central document repository.
+ */
+export async function requestMemberReinstatement(
+  memberId: string,
+  breakdownInput: z.infer<typeof breakdownSchema>,
+  receiptUrl?: string | null,
+) {
+  try {
+    const actor = await getActor();
+    await assertPermission(actor, ['reinstate_member', 'manage_members']);
+    const member = await prisma.member.findUnique({ where: { id: memberId } });
+    if (!member) return { success: false as const, error: 'Member not found.' };
+    await assertSameTenant(actor, member.edirId);
+    if (member.status === 'ACTIVE') return { success: false as const, error: 'This member is already active.' };
+    if (!receiptUrl) return { success: false as const, error: 'Attach the payment receipt before submitting the reinstatement.' };
+    const edirId = member.edirId;
+
+    const breakdown = breakdownSchema.parse(breakdownInput);
+    const total = Object.values(breakdown).reduce((a, b) => a + b, 0);
+    if (total <= 0) return { success: false as const, error: 'The reinstatement payment total must be greater than zero.' };
+
+    // Block a duplicate pending reinstatement for the same member (a PENDING
+    // manual payment already awaiting approval for this member).
+    const dup = await prisma.paymentLog.findFirst({
+      where: { memberId: member.id, method: 'MANUAL', status: 'PENDING', createdAt: { gte: new Date(Date.now() - 5 * 60 * 1000) } },
+      select: { id: true },
+    });
+    if (dup) return { success: false as const, error: 'A payment for this member is already awaiting approval.' };
+
+    const transactionId = crypto.randomUUID();
+    const log = await prisma.paymentLog.create({
+      data: {
+        edirId, memberId: member.id,
+        amount: new Prisma.Decimal(total),
+        method: 'MANUAL', status: 'PENDING',
+        description: JSON.stringify({ ...breakdown, reinstatement: true }),
+        transactionId, receiptUrl: receiptUrl || null, verificationType: 'MANUAL',
+      },
+    });
+
+    const requestId = await submitForApproval(actor, {
+      edirId,
+      module: 'MANUAL_PAYMENT',
+      title: `Reinstatement of ${member.name} (${member.memberId}) — ${total}`,
+      summary: `Reinstatement payment. Breakdown: ${Object.entries(breakdown).filter(([, v]) => v > 0).map(([k, v]) => `${k}=${v}`).join(', ')}`,
+      payload: { memberId: member.id, paymentLogId: log.id, total, breakdown, reinstate: true },
+      targetType: 'PaymentLog',
+      targetId: log.id,
+    });
+
+    await writeAudit({ edirId, userId: actor.id, action: 'MEMBER_REINSTATEMENT_SUBMITTED', targetType: 'Member', targetId: member.id, details: `Reinstatement of ${member.name} submitted for approval (total ${total}).` });
+    revalidatePath('/dashboard/members');
     revalidatePath('/dashboard/approvals');
     return { success: true as const, requestId, paymentLogId: log.id };
   } catch (error) {
