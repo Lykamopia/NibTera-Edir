@@ -262,10 +262,11 @@ export default function MemberProfileClient({ initial, memberId }: { initial: Pr
                         <TableCell className="hidden font-mono text-xs text-muted-foreground md:table-cell">{l.transactionId}</TableCell>
                         <TableCell>
                           <div className="flex flex-wrap gap-1">
-                            {l.contributionAmount != null && l.contributionAmount > 0 && <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">Contribution {money(l.contributionAmount, cur)}</span>}
-                            {l.penaltyAmount != null && l.penaltyAmount > 0 && <span className="rounded bg-warning/10 px-1.5 py-0.5 text-[10px] text-warning">Penalty {money(l.penaltyAmount, cur)}</span>}
+                            {l.contributionAmount > 0 && <span className="rounded bg-success/10 px-1.5 py-0.5 text-[10px] text-success">Contribution {money(l.contributionAmount, cur)}</span>}
+                            {l.penaltyAmount > 0 && <span className="rounded bg-warning/10 px-1.5 py-0.5 text-[10px] text-warning">Penalty {money(l.penaltyAmount, cur)}</span>}
+                            {l.otherAmount > 0 && <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">Other {money(l.otherAmount, cur)}</span>}
                             {l.coverage?.months > 0 && <span className="rounded bg-primary/5 px-1.5 py-0.5 text-[10px] text-primary">{l.coverage.months} mo covered</span>}
-                            {!(l.contributionAmount > 0) && !(l.penaltyAmount > 0) && !(l.coverage?.months > 0) && <span className="text-xs text-muted-foreground">—</span>}
+                            {!(l.contributionAmount > 0) && !(l.penaltyAmount > 0) && !(l.otherAmount > 0) && !(l.coverage?.months > 0) && <span className="text-xs text-muted-foreground">—</span>}
                           </div>
                         </TableCell>
                         <TableCell><Badge variant="outline" className={PAY_STATUS[l.status] ?? ''}>{l.displayStatus ?? l.status}</Badge></TableCell>

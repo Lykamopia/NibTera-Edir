@@ -10,6 +10,8 @@
  */
 
 import { Prisma } from '@prisma/client';
+import { computeContributionArrears } from '@/lib/data';
+import { writeAudit } from '@/lib/audit';
 
 export interface PaymentBreakdown {
   installment?: number;
@@ -58,9 +60,14 @@ export async function settlePaymentTx(tx: Prisma.TransactionClient, input: Settl
   const status = await tx.paymentStatus.findUnique({ where: { memberId: input.memberId } });
   const settings = await tx.member.findUnique({
     where: { id: input.memberId },
-    select: { joinDate: true, edir: { select: { settings: true } } },
+    select: {
+      joinDate: true, status: true, edirId: true, name: true,
+      user: { select: { id: true } },
+      edir: { select: { settings: true } },
+    },
   });
   const monthlyFee = settings?.edir?.settings?.monthlyFee ?? D(0);
+  const dueDay = settings?.edir?.settings?.dueDay ?? 1;
   const prevMonthsPaid = status?.monthsPaid ?? 0;
 
   // The late-penalty portion of a payment is NOT part of the member's balance
@@ -118,6 +125,42 @@ export async function settlePaymentTx(tx: Prisma.TransactionClient, input: Settl
       status: newBalance.lessThanOrEqualTo(0) ? 'PAID' : 'PENDING',
     },
   });
+
+  // ── Auto-reinstatement ───────────────────────────────────────────────────────
+  // A SUSPENDED member who has now cleared EVERYTHING they owe — no pooled
+  // balance, no contribution arrears, no pending installments — returns to ACTIVE
+  // standing automatically, the moment the settling payment lands (mini-app or
+  // manual). Suspension never blocked their login, so no user-account change is
+  // needed. (TERMINATED members stay terminated — they return only via the
+  // explicit receipt-backed reinstatement flow, which flips status itself.)
+  if (settings?.status === 'SUSPENDED' && newBalance.lessThanOrEqualTo(0)) {
+    const { monthsBehind } = computeContributionArrears({
+      joinDate: settings.joinDate,
+      dueDay,
+      monthsPaid: newMonthsPaid,
+      monthlyFee: Number(monthlyFee),
+    });
+    const pendingInstallments = await tx.installment.count({
+      where: { plan: { memberId: input.memberId }, status: 'PENDING' },
+    });
+    if (monthsBehind <= 0 && pendingInstallments === 0) {
+      await tx.member.update({ where: { id: input.memberId }, data: { status: 'ACTIVE' } });
+      if (settings.user?.id) {
+        await tx.notification.create({
+          data: {
+            userId: settings.user.id, edirId: settings.edirId, type: 'member', priority: 'normal',
+            title: 'Membership reinstated',
+            body: 'Your dues are fully settled — your membership is active again. Welcome back.',
+            linkUrl: '/dashboard/account',
+          },
+        });
+      }
+      await writeAudit({
+        edirId: settings.edirId, action: 'MEMBER_AUTO_REINSTATED', targetType: 'Member', targetId: input.memberId,
+        details: `${settings.name}: dues fully settled → reinstated to ACTIVE automatically.`,
+      }, tx);
+    }
+  }
 
   if (input.paymentLogId) {
     // Record which contribution months this payment covered, so the member can

@@ -255,8 +255,11 @@ export async function getMemberPaymentHistory(memberId: string) {
       payerAccount: (meta.payerAccount as string) ?? null,
       payerPhone,
       bankRef: l.receiptUrl ?? (meta.bankRef as string) ?? null,
-      contributionAmount: meta.installment != null ? Number(meta.installment) : null,
-      penaltyAmount: meta.latePenalty != null ? Number(meta.latePenalty) : null,
+      // Contribution = monthly-dues portion (arrears + registration installment);
+      // penalty = late penalty; other = interest/service/reinstatement/pooled.
+      contributionAmount: metaSum(meta, ['installment', 'arrears']),
+      penaltyAmount: metaSum(meta, ['latePenalty']),
+      otherAmount: metaSum(meta, ['interest', 'serviceFees', 'other']),
       dueDate: cov?.to ?? null,
     };
   });
@@ -644,8 +647,9 @@ export async function getPaymentLogs(params: PaymentLogFilters & { page?: number
         edirName: l.edir?.name ?? null,
         edirLogoUrl: l.edir?.logoUrl ?? null,
         // ── Detailed fields (present per source; null when not captured) ──
-        contributionAmount: meta.installment != null ? Number(meta.installment) : null,
-        penaltyAmount: meta.latePenalty != null ? Number(meta.latePenalty) : null,
+        contributionAmount: metaSum(meta, ['installment', 'arrears']),
+        penaltyAmount: metaSum(meta, ['latePenalty']),
+        otherAmount: metaSum(meta, ['interest', 'serviceFees', 'other']),
         coverage: cov ? { months: Number(cov.months ?? 0), from: cov.from ?? null, to: cov.to ?? null } : null,
         dueDate: cov?.to ?? null,
         payerPhone,
@@ -758,4 +762,11 @@ export async function voidPayment(paymentLogId: string, reason?: string) {
 function safeParse(s: string | null): Record<string, unknown> {
   if (!s) return {};
   try { const v = JSON.parse(s); return typeof v === 'object' && v ? v : {}; } catch { return {}; }
+}
+
+/** Sum a set of numeric breakdown keys from a payment's meta; null when zero so
+ *  the UI can hide the chip. */
+function metaSum(meta: Record<string, unknown>, keys: string[]): number | null {
+  const total = keys.reduce((s, k) => s + (meta[k] == null || isNaN(Number(meta[k])) ? 0 : Number(meta[k])), 0);
+  return total > 0 ? total : null;
 }

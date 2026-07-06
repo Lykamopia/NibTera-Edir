@@ -278,8 +278,12 @@ export async function getMemberProfile(id: string) {
         payerAccount: (meta.payerAccount as string) ?? null,
         payerPhone: (meta.payerPhone as string) ?? null,
         bankRef: l.receiptUrl ?? (meta.bankRef as string) ?? null,
-        contributionAmount: meta.installment != null ? Number(meta.installment) : null,
-        penaltyAmount: meta.latePenalty != null ? Number(meta.latePenalty) : null,
+        // Contribution = the monthly-dues portion: arrears (unpaid months) PLUS
+        // any registration installment line. Penalty is the late-payment penalty.
+        // Other = interest + service fees + reinstatement/pooled charges.
+        contributionAmount: (() => { const c = num(meta.installment) + num(meta.arrears); return c > 0 ? c : null; })(),
+        penaltyAmount: (() => { const p = num(meta.latePenalty); return p > 0 ? p : null; })(),
+        otherAmount: (() => { const o = num(meta.interest) + num(meta.serviceFees) + num(meta.other); return o > 0 ? o : null; })(),
         dueDate: cov?.to ?? null,
       };
     }),
