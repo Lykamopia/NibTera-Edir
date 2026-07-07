@@ -24,9 +24,16 @@ import { ReceiptUpload, type ReceiptFile } from '@/components/ui/receipt-upload'
 import { PaymentReceiptModal } from '@/components/payment-receipt-modal';
 import { getMemberOutstanding, recordManualPayment, getPaymentsSummary, getMemberPaymentHistory, getPaymentsMatrix } from '@/app/actions/payments';
 
+// Distinct, labeled charge lines so the operator knows exactly what each amount
+// pays for and can explain the payment to the member. Order = suggested priority.
 const LINES = [
-  ['installment', 'Installment / Contribution'], ['arrears', 'Overdue Amount'], ['latePenalty', 'Late Penalty'],
-  ['interest', 'Interest'], ['serviceFees', 'Service Fees'], ['other', 'Other'],
+  ['arrears', 'Monthly Contributions', 'Unpaid monthly membership contributions (arrears).'],
+  ['latePenalty', 'Late Penalty', 'Penalty accrued for overdue contributions.'],
+  ['registrationFee', 'Registration Fee', 'Outstanding membership registration installments.'],
+  ['reinstatementFee', 'Reinstatement Fee', 'Fee to restore a suspended or terminated membership.'],
+  ['assetCompensation', 'Asset Loss / Compensation', 'Compensation owed for lost or damaged Edir assets.'],
+  ['eventPenalties', 'Event Penalties', 'Penalties for missing mandatory events.'],
+  ['other', 'Other Charges', 'Any remaining account balance (interest, service fees, misc.).'],
 ] as const;
 type LineKey = (typeof LINES)[number][0];
 type SortKey = 'name' | 'due' | 'penalty' | 'contributions' | 'months';
@@ -276,7 +283,9 @@ const STATUS_META: Record<string, { label: string; icon: any; cls: string; dot: 
 };
 
 const LINE_LABEL: Record<string, string> = {
-  installment: 'Installment', arrears: 'Overdue', latePenalty: 'Late penalty', interest: 'Interest', serviceFees: 'Service fees', other: 'Other',
+  installment: 'Installment', arrears: 'Monthly contributions', latePenalty: 'Late penalty',
+  registrationFee: 'Registration fee', reinstatementFee: 'Reinstatement fee', assetCompensation: 'Asset loss',
+  eventPenalties: 'Event penalties', interest: 'Interest', serviceFees: 'Service fees', other: 'Other charges',
 };
 
 function HistoryDialog({ member, onClose, onRecord }: { member: any; onClose: () => void; onRecord: () => void }) {
@@ -427,14 +436,16 @@ function SummaryTile({ label, value, icon: Icon, tone }: { label: string; value:
   );
 }
 
+const EMPTY_BREAKDOWN: Record<string, number> = { installment: 0, arrears: 0, latePenalty: 0, registrationFee: 0, reinstatementFee: 0, assetCompensation: 0, eventPenalties: 0, interest: 0, serviceFees: 0, other: 0 };
+
 function RecordDialog({ member, onClose, onDone }: { member: any; onClose: () => void; onDone: () => void }) {
-  const [breakdown, setBreakdown] = useState<Record<LineKey, number>>({ installment: 0, arrears: 0, latePenalty: 0, interest: 0, serviceFees: 0, other: 0 });
+  const [breakdown, setBreakdown] = useState<Record<string, number>>({ ...EMPTY_BREAKDOWN });
   const [info, setInfo] = useState<any | null>(null);
   const [receipt, setReceipt] = useState<ReceiptFile | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  const applySuggested = (o: any) => setBreakdown(o.breakdown as any);
+  const applySuggested = (o: any) => setBreakdown({ ...EMPTY_BREAKDOWN, ...(o.breakdown ?? {}) });
   useEffect(() => {
     getMemberOutstanding(member.id).then(o => { if (o) { setInfo(o); applySuggested(o); } }).finally(() => setLoading(false));
   }, [member.id]);
@@ -483,16 +494,22 @@ function RecordDialog({ member, onClose, onDone }: { member: any; onClose: () =>
             {info.penalty && <p className="flex items-start gap-1.5 rounded-md bg-warning/10 p-2 text-[11px] text-warning"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> Late penalty auto-applied: {info.penalty.rule} ({info.penalty.overdueDays} days overdue).</p>}
 
             <p className="rounded-md bg-muted/40 p-2 text-[11px] text-muted-foreground">
-              The <span className="font-medium text-foreground">Outstanding Balance</span> is the sum of the lines below — unpaid contributions (Overdue Amount), due installments, late penalties, and any other charges. Adjust any line to record a partial payment.
+              Each line below is a <span className="font-medium text-foreground">distinct charge</span> with its own purpose, pre-filled from what the member owes. Only lines that apply carry an amount — adjust any of them to record a partial payment, and the member can see exactly what they’re paying for.
             </p>
 
-            <div className="space-y-2.5">
-              {LINES.map(([key, label]) => (
-                <div key={key} className="flex items-center justify-between gap-3">
-                  <Label className="text-sm text-muted-foreground">{label}</Label>
-                  <Input type="number" min={0} className="w-36 text-right" value={breakdown[key]} onChange={e => set(key, e.target.value)} />
-                </div>
-              ))}
+            <div className="space-y-1">
+              {LINES.map(([key, label, description]) => {
+                const active = (breakdown[key] ?? 0) > 0;
+                return (
+                  <div key={key} className={`flex items-start justify-between gap-3 rounded-lg border px-2.5 py-2 transition-colors ${active ? 'border-primary/25 bg-primary/[0.03]' : 'border-transparent'}`}>
+                    <div className="min-w-0">
+                      <Label htmlFor={`line-${key}`} className="text-sm font-medium text-foreground">{label}</Label>
+                      <p className="text-[11px] leading-tight text-muted-foreground">{description}</p>
+                    </div>
+                    <Input id={`line-${key}`} type="number" min={0} className="w-32 shrink-0 text-right tabular-nums" value={breakdown[key] ?? 0} onChange={e => set(key, e.target.value)} />
+                  </div>
+                );
+              })}
             </div>
 
             <div className="flex items-center justify-between gap-2">

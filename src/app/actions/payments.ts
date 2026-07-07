@@ -87,6 +87,39 @@ export async function getMemberOutstanding(memberId: string) {
     nextInstallmentDue: nextInstallment ? Number(nextInstallment.amount) : 0,
   });
 
+  // Itemize the pooled balance into named charges so the record dialog can tell
+  // the operator exactly WHAT each portion pays for (registration, asset loss,
+  // event penalties, residual) — same authoritative sources as the matrix.
+  const num = (v: unknown) => (v == null || isNaN(Number(v)) ? 0 : Number(v));
+  const [regInstallments, assetComp, eventPen] = await Promise.all([
+    prisma.installment.aggregate({ where: { status: 'PENDING', plan: { type: 'REGISTRATION', memberId: member.id } }, _sum: { amount: true } }),
+    prisma.assetIssuance.aggregate({ where: { memberId: member.id, status: 'COMPENSATION_PENDING' }, _sum: { compensation: true } }),
+    prisma.eventParticipant.findMany({ where: { memberId: member.id, penalized: true }, select: { event: { select: { absencePenalty: true } } } }),
+  ]);
+  const eventPenaltiesTotal = eventPen.reduce((s, e) => s + num(e.event?.absencePenalty), 0);
+
+  // Waterfall the pooled balance in priority order so the lines sum exactly to
+  // the balance (never double-count): registration → asset → event → residual.
+  let remaining = balance;
+  const registrationFee = Math.min(num(regInstallments._sum.amount), remaining); remaining -= registrationFee;
+  const assetCompensation = Math.min(num(assetComp._sum.compensation), remaining); remaining -= assetCompensation;
+  const eventPenalties = Math.min(eventPenaltiesTotal, remaining); remaining -= eventPenalties;
+  const accountBalance = Math.max(0, remaining);
+
+  // Named, editable suggestion for the dialog (sums to dues.total).
+  const suggested = {
+    installment: 0,
+    arrears: dues.contributionArrears,
+    latePenalty: dues.latePenalty,
+    registrationFee,
+    reinstatementFee: dues.reinstatementFee,
+    assetCompensation,
+    eventPenalties,
+    interest: 0,
+    serviceFees: 0,
+    other: accountBalance,
+  };
+
   return {
     memberId: member.id,
     name: member.name,
@@ -100,9 +133,13 @@ export async function getMemberOutstanding(memberId: string) {
     reinstatementFee: dues.reinstatementFee,
     contributionArrears: dues.contributionArrears,
     dues, // full itemized dues (total = sum of all lines)
-    // Auto-filled breakdown covers the full amount due (arrears + penalty +
-    // reinstatement + pooled balance).
-    breakdown: dues.breakdown,
+    // Distinct, labeled charges so the operator can explain the payment.
+    registrationFee,
+    assetCompensation,
+    eventPenalties,
+    accountBalance,
+    // Auto-filled, itemized suggestion — covers the full amount due.
+    breakdown: suggested,
     dueInstallmentCount: dueInstallments.length,
   };
 }
@@ -233,7 +270,7 @@ export async function getPaymentsMatrix(params: { query?: string; status?: strin
 
 // ─── Per-member payment history (detail view) ────────────────────────────────
 
-const BREAKDOWN_KEYS = ['installment', 'arrears', 'latePenalty', 'interest', 'serviceFees', 'other'] as const;
+const BREAKDOWN_KEYS = ['installment', 'arrears', 'latePenalty', 'registrationFee', 'reinstatementFee', 'assetCompensation', 'eventPenalties', 'interest', 'serviceFees', 'other'] as const;
 
 /** Full payment history + running figures for a single member (tenant-scoped). */
 export async function getMemberPaymentHistory(memberId: string) {
@@ -296,7 +333,7 @@ export async function getMemberPaymentHistory(memberId: string) {
       // penalty = late penalty; other = interest/service/reinstatement/pooled.
       contributionAmount: metaSum(meta, ['installment', 'arrears']),
       penaltyAmount: metaSum(meta, ['latePenalty']),
-      otherAmount: metaSum(meta, ['interest', 'serviceFees', 'other']),
+      otherAmount: metaSum(meta, ['registrationFee', 'reinstatementFee', 'assetCompensation', 'eventPenalties', 'interest', 'serviceFees', 'other']),
       dueDate: cov?.to ?? null,
     };
   });
@@ -363,6 +400,10 @@ const breakdownSchema = z.object({
   installment: z.coerce.number().min(0).default(0),
   arrears: z.coerce.number().min(0).default(0),
   latePenalty: z.coerce.number().min(0).default(0),
+  registrationFee: z.coerce.number().min(0).default(0),
+  reinstatementFee: z.coerce.number().min(0).default(0),
+  assetCompensation: z.coerce.number().min(0).default(0),
+  eventPenalties: z.coerce.number().min(0).default(0),
   interest: z.coerce.number().min(0).default(0),
   serviceFees: z.coerce.number().min(0).default(0),
   other: z.coerce.number().min(0).default(0),
@@ -686,7 +727,7 @@ export async function getPaymentLogs(params: PaymentLogFilters & { page?: number
         // ── Detailed fields (present per source; null when not captured) ──
         contributionAmount: metaSum(meta, ['installment', 'arrears']),
         penaltyAmount: metaSum(meta, ['latePenalty']),
-        otherAmount: metaSum(meta, ['interest', 'serviceFees', 'other']),
+        otherAmount: metaSum(meta, ['registrationFee', 'reinstatementFee', 'assetCompensation', 'eventPenalties', 'interest', 'serviceFees', 'other']),
         coverage: cov ? { months: Number(cov.months ?? 0), from: cov.from ?? null, to: cov.to ?? null } : null,
         dueDate: cov?.to ?? null,
         payerPhone,
