@@ -15,6 +15,7 @@ function contributionMonthsBehind(member: any, settings: any): number {
     dueDay: settings?.dueDay ?? 1,
     monthsPaid: member.paymentStatus?.monthsPaid ?? 0,
     monthlyFee,
+    firstContributionAtJoin: member.firstContributionAtJoin,
   })
   return monthsBehind
 }

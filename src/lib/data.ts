@@ -109,7 +109,7 @@ export async function fetchDetailedMemberByPhone(phone: string): Promise<Detaile
   // ledger (months due since join vs months paid), NOT from paymentStatus.balance —
   // that balance holds registration fees, absence penalties and asset compensation,
   // never monthly contributions, so balance/monthlyFee is not months-behind.
-  const { monthsBehind, arrears: contributionArrears } = computeContributionArrears({ joinDate: member.joinDate, dueDay, monthsPaid, monthlyFee, now });
+  const { monthsBehind, arrears: contributionArrears } = computeContributionArrears({ joinDate: member.joinDate, dueDay, monthsPaid, monthlyFee, now, firstContributionAtJoin: member.firstContributionAtJoin });
 
   // ── Installments: full summary across all plans ──────────────────────────────
   const allInstallments = member.installmentPlans.flatMap(p => p.installments.map(i => ({ ...i, planType: p.type })));
@@ -169,6 +169,7 @@ export async function fetchDetailedMemberByPhone(phone: string): Promise<Detaile
     monthsPaid,
     settings,
     nextInstallmentDue: pendingInstallments[0] ? Number(pendingInstallments[0].amount) : 0,
+    firstContributionAtJoin: member.firstContributionAtJoin,
     now,
   });
 
@@ -272,6 +273,7 @@ export async function computeMemberPayWindow(memberId: string, now = new Date())
     dueDay: settings?.dueDay ?? 1,
     monthsPaid: member.paymentStatus?.monthsPaid ?? 0,
     monthlyFee: Number(settings?.monthlyFee ?? 0),
+    firstContributionAtJoin: member.firstContributionAtJoin,
     now,
   });
   const hasPendingInstallment = member.installmentPlans.some(p => p.installments.length > 0);
@@ -290,7 +292,7 @@ export async function computeMemberPayWindow(memberId: string, now = new Date())
  * paymentStatus.balance, which mixes registration fees, absence penalties and
  * asset compensation and therefore cannot represent contribution arrears.
  */
-export function computeContributionArrears(opts: { joinDate: Date; dueDay: number; monthsPaid: number; monthlyFee: number; now?: Date }): { monthsBehind: number; arrears: number } {
+export function computeContributionArrears(opts: { joinDate: Date; dueDay: number; monthsPaid: number; monthlyFee: number; now?: Date; firstContributionAtJoin?: boolean }): { monthsBehind: number; arrears: number } {
   const { joinDate, monthsPaid, monthlyFee } = opts;
   const now = opts.now ?? new Date();
   if (monthlyFee <= 0) return { monthsBehind: 0, arrears: 0 };
@@ -308,6 +310,11 @@ export function computeContributionArrears(opts: { joinDate: Date; dueDay: numbe
     const monthsBetween = (now.getFullYear() - firstDue.getFullYear()) * 12 + (now.getMonth() - firstDue.getMonth());
     dueMonths = monthsBetween + (now.getDate() >= dueDay ? 1 : 0);
   }
+
+  // Policy (new members): the first month's contribution is owed immediately at
+  // registration, collected with the registration fee — so count one extra due
+  // month from day one. Existing members (flag false) keep the legacy schedule.
+  if (opts.firstContributionAtJoin) dueMonths += 1;
 
   const monthsBehind = Math.max(0, dueMonths - Math.max(0, monthsPaid));
   return { monthsBehind, arrears: monthsBehind * monthlyFee };
@@ -421,6 +428,7 @@ export function computeMemberDues(input: {
     dailyPenaltyEnabled?: boolean | null; dailyPenaltyType?: string | null; dailyPenaltyValue?: unknown; dailyPenaltyMaxDays?: unknown;
   } | null | undefined;
   nextInstallmentDue?: number; // amount of the next PENDING installment, if any
+  firstContributionAtJoin?: boolean; // first month owed at registration (new-member policy)
   now?: Date;
 }): MemberDues {
   const now = input.now ?? new Date();
@@ -434,6 +442,7 @@ export function computeMemberDues(input: {
 
   const { monthsBehind, arrears: contributionArrears } = computeContributionArrears({
     joinDate: input.joinDate, dueDay, monthsPaid: input.monthsPaid, monthlyFee, now,
+    firstContributionAtJoin: input.firstContributionAtJoin,
   });
 
   const penalty = computePenalty({

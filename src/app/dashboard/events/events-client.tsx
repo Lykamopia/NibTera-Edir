@@ -11,7 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
-import { Loader2, Search, Plus, CalendarDays, Users, CheckCircle2, Ban, X, Download, ChevronUp, ChevronDown, ArrowUpDown, CalendarClock, AlertTriangle, Pencil, MapPin, Trash2, ClipboardCheck } from 'lucide-react';
+import { Loader2, Search, Plus, CalendarDays, Users, CheckCircle2, Ban, X, Download, ChevronUp, ChevronDown, ArrowUpDown, CalendarClock, AlertTriangle, Pencil, MapPin, Trash2, ClipboardCheck, UserCheck } from 'lucide-react';
 import { getMembers } from '@/app/actions/members';
 import {
   getEvents, getEvent, getEventsSummary, saveEvent, cancelEvent, rescheduleEvent, getEventCapabilities,
@@ -44,6 +44,7 @@ export default function EventsClient() {
   const [sort, setSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'datetime', dir: 'desc' });
   const [editing, setEditing] = useState<any | null | undefined>(undefined);
   const [finalizeId, setFinalizeId] = useState<string | null>(null);
+  const [attendanceTarget, setAttendanceTarget] = useState<any | null>(null);
   const [reschedTarget, setReschedTarget] = useState<any | null>(null);
   const [caps, setCaps] = useState<EventCaps>(NO_CAPS);
 
@@ -141,6 +142,9 @@ export default function EventsClient() {
                       <Button size="sm" variant="outline" className="mr-1" onClick={() => setEditing(e)}>
                         <Pencil className="h-4 w-4 mr-1" /> {e.status === 'SCHEDULED' && caps.canManage ? 'Edit' : 'View'}
                       </Button>
+                      {e.status === 'SCHEDULED' && e.attendanceRequired && caps.canManage && (
+                        <Button size="sm" variant="ghost" className="mr-1" onClick={() => setAttendanceTarget(e)}><UserCheck className="h-4 w-4 mr-1" /> Attendance</Button>
+                      )}
                       {e.status === 'SCHEDULED' && caps.canReschedule && <Button size="sm" variant="ghost" className="mr-1" onClick={() => setReschedTarget(e)}><CalendarClock className="h-4 w-4 mr-1" /> Reschedule</Button>}
                       {e.status === 'SCHEDULED' && e.attendanceRequired && caps.canFinalize && (
                         <Button size="sm" className="mr-1" onClick={() => setFinalizeId(e.id)}><ClipboardCheck className="h-4 w-4 mr-1" /> Finalize</Button>
@@ -156,6 +160,7 @@ export default function EventsClient() {
       <p className="text-xs text-muted-foreground">{sorted.length} event(s)</p>
 
       {editing !== undefined && <EventEditDialog event={editing} caps={caps} onClose={() => setEditing(undefined)} onChanged={load} />}
+      {attendanceTarget && <AttendanceDialog eventId={attendanceTarget.id} caps={caps} onClose={() => setAttendanceTarget(null)} onChanged={load} />}
       {finalizeId && <FinalizeDialog eventId={finalizeId} caps={caps} onClose={() => setFinalizeId(null)} onChanged={load} />}
       {reschedTarget && <RescheduleDialog event={reschedTarget} onClose={() => setReschedTarget(null)} onDone={() => { setReschedTarget(null); load(); }} />}
     </div>
@@ -255,7 +260,6 @@ function EventEditDialog({ event: initial, caps, onClose, onChanged }: { event: 
   const [savingDetails, setSavingDetails] = useState(false);
   const [busy, setBusy] = useState(false);
   const [adding, setAdding] = useState(false);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
   const confirm = useConfirm();
 
   const reload = useCallback(() => {
@@ -286,11 +290,8 @@ function EventEditDialog({ event: initial, caps, onClose, onChanged }: { event: 
     } else toast.error(res?.error || 'Failed to save event.');
   };
 
-  const onSetAttendance = async (pid: string, s: string) => { const res = await setAttendance(pid, s as any); if (res?.success) reload(); else toast.error(res?.error || 'Failed.'); };
-  const onBulk = async (s: string, ids?: string[]) => { setBusy(true); const res = await setAttendanceBulk(event.id, s as any, ids); setBusy(false); if (res?.success) { toast.success(`Marked ${res.updated} as ${s.toLowerCase()}.`); setSelected(new Set()); reload(); } else toast.error(res?.error || 'Failed.'); };
   const onRemove = async (pid: string) => { const res = await removeParticipant(pid); if (res?.success) reload(); else toast.error(res?.error || 'Failed.'); };
   const onInviteAll = async () => { setBusy(true); const res = await inviteAllActiveMembers(event.id); setBusy(false); if (res?.success) { toast.success(`Invited ${res.added} member(s).`); reload(); } else toast.error(res?.error || 'Failed.'); };
-  const toggleSel = (id: string) => setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
   const participants: any[] = event?.participants ?? [];
   const attCounts = participants.reduce((a: Record<string, number>, p) => { a[p.status] = (a[p.status] ?? 0) + 1; return a; }, {});
@@ -311,7 +312,7 @@ function EventEditDialog({ event: initial, caps, onClose, onChanged }: { event: 
                   {!isCreate && <Badge variant="outline" className={STATUS[status]?.cls}>{STATUS[status]?.label ?? status}</Badge>}
                 </DialogTitle>
                 {!isCreate && !canEdit && <DialogDescription>{fmt(event.datetime)}{event.location ? ` · ${event.location}` : ''}</DialogDescription>}
-                {canEdit && <DialogDescription>Update the event details and manage its attendance. Finalizing is a separate step.</DialogDescription>}
+                {canEdit && <DialogDescription>Update the event details and its participant list. Marking present/absent and finalizing are separate steps.</DialogDescription>}
               </DialogHeader>
             </div>
 
@@ -355,7 +356,7 @@ function EventEditDialog({ event: initial, caps, onClose, onChanged }: { event: 
               {!isCreate && (
                 <div className="space-y-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <h3 className="flex items-center gap-2 text-sm font-semibold"><Users className="h-4 w-4 text-primary" /> Participants &amp; Attendance <span className="font-normal text-muted-foreground">({participants.length})</span></h3>
+                    <h3 className="flex items-center gap-2 text-sm font-semibold"><Users className="h-4 w-4 text-primary" /> Participants <span className="font-normal text-muted-foreground">({participants.length})</span></h3>
                     <div className="flex flex-wrap gap-1.5">
                       {Object.entries(attCounts).map(([s, n]) => <Badge key={s} variant="outline" className={ATT_TONE[s] ?? ''}>{s} {n as number}</Badge>)}
                     </div>
@@ -365,14 +366,11 @@ function EventEditDialog({ event: initial, caps, onClose, onChanged }: { event: 
                     <div className="flex flex-wrap items-center gap-1.5 rounded-md border bg-muted/30 p-2">
                       <Button size="sm" variant="outline" onClick={() => setAdding(true)} disabled={busy}><Plus className="mr-1 h-4 w-4" /> Add members</Button>
                       <Button size="sm" variant="outline" onClick={onInviteAll} disabled={busy}>Invite all active</Button>
-                      {participants.length > 0 && <>
-                        <span className="mx-1 h-4 w-px bg-border" />
-                        <button type="button" onClick={() => setSelected(new Set(participants.map(p => p.id)))} className="rounded-full border bg-card px-2.5 py-1 text-xs font-medium hover:bg-muted">Select all</button>
-                        {selected.size > 0 && <button type="button" onClick={() => setSelected(new Set())} className="rounded-full px-2.5 py-1 text-xs text-muted-foreground hover:underline">Clear</button>}
-                        <Button size="sm" variant="outline" disabled={busy} onClick={() => onBulk('PRESENT')}>Mark all present</Button>
-                        {selected.size > 0 && <Button size="sm" disabled={busy} onClick={() => onBulk('PRESENT', Array.from(selected))}>Mark selected present ({selected.size})</Button>}
-                        {selected.size > 0 && <Button size="sm" variant="outline" disabled={busy} onClick={() => onBulk('ABSENT', Array.from(selected))}>Mark selected absent</Button>}
-                      </>}
+                      {event?.attendanceRequired && (
+                        <span className="ml-auto inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+                          <UserCheck className="h-3.5 w-3.5" /> Mark present/absent from the <span className="font-medium text-foreground">Attendance</span> action.
+                        </span>
+                      )}
                     </div>
                   )}
 
@@ -381,24 +379,16 @@ function EventEditDialog({ event: initial, caps, onClose, onChanged }: { event: 
                       <div className="flex h-24 items-center justify-center"><p className="text-sm text-muted-foreground">No participants yet.{canEdit ? ' Add members above.' : ''}</p></div>
                     ) : (
                       <Table>
-                        <TableHeader><TableRow>{canEdit && <TableHead className="w-8"></TableHead>}<TableHead>Member</TableHead><TableHead>Role</TableHead><TableHead>Attendance</TableHead><TableHead></TableHead></TableRow></TableHeader>
+                        <TableHeader><TableRow><TableHead>Member</TableHead><TableHead>Role</TableHead><TableHead>Attendance</TableHead><TableHead></TableHead></TableRow></TableHeader>
                         <TableBody>
                           {participants.map((p: any) => (
-                            <TableRow key={p.id} className={selected.has(p.id) ? 'bg-primary/5' : ''}>
-                              {canEdit && <TableCell><input type="checkbox" checked={selected.has(p.id)} onChange={() => toggleSel(p.id)} /></TableCell>}
+                            <TableRow key={p.id}>
                               <TableCell>
                                 <div className="font-medium">{p.name}</div>
                                 <div className="font-mono text-xs text-muted-foreground">{p.memberCode}{p.penalized && <span className="ml-2 text-destructive">penalized</span>}</div>
                               </TableCell>
                               <TableCell className="text-sm text-muted-foreground">{p.role || '—'}</TableCell>
-                              <TableCell>
-                                {canEdit ? (
-                                  <Select value={p.status} onValueChange={(v) => onSetAttendance(p.id, v)}>
-                                    <SelectTrigger className="h-8 w-36"><SelectValue /></SelectTrigger>
-                                    <SelectContent>{ATT_STATUSES.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
-                                  </Select>
-                                ) : <Badge variant="outline" className={ATT_TONE[p.status] ?? ''}>{p.status}</Badge>}
-                              </TableCell>
+                              <TableCell><Badge variant="outline" className={ATT_TONE[p.status] ?? ''}>{p.status}</Badge></TableCell>
                               <TableCell className="text-right">
                                 {canEdit && !p.penalized && <Button size="sm" variant="ghost" className="text-destructive" onClick={() => onRemove(p.id)} title="Remove"><Trash2 className="h-4 w-4" /></Button>}
                               </TableCell>
@@ -427,6 +417,102 @@ function EventEditDialog({ event: initial, caps, onClose, onChanged }: { event: 
         )}
       </DialogContent>
       {adding && event && <AddMembersDialog eventId={event.id} existing={participants.map((p: any) => p.memberId)} onClose={() => setAdding(false)} onDone={() => { setAdding(false); reload(); }} />}
+    </Dialog>
+  );
+}
+
+/** Take-attendance flow — reached from the "Attendance" button. Marks each
+ *  participant present/absent/etc. (per-row and bulk). Deliberately separate
+ *  from editing the event and from finalizing it. Does not add/remove members
+ *  or apply penalties — that stays in Edit and Finalize respectively. */
+function AttendanceDialog({ eventId, caps, onClose, onChanged }: { eventId: string; caps: EventCaps; onClose: () => void; onChanged: () => void }) {
+  const [event, setEvent] = useState<any | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  const reload = useCallback(() => { setLoading(true); getEvent(eventId).then(e => { if (e) setEvent(e); }).catch(() => toast.error('Failed to load event.')).finally(() => setLoading(false)); }, [eventId]);
+  useEffect(() => { reload(); }, [reload]);
+
+  const status = event?.status ?? 'SCHEDULED';
+  const canMark = caps.canManage && status === 'SCHEDULED';
+  const participants: any[] = event?.participants ?? [];
+  const attCounts = participants.reduce((a: Record<string, number>, p) => { a[p.status] = (a[p.status] ?? 0) + 1; return a; }, {});
+
+  const onSet = async (pid: string, s: string) => { const res = await setAttendance(pid, s as any); if (res?.success) reload(); else toast.error(res?.error || 'Failed.'); };
+  const onBulk = async (s: string, ids?: string[]) => { setBusy(true); const res = await setAttendanceBulk(eventId, s as any, ids); setBusy(false); if (res?.success) { toast.success(`Marked ${res.updated} as ${s.toLowerCase()}.`); setSelected(new Set()); reload(); } else toast.error(res?.error || 'Failed.'); };
+  const toggleSel = (id: string) => setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) { onClose(); onChanged(); } }}>
+      <DialogContent className="flex max-h-[90vh] max-w-2xl flex-col gap-0 overflow-hidden p-0">
+        {loading ? (
+          <div className="flex h-56 items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
+        ) : (
+          <>
+            <div className="border-b bg-gradient-to-r from-primary/10 to-transparent p-5">
+              <DialogHeader className="space-y-1 text-left">
+                <DialogTitle className="flex flex-wrap items-center gap-2"><UserCheck className="h-5 w-5 text-primary" /> Take Attendance</DialogTitle>
+                <DialogDescription>{event?.title} · {fmt(event?.datetime)}{event?.location ? ` · ${event.location}` : ''}</DialogDescription>
+              </DialogHeader>
+            </div>
+
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="flex items-center gap-2 text-sm font-semibold"><Users className="h-4 w-4 text-primary" /> Participants <span className="font-normal text-muted-foreground">({participants.length})</span></h3>
+                <div className="flex flex-wrap gap-1.5">
+                  {Object.entries(attCounts).map(([s, n]) => <Badge key={s} variant="outline" className={ATT_TONE[s] ?? ''}>{s} {n as number}</Badge>)}
+                </div>
+              </div>
+
+              {canMark && participants.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5 rounded-md border bg-muted/30 p-2">
+                  <button type="button" onClick={() => setSelected(new Set(participants.map(p => p.id)))} className="rounded-full border bg-card px-2.5 py-1 text-xs font-medium hover:bg-muted">Select all</button>
+                  {selected.size > 0 && <button type="button" onClick={() => setSelected(new Set())} className="rounded-full px-2.5 py-1 text-xs text-muted-foreground hover:underline">Clear</button>}
+                  <span className="mx-1 h-4 w-px bg-border" />
+                  <Button size="sm" variant="outline" disabled={busy} onClick={() => onBulk('PRESENT')}>Mark all present</Button>
+                  {selected.size > 0 && <Button size="sm" disabled={busy} onClick={() => onBulk('PRESENT', Array.from(selected))}>Mark selected present ({selected.size})</Button>}
+                  {selected.size > 0 && <Button size="sm" variant="outline" disabled={busy} onClick={() => onBulk('ABSENT', Array.from(selected))}>Mark selected absent</Button>}
+                </div>
+              )}
+
+              <div className="max-h-[24rem] overflow-y-auto rounded-md border">
+                {participants.length === 0 ? (
+                  <div className="flex h-24 items-center justify-center"><p className="text-sm text-muted-foreground">No participants yet. Add members from the Edit dialog first.</p></div>
+                ) : (
+                  <Table>
+                    <TableHeader><TableRow>{canMark && <TableHead className="w-8"></TableHead>}<TableHead>Member</TableHead><TableHead>Role</TableHead><TableHead>Attendance</TableHead></TableRow></TableHeader>
+                    <TableBody>
+                      {participants.map((p: any) => (
+                        <TableRow key={p.id} className={selected.has(p.id) ? 'bg-primary/5' : ''}>
+                          {canMark && <TableCell><input type="checkbox" checked={selected.has(p.id)} onChange={() => toggleSel(p.id)} /></TableCell>}
+                          <TableCell>
+                            <div className="font-medium">{p.name}</div>
+                            <div className="font-mono text-xs text-muted-foreground">{p.memberCode}{p.penalized && <span className="ml-2 text-destructive">penalized</span>}</div>
+                          </TableCell>
+                          <TableCell className="text-sm text-muted-foreground">{p.role || '—'}</TableCell>
+                          <TableCell>
+                            {canMark && !p.penalized ? (
+                              <Select value={p.status} onValueChange={(v) => onSet(p.id, v)}>
+                                <SelectTrigger className="h-8 w-36"><SelectValue /></SelectTrigger>
+                                <SelectContent>{ATT_STATUSES.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
+                              </Select>
+                            ) : <Badge variant="outline" className={ATT_TONE[p.status] ?? ''}>{p.status}</Badge>}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </div>
+            </div>
+
+            <DialogFooter className="border-t p-4">
+              <Button variant="outline" onClick={() => { onClose(); onChanged(); }}>Done</Button>
+            </DialogFooter>
+          </>
+        )}
+      </DialogContent>
     </Dialog>
   );
 }

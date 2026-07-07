@@ -15,7 +15,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import {
   Loader2, Search, CreditCard, Download, Wallet, Users, CalendarClock, ReceiptText,
   ChevronUp, ChevronDown, ArrowUpDown, AlertTriangle, Sparkles, History, FileText,
-  CheckCircle2, Clock, XCircle, Ban, TrendingDown, CalendarDays, Phone, Receipt,
+  CheckCircle2, Clock, XCircle, Ban, TrendingDown, CalendarDays, Phone, Receipt, Building2,
 } from 'lucide-react';
 import { PageHeader, StatCard, LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
 import { DateRangeFilter, ALL_TIME, toParam, dateRangeLabel, type DateRangeValue } from '@/components/ui/date-range-filter';
@@ -117,16 +117,20 @@ export default function PaymentsClient() {
   // members only ever see the distinct, named fees.
   const hasUnclassified = useMemo(() => rows.some(m => (m.accountBalance ?? 0) > 0), [rows]);
 
+  // Show the Edir column only when the list spans more than one Edir (a cross-
+  // tenant platform user) — a single-Edir admin doesn't need it.
+  const showEdir = useMemo(() => new Set(items.map(i => i.edirId)).size > 1, [items]);
+
   const exportRows = (list: any[], name: string) => {
-    const header = ['Member ID', 'Name', 'Phone', 'Status', 'Months Paid', 'Months Behind',
+    const header = ['Edir', 'Member ID', 'Name', 'Phone', 'Status', 'Months Paid', 'Months Behind',
       `Monthly Contributions (${cur})`, `Late Penalty (${cur})`, 'Penalty Rule', `Registration Fee (${cur})`,
       `Reinstatement Fee (${cur})`, `Asset Loss / Compensation (${cur})`, `Event Penalties (${cur})`,
-      `Unclassified (${cur})`, `Total Due (${cur})`, 'Last Payment'];
+      `Unclassified (${cur})`, `Total Due (${cur})`, `Pending Approval (${cur})`, 'Last Payment'];
     const data = list.map(m => [
-      m.memberId, m.name, m.phone || '', m.status, String(m.monthsPaid ?? 0), String(m.monthsBehind ?? 0),
+      m.edirName || '', m.memberId, m.name, m.phone || '', m.status, String(m.monthsPaid ?? 0), String(m.monthsBehind ?? 0),
       String(m.monthlyContributions ?? 0), String(m.latePenalty ?? 0), m.penaltyRule || '',
       String(m.registrationFee ?? 0), String(m.reinstatementFee ?? 0), String(m.assetCompensation ?? 0),
-      String(m.eventPenalties ?? 0), String(m.accountBalance ?? 0), String(due(m)),
+      String(m.eventPenalties ?? 0), String(m.accountBalance ?? 0), String(due(m)), String(m.pendingAmount ?? 0),
       m.lastPayment ? new Date(m.lastPayment).toLocaleDateString() : '',
     ]);
     const csv = [header, ...data].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
@@ -192,6 +196,7 @@ export default function PaymentsClient() {
                 <TableRow>
                   <TableHead className="w-10"><Checkbox checked={pageAllSelected} onCheckedChange={togglePage} aria-label="Select page" /></TableHead>
                   <TableHead><button onClick={() => toggleSort('name')} className="flex items-center gap-1 hover:text-foreground">Member <SortIcon k="name" /></button></TableHead>
+                  {showEdir && <TableHead>Edir</TableHead>}
                   <TableHead className="text-center"><button onClick={() => toggleSort('months')} className="mx-auto flex items-center gap-1 hover:text-foreground">Months Behind <SortIcon k="months" /></button></TableHead>
                   <TableHead className="text-right"><button onClick={() => toggleSort('contributions')} className="ml-auto flex items-center gap-1 hover:text-foreground">Monthly Contributions <SortIcon k="contributions" /></button></TableHead>
                   <TableHead className="text-right"><button onClick={() => toggleSort('penalty')} className="ml-auto flex items-center gap-1 hover:text-foreground">Late Penalty <SortIcon k="penalty" /></button></TableHead>
@@ -219,7 +224,13 @@ export default function PaymentsClient() {
                         <div className="mt-0.5 text-[11px] text-muted-foreground">
                           {m.monthsPaid} mo paid{m.lastPayment ? ` · last ${new Date(m.lastPayment).toLocaleDateString()}` : ''}
                         </div>
+                        {m.pendingCount > 0 && (
+                          <Badge variant="outline" className="mt-1 gap-1 border-warning/20 bg-warning/10 text-warning" title={`${money(m.pendingAmount)} awaiting checker approval`}>
+                            <Clock className="h-3 w-3" /> {m.pendingCount} pending
+                          </Badge>
+                        )}
                       </TableCell>
+                      {showEdir && <TableCell><span className="text-sm">{m.edirName ?? '—'}</span></TableCell>}
                       <TableCell className="text-center">
                         {m.monthsBehind > 0
                           ? <Badge variant="outline" className="border-warning/20 bg-warning/10 text-warning">{m.monthsBehind} mo</Badge>
@@ -254,6 +265,7 @@ export default function PaymentsClient() {
                 <TableRow className="border-t-2 font-medium">
                   <TableCell />
                   <TableCell className="text-xs uppercase tracking-wide text-muted-foreground">Totals · {rows.length} member{rows.length === 1 ? '' : 's'}</TableCell>
+                  {showEdir && <TableCell />}
                   <TableCell />
                   <TableCell className="text-right tabular-nums">{money(totals.monthlyContributions)}</TableCell>
                   <TableCell className="text-right tabular-nums text-warning">{money(totals.latePenalty)}</TableCell>
@@ -483,7 +495,11 @@ function RecordDialog({ member, onClose, onDone }: { member: any; onClose: () =>
             {/* Member + amount-due banner */}
             <div className="rounded-xl border bg-gradient-to-r from-primary/10 to-transparent p-3">
               <div className="flex items-center justify-between">
-                <div><div className="font-semibold">{info.name}</div><div className="font-mono text-xs text-muted-foreground">{info.memberCode}</div></div>
+                <div>
+                  <div className="font-semibold">{info.name}</div>
+                  <div className="font-mono text-xs text-muted-foreground">{info.memberCode}</div>
+                  {info.edirName && <div className="mt-0.5 inline-flex items-center gap-1 text-xs font-medium text-primary"><Building2 className="h-3 w-3" /> {info.edirName}</div>}
+                </div>
                 <div className="text-right"><div className="text-[11px] uppercase tracking-wide text-muted-foreground">Amount Due</div><div className="text-xl font-bold">{money(total)}</div></div>
               </div>
               <div className="mt-2 flex flex-wrap gap-2 text-xs">
@@ -495,6 +511,12 @@ function RecordDialog({ member, onClose, onDone }: { member: any; onClose: () =>
                 {info.status && info.status !== 'ACTIVE' && <Badge variant="outline" className="border-destructive/20 bg-destructive/10 text-destructive">{info.status}</Badge>}
               </div>
             </div>
+
+            {member.pendingCount > 0 && (
+              <p className="flex items-start gap-1.5 rounded-md bg-warning/10 p-2 text-[11px] text-warning">
+                <Clock className="mt-0.5 h-3.5 w-3.5 shrink-0" /> This member already has {member.pendingCount} payment{member.pendingCount === 1 ? '' : 's'} ({money(member.pendingAmount)}) awaiting checker approval. Avoid recording a duplicate.
+              </p>
+            )}
 
             {info.penalty && <p className="flex items-start gap-1.5 rounded-md bg-warning/10 p-2 text-[11px] text-warning"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> Late penalty auto-applied: {info.penalty.rule} ({info.penalty.overdueDays} days overdue).</p>}
 

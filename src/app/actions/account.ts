@@ -127,7 +127,7 @@ export async function getMyPortal() {
   // Months behind is a CONTRIBUTION-ledger concept (months due since join vs
   // months paid) — never balance/monthlyFee, since the pooled balance holds
   // registration fees, penalties, and compensations, not monthly contributions.
-  const { monthsBehind, arrears: contributionArrears } = computeContributionArrears({ joinDate: m.joinDate, dueDay, monthsPaid, monthlyFee, now });
+  const { monthsBehind, arrears: contributionArrears } = computeContributionArrears({ joinDate: m.joinDate, dueDay, monthsPaid, monthlyFee, now, firstContributionAtJoin: m.firstContributionAtJoin });
 
   const allInstallments = m.installmentPlans.flatMap(p => p.installments.map(i => ({ ...i, planType: p.type })));
   const upcoming = allInstallments

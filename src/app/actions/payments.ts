@@ -64,7 +64,7 @@ export async function getMemberOutstanding(memberId: string) {
   await assertPermission(actor, ['view_payments', 'record_payment']);
   const member = await prisma.member.findUnique({
     where: { id: memberId },
-    include: { paymentStatus: true, installmentPlans: { include: { installments: { where: { status: 'PENDING' } } } } },
+    include: { paymentStatus: true, edir: { select: { name: true } }, installmentPlans: { include: { installments: { where: { status: 'PENDING' } } } } },
   });
   if (!member) return null;
   await assertSameTenant(actor, member.edirId);
@@ -85,6 +85,7 @@ export async function getMemberOutstanding(memberId: string) {
     monthsPaid,
     settings,
     nextInstallmentDue: nextInstallment ? Number(nextInstallment.amount) : 0,
+    firstContributionAtJoin: member.firstContributionAtJoin,
   });
 
   // Itemize the pooled balance into named charges so the record dialog can tell
@@ -124,6 +125,7 @@ export async function getMemberOutstanding(memberId: string) {
     memberId: member.id,
     name: member.name,
     memberCode: member.memberId,
+    edirName: member.edir?.name ?? null,
     status: member.status,
     balance,
     monthlyFee: dues.monthlyFee,
@@ -174,7 +176,7 @@ export async function getPaymentsMatrix(params: { query?: string; status?: strin
 
   const members = await prisma.member.findMany({
     where,
-    include: { paymentStatus: true },
+    include: { paymentStatus: true, edir: { select: { name: true } } },
     orderBy: { name: 'asc' },
     take: 500,
   });
@@ -185,7 +187,7 @@ export async function getPaymentsMatrix(params: { query?: string; status?: strin
   // Decompose each member's pooled account balance into its named sources:
   //  • pending REGISTRATION installments, • outstanding asset-loss/compensation,
   //  • event-absence penalties. Queried from the authoritative source tables.
-  const [settingsRows, regInstallments, assetComp, eventPen] = await Promise.all([
+  const [settingsRows, regInstallments, assetComp, eventPen, pendingPayments] = await Promise.all([
     edirIds.length ? prisma.edirSettings.findMany({ where: { edirId: { in: edirIds } } }) : Promise.resolve([]),
     memberIds.length ? prisma.installment.findMany({
       where: { status: 'PENDING', plan: { type: 'REGISTRATION', memberId: { in: memberIds } } },
@@ -197,9 +199,16 @@ export async function getPaymentsMatrix(params: { query?: string; status?: strin
     memberIds.length ? prisma.eventParticipant.findMany({
       where: { memberId: { in: memberIds }, penalized: true }, select: { memberId: true, event: { select: { absencePenalty: true } } },
     }) : Promise.resolve([]),
+    // Manual payments awaiting checker approval — surfaced per member so the
+    // operator sees "already recorded, pending" and doesn't record it twice.
+    memberIds.length ? prisma.paymentLog.groupBy({
+      by: ['memberId'], where: { memberId: { in: memberIds }, method: 'MANUAL', status: 'PENDING' },
+      _sum: { amount: true }, _count: { _all: true },
+    }) : Promise.resolve([]),
   ]);
   const settingsByEdir = new Map(settingsRows.map(s => [s.edirId, s]));
   const num = (v: unknown) => (v == null || isNaN(Number(v)) ? 0 : Number(v));
+  const pendingByMember = new Map(pendingPayments.map(p => [p.memberId as string, { amount: num(p._sum.amount), count: p._count._all }]));
 
   const regByMember = new Map<string, number>();
   for (const i of regInstallments) { const id = i.plan.memberId; regByMember.set(id, (regByMember.get(id) ?? 0) + num(i.amount)); }
@@ -216,6 +225,7 @@ export async function getPaymentsMatrix(params: { query?: string; status?: strin
     const { monthsBehind, arrears } = computeContributionArrears({
       joinDate: m.joinDate, dueDay: s?.dueDay ?? 1,
       monthsPaid: m.paymentStatus?.monthsPaid ?? 0, monthlyFee,
+      firstContributionAtJoin: m.firstContributionAtJoin,
     });
     const penalty = computePenalty({
       monthsBehind, arrears, dueDay: s?.dueDay ?? 1, gracePeriodDays: s?.gracePeriodDays ?? 0,
@@ -240,12 +250,15 @@ export async function getPaymentsMatrix(params: { query?: string; status?: strin
     const eventPenalties = Math.min(eventByMember.get(m.id) ?? 0, remaining); remaining -= eventPenalties;
     const accountBalance = Math.max(0, remaining);
 
+    const pending = pendingByMember.get(m.id);
     return {
       id: m.id,
       memberId: m.memberId,
       name: m.name,
       phone: m.phone,
       status: m.status,
+      edirId: m.edirId,
+      edirName: m.edir?.name ?? null,
       joinDate: m.joinDate,
       monthlyFee,
       monthsPaid: m.paymentStatus?.monthsPaid ?? 0,
@@ -262,6 +275,8 @@ export async function getPaymentsMatrix(params: { query?: string; status?: strin
       eventPenalties,
       accountBalance,
       totalDue: balance + arrears + penaltyAmount + reinstatementFee,
+      pendingAmount: pending?.amount ?? 0,
+      pendingCount: pending?.count ?? 0,
     };
   });
 
@@ -508,6 +523,7 @@ export async function getReinstatementQuote(memberId: string) {
     monthsPaid: member.paymentStatus?.monthsPaid ?? 0,
     settings,
     nextInstallmentDue: dueInstallments[0] ? Number(dueInstallments[0].amount) : 0,
+    firstContributionAtJoin: member.firstContributionAtJoin,
   });
   return {
     alreadyActive: false as const,

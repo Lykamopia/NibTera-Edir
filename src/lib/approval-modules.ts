@@ -507,7 +507,7 @@ export function ensureApprovalModules() {
             data: {
               edirId: edir.id, memberId: memberCode, userId: user.id,
               name: payload.admin.name, phone, email,
-              role: 'Member', status: 'ACTIVE',
+              role: 'Member', status: 'ACTIVE', firstContributionAtJoin: true,
               paymentStatus: { create: { balance: regFee, status: regFee.greaterThan(0) ? 'PENDING' : 'PAID' } },
             },
           });

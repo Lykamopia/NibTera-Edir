@@ -61,7 +61,7 @@ export async function settlePaymentTx(tx: Prisma.TransactionClient, input: Settl
   const settings = await tx.member.findUnique({
     where: { id: input.memberId },
     select: {
-      joinDate: true, status: true, edirId: true, name: true,
+      joinDate: true, status: true, edirId: true, name: true, firstContributionAtJoin: true,
       user: { select: { id: true } },
       edir: { select: { settings: true } },
     },
@@ -139,6 +139,7 @@ export async function settlePaymentTx(tx: Prisma.TransactionClient, input: Settl
       dueDay,
       monthsPaid: newMonthsPaid,
       monthlyFee: Number(monthlyFee),
+      firstContributionAtJoin: settings.firstContributionAtJoin,
     });
     const pendingInstallments = await tx.installment.count({
       where: { plan: { memberId: input.memberId }, status: 'PENDING' },

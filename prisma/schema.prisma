@@ -213,6 +213,11 @@ model Member {
   status                MemberStatus @default(ACTIVE)
   joinDate              DateTime     @default(now())
   registrationInstallmentCount Int   @default(1)
+  // When true, the member's first monthly contribution is due immediately at
+  // registration (collected alongside the registration fee). Set for members
+  // registered after this policy took effect; existing members stay false so
+  // their contribution schedule is unchanged.
+  firstContributionAtJoin Boolean    @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

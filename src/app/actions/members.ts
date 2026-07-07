@@ -90,7 +90,7 @@ export async function ensureMembershipForUser(userId: string): Promise<{ created
       data: {
         edirId: user.edirId!, memberId, userId,
         name: user.name ?? user.email ?? 'Member', phone: user.phone, email: user.email,
-        role: 'Member', status: 'ACTIVE',
+        role: 'Member', status: 'ACTIVE', firstContributionAtJoin: true,
         paymentStatus: { create: { balance: registrationFee, status: registrationFee.greaterThan(0) ? 'PENDING' : 'PAID' } },
       },
     });
@@ -217,7 +217,7 @@ export async function getMemberProfile(id: string) {
   const tenureMonths = Math.max(0, Math.floor((Date.now() - new Date(member.joinDate).getTime()) / (1000 * 60 * 60 * 24 * 30.4)));
   // Months behind is a contribution metric (months due vs months paid), not
   // balance/monthlyFee — balance holds fees/penalties, not monthly contributions.
-  const { monthsBehind } = computeContributionArrears({ joinDate: member.joinDate, dueDay: settings?.dueDay ?? 1, monthsPaid: member.paymentStatus?.monthsPaid ?? 0, monthlyFee });
+  const { monthsBehind } = computeContributionArrears({ joinDate: member.joinDate, dueDay: settings?.dueDay ?? 1, monthsPaid: member.paymentStatus?.monthsPaid ?? 0, monthlyFee, firstContributionAtJoin: member.firstContributionAtJoin });
 
   const totalDisbursed = member.emergencyClaims.reduce((s, c) => s + num(c.disbursedAmount), 0);
   const penaltyPaid = member.paymentLogs
@@ -634,6 +634,9 @@ export async function createMember(input: MemberInput) {
           role: memberRoleLabel,
           status: 'ACTIVE',
           registrationInstallmentCount: data.registrationInstallmentCount,
+          // New-member policy: the first monthly contribution is owed at
+          // registration (collected with the registration fee).
+          firstContributionAtJoin: true,
           ...(data.joinDate ? { joinDate: new Date(data.joinDate) } : {}),
           paymentStatus: {
             create: {
@@ -1009,7 +1012,7 @@ export async function bulkImportMembers(input: { edirId?: string | null; rows: B
               address: n.address, city: n.city, subcity: n.subcity, woreda: n.woreda,
               emergencyContactName: n.emergencyContactName,
               emergencyContactPhone: n.emergencyContactPhone ? normalizeEthiopianPhone(n.emergencyContactPhone) : null,
-              role: n.role, status: 'ACTIVE',
+              role: n.role, status: 'ACTIVE', firstContributionAtJoin: true,
               ...(n.joinDate ? { joinDate: n.joinDate } : {}),
               paymentStatus: { create: { balance: registrationFee, status: registrationFee.greaterThan(0) ? 'PENDING' : 'PAID' } },
             },
