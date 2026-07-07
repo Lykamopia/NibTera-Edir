@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import Papa from 'papaparse';
 import { cn, isValidEthiopianPhone } from '@/lib/utils';
+import { downloadCsv } from '@/lib/download';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -120,11 +121,7 @@ export default function UsersClient() {
   const onExport = async () => {
     try {
       const csv = await exportUsersDirectoryCsv({ edirId: edirFilter, range: toParam(dateRange) });
-      const blob = new Blob([csv], { type: 'text/csv' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url; a.download = 'platform-users.csv'; a.click();
-      URL.revokeObjectURL(url);
+      downloadCsv(csv, 'platform-users.csv');
     } catch { toast.error('Export failed.'); }
   };
 
@@ -575,8 +572,7 @@ function BulkImportDialog({ ctx, onDone }: { ctx: DirectoryContext; onDone: () =
 
   const downloadTemplate = () => {
     const csv = 'Name,Email,Phone,Role\nAbebe Kebede,abebe@example.com,0912345678,Edir Admin\n';
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-    const a = document.createElement('a'); a.href = url; a.download = 'users-import-template.csv'; a.click(); URL.revokeObjectURL(url);
+    downloadCsv(csv, 'users-import-template.csv');
   };
 
   const submit = async () => {

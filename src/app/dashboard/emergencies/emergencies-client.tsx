@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
+import { downloadCsv } from '@/lib/download';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -108,8 +109,7 @@ function ClaimsTab({ dateRange }: { dateRange: DateRangeValue }) {
     const header = ['Member', 'Member ID', 'Type', 'Affected', 'Status', 'Approved', 'Disbursed', 'Created'];
     const data = sorted.map(c => [c.memberName, c.memberId, c.typeName || '', c.affectedPerson || '', c.status, c.approvedAmount ?? '', c.disbursedAmount ?? '', new Date(c.createdAt).toISOString().slice(0, 10)]);
     const csv = [header, ...data].map(r => r.map(x => `"${String(x).replace(/"/g, '""')}"`).join(',')).join('\n');
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-    const a = document.createElement('a'); a.href = url; a.download = 'emergency-claims.csv'; a.click(); URL.revokeObjectURL(url);
+    downloadCsv(csv, 'emergency-claims.csv');
   };
 
   return (

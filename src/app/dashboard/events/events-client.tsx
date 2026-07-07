@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
+import { downloadCsv } from '@/lib/download';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -10,7 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
-import { Loader2, Search, Plus, CalendarDays, Users, CheckCircle2, Ban, X, Download, ChevronUp, ChevronDown, ArrowUpDown, CalendarClock, AlertTriangle } from 'lucide-react';
+import { Loader2, Search, Plus, CalendarDays, Users, CheckCircle2, Ban, X, Download, ChevronUp, ChevronDown, ArrowUpDown, CalendarClock, AlertTriangle, Pencil, MapPin, Trash2, ClipboardCheck } from 'lucide-react';
 import { getMembers } from '@/app/actions/members';
 import {
   getEvents, getEvent, getEventsSummary, saveEvent, cancelEvent, rescheduleEvent, getEventCapabilities,
@@ -42,7 +43,7 @@ export default function EventsClient() {
   const [dateRange, setDateRange] = useState<DateRangeValue>(ALL_TIME);
   const [sort, setSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'datetime', dir: 'desc' });
   const [editing, setEditing] = useState<any | null | undefined>(undefined);
-  const [manageId, setManageId] = useState<string | null>(null);
+  const [finalizeId, setFinalizeId] = useState<string | null>(null);
   const [reschedTarget, setReschedTarget] = useState<any | null>(null);
   const [caps, setCaps] = useState<EventCaps>(NO_CAPS);
 
@@ -73,8 +74,7 @@ export default function EventsClient() {
     const header = ['Event', 'When', 'Location', 'Attendance', 'Penalty', 'Participants', 'Status'];
     const data = sorted.map(e => [e.title, new Date(e.datetime).toISOString(), e.location || '', e.attendanceRequired ? 'Required' : 'Optional', e.attendanceRequired ? e.absencePenalty : '', e.participantCount, e.status]);
     const csv = [header, ...data].map(r => r.map(x => `"${String(x).replace(/"/g, '""')}"`).join(',')).join('\n');
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-    const el = document.createElement('a'); el.href = url; el.download = 'events.csv'; el.click(); URL.revokeObjectURL(url);
+    downloadCsv(csv, 'events.csv');
   };
 
   return (
@@ -136,9 +136,15 @@ export default function EventsClient() {
                     <TableCell className="text-center">{e.participantCount}</TableCell>
                     <TableCell><Badge variant="outline" className={STATUS[e.status]?.cls}>{STATUS[e.status]?.label ?? e.status}</Badge></TableCell>
                     <TableCell className="text-right whitespace-nowrap">
-                      <Button size="sm" variant="outline" className="mr-1" onClick={() => setManageId(e.id)}><Users className="h-4 w-4 mr-1" /> Manage</Button>
+                      {/* Edit opens the full event editor (details + attendance);
+                          Finalize only closes attendance and applies penalties. */}
+                      <Button size="sm" variant="outline" className="mr-1" onClick={() => setEditing(e)}>
+                        <Pencil className="h-4 w-4 mr-1" /> {e.status === 'SCHEDULED' && caps.canManage ? 'Edit' : 'View'}
+                      </Button>
                       {e.status === 'SCHEDULED' && caps.canReschedule && <Button size="sm" variant="ghost" className="mr-1" onClick={() => setReschedTarget(e)}><CalendarClock className="h-4 w-4 mr-1" /> Reschedule</Button>}
-                      {e.status === 'SCHEDULED' && caps.canManage && <Button size="sm" variant="ghost" onClick={() => setEditing(e)}>Edit</Button>}
+                      {e.status === 'SCHEDULED' && e.attendanceRequired && caps.canFinalize && (
+                        <Button size="sm" className="mr-1" onClick={() => setFinalizeId(e.id)}><ClipboardCheck className="h-4 w-4 mr-1" /> Finalize</Button>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -149,8 +155,8 @@ export default function EventsClient() {
       </Card>
       <p className="text-xs text-muted-foreground">{sorted.length} event(s)</p>
 
-      {editing !== undefined && <EventFormDialog event={editing} onClose={() => setEditing(undefined)} onDone={() => { setEditing(undefined); load(); }} />}
-      {manageId && <ManageDialog eventId={manageId} caps={caps} onClose={() => setManageId(null)} onChanged={load} />}
+      {editing !== undefined && <EventEditDialog event={editing} caps={caps} onClose={() => setEditing(undefined)} onChanged={load} />}
+      {finalizeId && <FinalizeDialog eventId={finalizeId} caps={caps} onClose={() => setFinalizeId(null)} onChanged={load} />}
       {reschedTarget && <RescheduleDialog event={reschedTarget} onClose={() => setReschedTarget(null)} onDone={() => { setReschedTarget(null); load(); }} />}
     </div>
   );
@@ -220,64 +226,266 @@ function ParticipantPicker({ selected, onChange }: { selected: Set<string>; onCh
   );
 }
 
-function EventFormDialog({ event, onClose, onDone }: { event: any | null; onClose: () => void; onDone: () => void }) {
-  const toLocalInput = (d: any) => { const dt = d ? new Date(d) : new Date(); const off = dt.getTimezoneOffset(); return new Date(dt.getTime() - off * 60000).toISOString().slice(0, 16); };
-  const [form, setForm] = useState({
-    title: event?.title ?? '',
-    datetime: toLocalInput(event?.datetime),
-    location: event?.location ?? '',
-    attendanceRequired: !!event?.attendanceRequired,
-    absencePenalty: event?.absencePenalty != null ? String(event.absencePenalty) : '0',
-  });
-  const [participants, setParticipants] = useState<Set<string>>(new Set());
-  const [saving, setSaving] = useState(false);
-  const isCreate = !event;
+const toLocalInput = (d: any) => { const dt = d ? new Date(d) : new Date(); const off = dt.getTimezoneOffset(); return new Date(dt.getTime() - off * 60000).toISOString().slice(0, 16); };
+const ATT_TONE: Record<string, string> = {
+  PRESENT: 'border-success/20 bg-success/10 text-success', ATTENDING: 'border-info/20 bg-info/10 text-info',
+  ABSENT: 'border-destructive/20 bg-destructive/10 text-destructive', EXCUSED: 'border-warning/20 bg-warning/10 text-warning',
+  DECLINED: 'bg-muted text-muted-foreground', INVITED: 'bg-muted text-muted-foreground',
+};
 
-  const submit = async () => {
+/**
+ * Comprehensive event editor: event details on top, then full attendance
+ * management (add / invite-all / remove participants and set each one's
+ * attendance, with bulk actions) for a scheduled event. Finalizing lives on its
+ * own button — this dialog never applies penalties. For a finalized/cancelled
+ * event everything is read-only.
+ */
+function EventEditDialog({ event: initial, caps, onClose, onChanged }: { event: any | null; caps: EventCaps; onClose: () => void; onChanged: () => void }) {
+  const isCreate = !initial;
+  const [event, setEvent] = useState<any | null>(initial && !isCreate ? initial : null);
+  const [loading, setLoading] = useState(!isCreate);
+  const [form, setForm] = useState({
+    title: initial?.title ?? '',
+    datetime: toLocalInput(initial?.datetime),
+    location: initial?.location ?? '',
+    attendanceRequired: !!initial?.attendanceRequired,
+    absencePenalty: initial?.absencePenalty != null ? String(initial.absencePenalty) : '0',
+  });
+  const [newParticipants, setNewParticipants] = useState<Set<string>>(new Set());
+  const [savingDetails, setSavingDetails] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const confirm = useConfirm();
+
+  const reload = useCallback(() => {
+    if (isCreate || !initial?.id) return;
+    setLoading(true);
+    getEvent(initial.id).then(e => { if (!e) return; setEvent(e); setForm(f => ({ ...f, title: e.title, datetime: toLocalInput(e.datetime), location: e.location ?? '', attendanceRequired: !!e.attendanceRequired, absencePenalty: String(e.absencePenalty ?? 0) })); })
+      .catch(() => toast.error('Failed to load event.')).finally(() => setLoading(false));
+  }, [initial?.id, isCreate]);
+  useEffect(() => { reload(); }, [reload]);
+
+  const status = event?.status ?? 'SCHEDULED';
+  const locked = !isCreate && status !== 'SCHEDULED';
+  const canEdit = caps.canManage && !locked;
+
+  const saveDetails = async () => {
     if (form.title.trim().length < 2) { toast.error('Title is required.'); return; }
-    setSaving(true);
+    setSavingDetails(true);
     const res = await saveEvent({
-      id: event?.id, title: form.title.trim(), datetime: form.datetime, location: form.location || null,
+      id: event?.id ?? initial?.id, title: form.title.trim(), datetime: form.datetime, location: form.location || null,
       attendanceRequired: form.attendanceRequired, absencePenalty: Number(form.absencePenalty) || 0,
-      participantMemberIds: isCreate ? Array.from(participants) : undefined,
+      participantMemberIds: isCreate ? Array.from(newParticipants) : undefined,
     });
-    setSaving(false);
+    setSavingDetails(false);
     if (res?.success) {
-      toast.success(isCreate && (res as any).addedParticipants ? `Event created with ${(res as any).addedParticipants} participant(s).` : 'Saved.');
-      onDone();
+      toast.success(isCreate ? `Event created${(res as any).addedParticipants ? ` with ${(res as any).addedParticipants} participant(s)` : ''}.` : 'Event details saved.');
+      onChanged();
+      if (isCreate) onClose(); else reload();
     } else toast.error(res?.error || 'Failed to save event.');
+  };
+
+  const onSetAttendance = async (pid: string, s: string) => { const res = await setAttendance(pid, s as any); if (res?.success) reload(); else toast.error(res?.error || 'Failed.'); };
+  const onBulk = async (s: string, ids?: string[]) => { setBusy(true); const res = await setAttendanceBulk(event.id, s as any, ids); setBusy(false); if (res?.success) { toast.success(`Marked ${res.updated} as ${s.toLowerCase()}.`); setSelected(new Set()); reload(); } else toast.error(res?.error || 'Failed.'); };
+  const onRemove = async (pid: string) => { const res = await removeParticipant(pid); if (res?.success) reload(); else toast.error(res?.error || 'Failed.'); };
+  const onInviteAll = async () => { setBusy(true); const res = await inviteAllActiveMembers(event.id); setBusy(false); if (res?.success) { toast.success(`Invited ${res.added} member(s).`); reload(); } else toast.error(res?.error || 'Failed.'); };
+  const toggleSel = (id: string) => setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+
+  const participants: any[] = event?.participants ?? [];
+  const attCounts = participants.reduce((a: Record<string, number>, p) => { a[p.status] = (a[p.status] ?? 0) + 1; return a; }, {});
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) { onClose(); onChanged(); } }}>
+      <DialogContent className="flex max-h-[90vh] max-w-2xl flex-col gap-0 overflow-hidden p-0">
+        {loading ? (
+          <div className="flex h-56 items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
+        ) : (
+          <>
+            {/* Header */}
+            <div className="border-b bg-gradient-to-r from-primary/10 to-transparent p-5">
+              <DialogHeader className="space-y-1 text-left">
+                <DialogTitle className="flex flex-wrap items-center gap-2">
+                  <CalendarDays className="h-5 w-5 text-primary" />
+                  {isCreate ? 'New Event' : (canEdit ? 'Edit Event' : event?.title)}
+                  {!isCreate && <Badge variant="outline" className={STATUS[status]?.cls}>{STATUS[status]?.label ?? status}</Badge>}
+                </DialogTitle>
+                {!isCreate && !canEdit && <DialogDescription>{fmt(event.datetime)}{event.location ? ` · ${event.location}` : ''}</DialogDescription>}
+                {canEdit && <DialogDescription>Update the event details and manage its attendance. Finalizing is a separate step.</DialogDescription>}
+              </DialogHeader>
+            </div>
+
+            <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-5">
+              {/* Details */}
+              {canEdit || isCreate ? (
+                <div className="space-y-3">
+                  <div className="space-y-1"><Label>Title</Label><Input value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} /></div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1"><Label>Date &amp; Time</Label><Input type="datetime-local" value={form.datetime} onChange={e => setForm(f => ({ ...f, datetime: e.target.value }))} /></div>
+                    <div className="space-y-1"><Label>Location</Label><Input value={form.location} onChange={e => setForm(f => ({ ...f, location: e.target.value }))} placeholder="Optional" /></div>
+                  </div>
+                  <label className="flex items-center gap-2 rounded-lg border p-3 text-sm">
+                    <input type="checkbox" checked={form.attendanceRequired} onChange={e => setForm(f => ({ ...f, attendanceRequired: e.target.checked }))} />
+                    <span>Attendance required <span className="text-muted-foreground">— absentees are penalized when the event is finalized</span></span>
+                  </label>
+                  {form.attendanceRequired && (
+                    <div className="space-y-1"><Label>Absence Penalty</Label><Input type="number" min={0} value={form.absencePenalty} onChange={e => setForm(f => ({ ...f, absencePenalty: e.target.value }))} /></div>
+                  )}
+                  {isCreate && (
+                    <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
+                      <div className="flex items-center justify-between"><Label className="text-sm font-medium">Expected Participants</Label><span className="text-xs text-muted-foreground">{newParticipants.size} selected</span></div>
+                      <ParticipantPicker selected={newParticipants} onChange={setNewParticipants} />
+                    </div>
+                  )}
+                  {!isCreate && (
+                    <div className="flex justify-end">
+                      <Button size="sm" onClick={saveDetails} disabled={savingDetails}>{savingDetails && <Loader2 className="mr-1 h-4 w-4 animate-spin" />} Save details</Button>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-3 rounded-lg border bg-muted/20 p-3 text-sm sm:grid-cols-3">
+                  <div><div className="text-xs text-muted-foreground">When</div><div className="font-medium">{fmt(event.datetime)}</div></div>
+                  <div><div className="text-xs text-muted-foreground">Location</div><div className="font-medium">{event.location || '—'}</div></div>
+                  <div><div className="text-xs text-muted-foreground">Attendance</div><div className="font-medium">{event.attendanceRequired ? `Required · penalty ${event.absencePenalty.toLocaleString()}` : 'Optional'}</div></div>
+                </div>
+              )}
+
+              {/* Attendance management (existing events only) */}
+              {!isCreate && (
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h3 className="flex items-center gap-2 text-sm font-semibold"><Users className="h-4 w-4 text-primary" /> Participants &amp; Attendance <span className="font-normal text-muted-foreground">({participants.length})</span></h3>
+                    <div className="flex flex-wrap gap-1.5">
+                      {Object.entries(attCounts).map(([s, n]) => <Badge key={s} variant="outline" className={ATT_TONE[s] ?? ''}>{s} {n as number}</Badge>)}
+                    </div>
+                  </div>
+
+                  {canEdit && (
+                    <div className="flex flex-wrap items-center gap-1.5 rounded-md border bg-muted/30 p-2">
+                      <Button size="sm" variant="outline" onClick={() => setAdding(true)} disabled={busy}><Plus className="mr-1 h-4 w-4" /> Add members</Button>
+                      <Button size="sm" variant="outline" onClick={onInviteAll} disabled={busy}>Invite all active</Button>
+                      {participants.length > 0 && <>
+                        <span className="mx-1 h-4 w-px bg-border" />
+                        <button type="button" onClick={() => setSelected(new Set(participants.map(p => p.id)))} className="rounded-full border bg-card px-2.5 py-1 text-xs font-medium hover:bg-muted">Select all</button>
+                        {selected.size > 0 && <button type="button" onClick={() => setSelected(new Set())} className="rounded-full px-2.5 py-1 text-xs text-muted-foreground hover:underline">Clear</button>}
+                        <Button size="sm" variant="outline" disabled={busy} onClick={() => onBulk('PRESENT')}>Mark all present</Button>
+                        {selected.size > 0 && <Button size="sm" disabled={busy} onClick={() => onBulk('PRESENT', Array.from(selected))}>Mark selected present ({selected.size})</Button>}
+                        {selected.size > 0 && <Button size="sm" variant="outline" disabled={busy} onClick={() => onBulk('ABSENT', Array.from(selected))}>Mark selected absent</Button>}
+                      </>}
+                    </div>
+                  )}
+
+                  <div className="max-h-72 overflow-y-auto rounded-md border">
+                    {participants.length === 0 ? (
+                      <div className="flex h-24 items-center justify-center"><p className="text-sm text-muted-foreground">No participants yet.{canEdit ? ' Add members above.' : ''}</p></div>
+                    ) : (
+                      <Table>
+                        <TableHeader><TableRow>{canEdit && <TableHead className="w-8"></TableHead>}<TableHead>Member</TableHead><TableHead>Role</TableHead><TableHead>Attendance</TableHead><TableHead></TableHead></TableRow></TableHeader>
+                        <TableBody>
+                          {participants.map((p: any) => (
+                            <TableRow key={p.id} className={selected.has(p.id) ? 'bg-primary/5' : ''}>
+                              {canEdit && <TableCell><input type="checkbox" checked={selected.has(p.id)} onChange={() => toggleSel(p.id)} /></TableCell>}
+                              <TableCell>
+                                <div className="font-medium">{p.name}</div>
+                                <div className="font-mono text-xs text-muted-foreground">{p.memberCode}{p.penalized && <span className="ml-2 text-destructive">penalized</span>}</div>
+                              </TableCell>
+                              <TableCell className="text-sm text-muted-foreground">{p.role || '—'}</TableCell>
+                              <TableCell>
+                                {canEdit ? (
+                                  <Select value={p.status} onValueChange={(v) => onSetAttendance(p.id, v)}>
+                                    <SelectTrigger className="h-8 w-36"><SelectValue /></SelectTrigger>
+                                    <SelectContent>{ATT_STATUSES.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
+                                  </Select>
+                                ) : <Badge variant="outline" className={ATT_TONE[p.status] ?? ''}>{p.status}</Badge>}
+                              </TableCell>
+                              <TableCell className="text-right">
+                                {canEdit && !p.penalized && <Button size="sm" variant="ghost" className="text-destructive" onClick={() => onRemove(p.id)} title="Remove"><Trash2 className="h-4 w-4" /></Button>}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <DialogFooter className="gap-2 border-t p-4 sm:justify-between">
+              {!isCreate && status === 'SCHEDULED' && caps.canCancel ? (
+                <Button variant="ghost" className="text-destructive" disabled={busy} onClick={async () => { if (await confirm({ title: 'Cancel event', description: 'This event will be cancelled.', destructive: true, confirmText: 'Cancel event', cancelText: 'Keep' })) { const r = await cancelEvent(event.id); if (r?.success) { toast.success('Event cancelled.'); onChanged(); onClose(); } else toast.error(r?.error || 'Failed.'); } }}>
+                  <Ban className="mr-1 h-4 w-4" /> Cancel Event
+                </Button>
+              ) : <span />}
+              {isCreate
+                ? <Button onClick={saveDetails} disabled={savingDetails}>{savingDetails && <Loader2 className="mr-1 h-4 w-4 animate-spin" />} Create event</Button>
+                : <Button variant="outline" onClick={() => { onClose(); onChanged(); }}>Done</Button>}
+            </DialogFooter>
+          </>
+        )}
+      </DialogContent>
+      {adding && event && <AddMembersDialog eventId={event.id} existing={participants.map((p: any) => p.memberId)} onClose={() => setAdding(false)} onDone={() => { setAdding(false); reload(); }} />}
+    </Dialog>
+  );
+}
+
+/** Focused finalize flow — reached from the "Finalize" button. Shows the current
+ *  attendance tally, then locks it and applies absence penalties. */
+function FinalizeDialog({ eventId, caps, onClose, onChanged }: { eventId: string; caps: EventCaps; onClose: () => void; onChanged: () => void }) {
+  const [event, setEvent] = useState<any | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(() => { setLoading(true); getEvent(eventId).then(setEvent).catch(() => toast.error('Failed to load event.')).finally(() => setLoading(false)); }, [eventId]);
+  useEffect(() => { load(); }, [load]);
+
+  const participants: any[] = event?.participants ?? [];
+  const present = participants.filter(p => p.status === 'PRESENT' || p.status === 'ATTENDING' || p.status === 'EXCUSED').length;
+  const absent = participants.filter(p => p.status === 'ABSENT').length;
+  const unmarked = participants.filter(p => p.status === 'INVITED' || p.status === 'DECLINED').length;
+  const penalty = event?.absencePenalty ?? 0;
+  const willPenalize = participants.filter(p => p.status === 'ABSENT' || p.status === 'INVITED' || p.status === 'DECLINED').length;
+
+  const finalize = async () => {
+    setBusy(true);
+    const res = await finalizeAttendance(eventId);
+    setBusy(false);
+    if (res?.success) { toast.success(`Finalized. Penalized ${res.penalized} absentee(s).`); onChanged(); onClose(); }
+    else toast.error(res?.error || 'Failed to finalize.');
   };
 
   return (
     <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="max-h-[88vh] max-w-lg overflow-y-auto">
-        <DialogHeader><DialogTitle>{event ? 'Edit Event' : 'New Event'}</DialogTitle></DialogHeader>
-        <div className="space-y-3">
-          <div className="space-y-1"><Label>Title</Label><Input value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} /></div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1"><Label>Date &amp; Time</Label><Input type="datetime-local" value={form.datetime} onChange={e => setForm(f => ({ ...f, datetime: e.target.value }))} /></div>
-            <div className="space-y-1"><Label>Location</Label><Input value={form.location} onChange={e => setForm(f => ({ ...f, location: e.target.value }))} /></div>
-          </div>
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={form.attendanceRequired} onChange={e => setForm(f => ({ ...f, attendanceRequired: e.target.checked }))} />
-            Attendance required (absentees are penalized on finalize)
-          </label>
-          {form.attendanceRequired && (
-            <div className="space-y-1"><Label>Absence Penalty</Label><Input type="number" min={0} value={form.absencePenalty} onChange={e => setForm(f => ({ ...f, absencePenalty: e.target.value }))} /></div>
-          )}
-          {isCreate && (
-            <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
-              <div className="flex items-center justify-between">
-                <Label className="text-sm font-medium">Expected Participants</Label>
-                <span className="text-xs text-muted-foreground">{participants.size} selected</span>
-              </div>
-              <ParticipantPicker selected={participants} onChange={setParticipants} />
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><ClipboardCheck className="h-5 w-5 text-primary" /> Finalize Attendance</DialogTitle>
+          <DialogDescription>{event ? `${event.title} — ${fmt(event.datetime)}` : 'Loading…'}</DialogDescription>
+        </DialogHeader>
+        {loading || !event ? (
+          <div className="flex h-32 items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
+        ) : (
+          <div className="space-y-4">
+            <div className="grid grid-cols-3 gap-2 text-center">
+              <div className="rounded-lg border bg-success/5 p-3"><div className="text-lg font-bold text-success">{present}</div><div className="text-xs text-muted-foreground">Present / excused</div></div>
+              <div className="rounded-lg border bg-destructive/5 p-3"><div className="text-lg font-bold text-destructive">{absent}</div><div className="text-xs text-muted-foreground">Absent</div></div>
+              <div className="rounded-lg border bg-muted/40 p-3"><div className="text-lg font-bold">{unmarked}</div><div className="text-xs text-muted-foreground">Unmarked</div></div>
             </div>
-          )}
-        </div>
+            {event.attendanceRequired ? (
+              <p className="flex items-start gap-2 rounded-md bg-warning/10 p-3 text-xs text-warning">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                {willPenalize} participant(s) will be penalized {penalty.toLocaleString()} each (absent + unmarked). This locks attendance and can’t be undone.
+              </p>
+            ) : (
+              <p className="rounded-md bg-muted/40 p-3 text-xs text-muted-foreground">Attendance is optional for this event — no penalties will be applied. Finalizing simply marks it complete.</p>
+            )}
+            {unmarked > 0 && <p className="text-xs text-muted-foreground">Tip: mark unmarked participants in <span className="font-medium">Edit</span> first if some were present.</p>}
+          </div>
+        )}
         <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
-          <Button onClick={submit} disabled={saving}>{saving && <Loader2 className="h-4 w-4 mr-1 animate-spin" />} Save</Button>
+          <Button variant="outline" onClick={onClose} disabled={busy}>Cancel</Button>
+          {event && caps.canFinalize && <Button onClick={finalize} disabled={busy}>{busy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-1 h-4 w-4" />} Finalize &amp; apply penalties</Button>}
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -314,157 +522,6 @@ function RescheduleDialog({ event, onClose, onDone }: { event: any; onClose: () 
           <Button onClick={submit} disabled={saving}>{saving && <Loader2 className="h-4 w-4 mr-1 animate-spin" />} Reschedule</Button>
         </DialogFooter>
       </DialogContent>
-    </Dialog>
-  );
-}
-
-function ManageDialog({ eventId, caps, onClose, onChanged }: { eventId: string; caps: EventCaps; onClose: () => void; onChanged: () => void }) {
-  const [event, setEvent] = useState<any | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [adding, setAdding] = useState(false);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const confirm = useConfirm();
-
-  const load = useCallback(() => {
-    setLoading(true);
-    getEvent(eventId).then(setEvent).catch(() => toast.error('Failed to load event.')).finally(() => setLoading(false));
-  }, [eventId]);
-  useEffect(() => { load(); }, [load]);
-
-  const locked = event?.status !== 'SCHEDULED';
-
-  const onSetAttendance = async (pid: string, status: string) => {
-    const res = await setAttendance(pid, status as any);
-    if (res?.success) load(); else toast.error(res?.error || 'Failed to update attendance.');
-  };
-  const onBulk = async (status: string, ids?: string[]) => {
-    setBusy(true);
-    const res = await setAttendanceBulk(eventId, status as any, ids);
-    setBusy(false);
-    if (res?.success) { toast.success(`Marked ${res.updated} as ${status.toLowerCase()}.`); setSelected(new Set()); load(); }
-    else toast.error(res?.error || 'Failed to update attendance.');
-  };
-  const toggleSel = (id: string) => setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  const onRemove = async (pid: string) => {
-    const res = await removeParticipant(pid);
-    if (res?.success) load(); else toast.error(res?.error || 'Failed to remove participant.');
-  };
-  const onInviteAll = async () => {
-    setBusy(true);
-    const res = await inviteAllActiveMembers(eventId);
-    setBusy(false);
-    if (res?.success) { toast.success(`Invited ${res.added} member(s).`); load(); }
-    else toast.error(res?.error || 'Failed to invite members.');
-  };
-  const onFinalize = async () => {
-    if (!(await confirm({ title: 'Finalize event', description: 'Absent participants will be penalized and attendance will be locked.', confirmText: 'Finalize' }))) return;
-    setBusy(true);
-    const res = await finalizeAttendance(eventId);
-    setBusy(false);
-    if (res?.success) { toast.success(`Finalized. Penalized ${res.penalized} absentee(s).`); load(); onChanged(); }
-    else toast.error(res?.error || 'Failed to finalize.');
-  };
-
-  return (
-    <Dialog open onOpenChange={(o) => { if (!o) { onClose(); onChanged(); } }}>
-      <DialogContent className="max-w-2xl">
-        {loading || !event ? (
-          <div className="flex h-48 items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
-        ) : (
-          <>
-            <DialogHeader>
-              <DialogTitle className="flex items-center gap-2">{event.title} <Badge variant="outline" className={STATUS[event.status]?.cls}>{STATUS[event.status]?.label}</Badge></DialogTitle>
-              <DialogDescription>
-                {fmt(event.datetime)}{event.location ? ` · ${event.location}` : ''}
-                {event.attendanceRequired ? ` · Absence penalty ${event.absencePenalty.toLocaleString()}` : ' · Attendance optional'}
-              </DialogDescription>
-            </DialogHeader>
-
-            {!locked && caps.canManage && (
-              <div className="space-y-2">
-                <div className="flex flex-wrap gap-2">
-                  <Button size="sm" variant="outline" onClick={() => setAdding(true)} disabled={busy}><Plus className="h-4 w-4 mr-1" /> Add members</Button>
-                  <Button size="sm" variant="outline" onClick={onInviteAll} disabled={busy}>Invite all active</Button>
-                </div>
-                {event.participants.length > 0 && (() => {
-                  const allPids: string[] = event.participants.map((p: any) => p.id);
-                  const roles = Array.from(new Set(event.participants.map((p: any) => p.role).filter(Boolean))) as string[];
-                  const selectByRole = (role: string) => setSelected(new Set(event.participants.filter((p: any) => p.role === role).map((p: any) => p.id)));
-                  return (
-                    <div className="flex flex-wrap items-center gap-1.5 rounded-md border bg-muted/30 p-2">
-                      <button type="button" onClick={() => setSelected(new Set(allPids))} className="rounded-full border bg-card px-2.5 py-1 text-xs font-medium hover:bg-muted">Select all ({allPids.length})</button>
-                      {roles.map(r => (
-                        <button key={r} type="button" onClick={() => selectByRole(r)} className="rounded-full border bg-card px-2.5 py-1 text-xs text-muted-foreground hover:bg-muted">{r}</button>
-                      ))}
-                      {selected.size > 0 && <button type="button" onClick={() => setSelected(new Set())} className="rounded-full px-2.5 py-1 text-xs text-muted-foreground hover:underline">Clear</button>}
-                      <span className="mx-1 h-4 w-px bg-border" />
-                      <Button size="sm" variant="outline" disabled={busy} onClick={() => onBulk('PRESENT')}>Mark all attended</Button>
-                      <Button size="sm" disabled={busy || selected.size === 0} onClick={() => onBulk('PRESENT', Array.from(selected))}>Mark selected attended ({selected.size})</Button>
-                    </div>
-                  );
-                })()}
-              </div>
-            )}
-
-            <div className="max-h-80 overflow-y-auto rounded-md border">
-              {event.participants.length === 0 ? (
-                <div className="flex h-24 items-center justify-center"><p className="text-sm text-muted-foreground">No participants yet.</p></div>
-              ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      {!locked && caps.canManage && <TableHead className="w-8"></TableHead>}
-                      <TableHead>Member</TableHead><TableHead>Role</TableHead><TableHead>Attendance</TableHead><TableHead></TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {event.participants.map((p: any) => (
-                      <TableRow key={p.id} className={selected.has(p.id) ? 'bg-primary/5' : ''}>
-                        {!locked && caps.canManage && (
-                          <TableCell><input type="checkbox" checked={selected.has(p.id)} onChange={() => toggleSel(p.id)} /></TableCell>
-                        )}
-                        <TableCell>
-                          <div className="font-medium">{p.name}</div>
-                          <div className="font-mono text-xs text-muted-foreground">{p.memberCode}{p.penalized && <span className="ml-2 text-red-600">penalized</span>}</div>
-                        </TableCell>
-                        <TableCell className="text-sm text-muted-foreground">{p.role || '—'}</TableCell>
-                        <TableCell>
-                          {locked ? (
-                            <span className="text-sm">{p.status}</span>
-                          ) : (
-                            <Select value={p.status} onValueChange={(v) => onSetAttendance(p.id, v)}>
-                              <SelectTrigger className="h-8 w-36"><SelectValue /></SelectTrigger>
-                              <SelectContent>
-                                {ATT_STATUSES.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-                              </SelectContent>
-                            </Select>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          {!locked && !p.penalized && <Button size="sm" variant="ghost" onClick={() => onRemove(p.id)}><X className="h-4 w-4" /></Button>}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              )}
-            </div>
-
-            <DialogFooter className="gap-2 sm:justify-between">
-              {event.status === 'SCHEDULED' && caps.canCancel ? (
-                <Button variant="ghost" className="text-destructive" onClick={async () => { if (await confirm({ title: 'Cancel event', description: 'This event will be cancelled.', destructive: true, confirmText: 'Cancel event', cancelText: 'Keep' })) { const r = await cancelEvent(eventId); if (r?.success) { toast.success('Event cancelled.'); load(); onChanged(); } else toast.error(r?.error || 'Failed.'); } }}>
-                  <Ban className="h-4 w-4 mr-1" /> Cancel Event
-                </Button>
-              ) : <span />}
-              {event.status === 'SCHEDULED' && caps.canFinalize && (
-                <Button onClick={onFinalize} disabled={busy}>{busy ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <CheckCircle2 className="h-4 w-4 mr-1" />} Finalize Attendance</Button>
-              )}
-            </DialogFooter>
-          </>
-        )}
-      </DialogContent>
-      {adding && <AddMembersDialog eventId={eventId} existing={(event?.participants ?? []).map((p: any) => p.memberId)} onClose={() => setAdding(false)} onDone={() => { setAdding(false); load(); }} />}
     </Dialog>
   );
 }

@@ -18,6 +18,7 @@ import { Users, Building2, DollarSign, TrendingUp, MapPin, ShieldAlert, Download
 import { LoadingState } from '@/components/ui/states';
 import { DateRangeFilter, ALL_TIME, toParam, type DateRangeValue } from '@/components/ui/date-range-filter';
 import { getDistrictDashboard, exportOrgDashboardCsv } from '@/app/actions/dashboard';
+import { downloadCsv } from '@/lib/download';
 import { OrgEdirRegistry } from './org-edir-registry';
 import { CollectionsBreakdown } from './collections-breakdown';
 
@@ -44,8 +45,7 @@ export default function DistrictDashboard({ actor }: { actor: Actor }) {
   const onExport = async () => {
     try {
       const csv = await exportOrgDashboardCsv(toParam(range));
-      const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-      const a = document.createElement('a'); a.href = url; a.download = 'district-dashboard-report.csv'; a.click(); URL.revokeObjectURL(url);
+      downloadCsv(csv, 'district-dashboard-report.csv');
     } catch { toast.error('Export failed.'); }
   };
 

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
+import { downloadCsv } from '@/lib/download';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -108,8 +109,7 @@ function InventoryTab({ dateRange }: { dateRange: DateRangeValue }) {
     const header = ['Asset', 'Category', 'Available', 'Total', 'Issued', 'Current Value', 'Location'];
     const data = sorted.map(a => [a.name, a.categoryName || '', a.available, a.quantity, a.issuedQuantity, a.currentValue, a.location || '']);
     const csv = [header, ...data].map(r => r.map(x => `"${String(x).replace(/"/g, '""')}"`).join(',')).join('\n');
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-    const el = document.createElement('a'); el.href = url; el.download = 'assets.csv'; el.click(); URL.revokeObjectURL(url);
+    downloadCsv(csv, 'assets.csv');
   };
 
   return (
@@ -371,8 +371,7 @@ function IssuancesTab({ dateRange }: { dateRange: DateRangeValue }) {
     const header = ['Asset', 'Member', 'Member ID', 'Status', 'Issued', 'Returned', 'Compensation'];
     const data = rows.map(i => [i.assetName, i.memberName || '', i.memberCode || '', i.status, i.issuedQty, i.returnedQty || 0, i.compensation || 0]);
     const csv = [header, ...data].map(r => r.map(x => `"${String(x).replace(/"/g, '""')}"`).join(',')).join('\n');
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-    const el = document.createElement('a'); el.href = url; el.download = 'asset-issuances.csv'; el.click(); URL.revokeObjectURL(url);
+    downloadCsv(csv, 'asset-issuances.csv');
   };
 
   return (
@@ -522,8 +521,7 @@ function ValuationTab() {
     ]);
     const totalsRow = ['TOTAL', '', '', '', '', t.purchase, t.current, t.depreciation, ''];
     const csv = [header, ...rows, totalsRow].map(r => r.map((x: any) => `"${String(x).replace(/"/g, '""')}"`).join(',')).join('\n');
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-    const el = document.createElement('a'); el.href = url; el.download = `valuation-report-${new Date().toISOString().slice(0, 10)}.csv`; el.click(); URL.revokeObjectURL(url);
+    downloadCsv(csv, `valuation-report-${new Date().toISOString().slice(0, 10)}.csv`);
   };
   return (
     <div className="space-y-4">

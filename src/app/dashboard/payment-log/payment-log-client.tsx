@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
+import { downloadCsv } from '@/lib/download';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -35,13 +36,6 @@ type SortKey = NonNullable<PaymentLogSort['key']>;
 
 const money = (n: number) => `${Number(n || 0).toLocaleString()} ETB`;
 
-const downloadCsv = (csv: string, name: string) => {
-  const blob = new Blob([csv], { type: 'text/csv' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = name; a.click();
-  URL.revokeObjectURL(url);
-};
 
 /** Compact copyable reference cell — reconciliation is ref-matching work. */
 function Ref({ value }: { value?: string | null }) {

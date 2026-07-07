@@ -10,14 +10,7 @@ import { Loader2, Search, Download, ScrollText, Archive } from 'lucide-react';
 import { Pagination } from '@/components/ui/pagination';
 import { DateRangeFilter, ALL_TIME, toParam, type DateRangeValue } from '@/components/ui/date-range-filter';
 import { getAuditLogs, exportAuditCsv, archiveAuditLog } from '@/app/actions/admin';
-
-const downloadCsv = (csv: string, name: string) => {
-  const blob = new Blob([csv], { type: 'text/csv' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = name; a.click();
-  URL.revokeObjectURL(url);
-};
+import { downloadCsv } from '@/lib/download';
 
 export default function AuditClient() {
   const [items, setItems] = useState<any[]>([]);

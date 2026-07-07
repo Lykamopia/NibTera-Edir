@@ -13,6 +13,7 @@ import {
 import { PageHeader, StatCard, LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
 import { DateRangeFilter, ALL_TIME, toParam, dateRangeLabel, type DateRangeValue } from '@/components/ui/date-range-filter';
 import { getDashboardData, getEdirReport, exportEdirReportCsv, type DashboardData } from '../actions/dashboard';
+import { downloadCsv } from '@/lib/download';
 import { CollectionsBreakdown } from './collections-breakdown';
 
 const money = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 2 });
@@ -44,8 +45,7 @@ export default function DashboardClient() {
   const onExportReport = async () => {
     try {
       const csv = await exportEdirReportCsv(toParam(range));
-      const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-      const a = document.createElement('a'); a.href = url; a.download = 'edir-report.csv'; a.click(); URL.revokeObjectURL(url);
+      downloadCsv(csv, 'edir-report.csv');
     } catch { toast.error('Export failed.'); }
   };
 

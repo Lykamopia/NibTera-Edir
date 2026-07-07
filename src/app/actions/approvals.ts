@@ -99,6 +99,13 @@ export interface ApprovalContext {
   // Manual-payment context: the recorded payment log (reference, evidence, dates)
   // so the checker sees every detail of what they are settling.
   payment?: { transactionId: string; method: string; status: string; receiptUrl: string | null; createdAt: string; amount: number; memberBalance: number | null };
+  // Rules & Bylaws publication: the full sanitized softcopy + attachments so a
+  // checker can read exactly the rules they are approving.
+  rulesVersion?: {
+    title: string; versionNumber: number; content: string; changeSummary: string | null;
+    effectiveDate: string | null; authorName: string | null;
+    attachments: { name: string; fileUrl: string; fileType: string }[];
+  };
   // Edir-lifecycle context: the full registration profile plus the uploaded
   // Rules & Laws (agreement) document, shown to the checker before approval.
   edir?: {
@@ -234,6 +241,23 @@ async function resolveApprovalContext(edirId: string, module: string, rawPayload
           fileType: fileName.toLowerCase().endsWith('.pdf') ? 'pdf' : 'image', category: 'Agreement',
         };
       }
+    }),
+    safe(async () => {
+      // Rules & Bylaws publication — load the full softcopy + attachments so the
+      // checker reads the exact rules they're approving.
+      if (module !== 'RULE_CHANGE' || (p.kind !== 'RULES_VERSION_PUBLISH') || !p.versionId) return;
+      const v = await prisma.rulesVersion.findUnique({
+        where: { id: p.versionId },
+        include: { attachments: true, author: { select: { name: true, email: true } } },
+      });
+      if (!v) return;
+      const fileType = (name: string) => { const e = (name.split('.').pop() || '').toLowerCase(); return ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(e) ? 'image' : e === 'pdf' ? 'pdf' : 'file'; };
+      ctx.rulesVersion = {
+        title: v.title, versionNumber: v.versionNumber, content: v.content, changeSummary: v.changeSummary,
+        effectiveDate: v.effectiveDate ? v.effectiveDate.toISOString() : null,
+        authorName: v.author?.name ?? v.author?.email ?? null,
+        attachments: v.attachments.map(a => ({ name: a.name, fileUrl: a.url, fileType: fileType(a.name) })),
+      };
     }),
     safe(async () => {
       ctx.edirName = (await prisma.edir.findUnique({ where: { id: edirId }, select: { name: true } }))?.name ?? null;

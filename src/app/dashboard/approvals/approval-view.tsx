@@ -34,10 +34,13 @@ interface Change { label: string; before?: ReactNode; after?: ReactNode }
 interface Block { label: string; text: string }
 interface Subject { icon: Icon; title: string; subtitle?: string; photoUrl?: string | null; href?: string }
 interface DocRef { title: string; fileName: string; fileUrl: string; fileType: string; category?: string }
+interface RichDoc { title: string; html: string; meta?: string }
 interface ViewModel {
   icon: Icon; accent: Accent;
   subject?: Subject; facts: Fact[]; changes?: Change[]; blocks?: Block[]; document?: DocRef;
   documents?: (DocRef & { status?: string; version?: number })[]; documentsLabel?: string;
+  /** Rendered rich-text softcopy (e.g. the Rules & Bylaws being published). */
+  richDoc?: RichDoc;
 }
 
 function changesFrom(obj: Record<string, any> | undefined | null): Change[] | undefined {
@@ -143,7 +146,22 @@ function buildView(detail: any): ViewModel {
         return { icon: Scale, accent: 'destructive', facts: [{ label: 'Repeal bylaw', value: p.title, emphasis: true }], blocks: p.previousValue ? [{ label: 'Current content', text: p.previousValue }] : undefined };
       }
       if (p.kind === 'RULES_VERSION_PUBLISH') {
-        return { icon: Scale, accent: 'primary', facts: [{ label: 'Document', value: p.title, emphasis: true }, { label: 'Version', value: `v${p.versionNumber}` }] };
+        const rv = ctx.rulesVersion;
+        const facts: Fact[] = [
+          { label: 'Document', value: rv?.title ?? p.title, emphasis: true },
+          { label: 'Version', value: `v${rv?.versionNumber ?? p.versionNumber}` },
+        ];
+        if (rv?.effectiveDate) facts.push({ label: 'Effective', value: new Date(rv.effectiveDate).toLocaleDateString() });
+        if (rv?.authorName) facts.push({ label: 'Drafted by', value: rv.authorName });
+        // The full sanitized softcopy for the checker to read, plus any attachments.
+        const attachments: DocRef[] = (rv?.attachments ?? []).map((a: any) => ({ title: a.name, fileName: a.name, fileUrl: a.fileUrl, fileType: a.fileType, category: 'Attachment' }));
+        return {
+          icon: Scale, accent: 'primary', facts,
+          richDoc: rv?.content ? { title: 'Rules & Bylaws — full text', html: rv.content, meta: rv.changeSummary ? `Change summary: ${rv.changeSummary}` : undefined } : undefined,
+          documents: attachments.length ? attachments : undefined,
+          documentsLabel: 'Attachments',
+          blocks: !rv?.content && p.title ? [{ label: 'Note', text: 'The rules softcopy could not be loaded — open the Rules page to review it before approving.' }] : undefined,
+        };
       }
       return { icon: Scale, accent: 'primary', facts: [] };
     }
@@ -308,6 +326,17 @@ export function ApprovalView({ detail }: { detail: any }) {
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Rich softcopy (e.g. the full Rules & Bylaws text being published). */}
+      {v.richDoc && (
+        <div className="space-y-2">
+          <SectionLabel>{v.richDoc.title}</SectionLabel>
+          {v.richDoc.meta && <p className="text-xs text-muted-foreground">{v.richDoc.meta}</p>}
+          <div className="max-h-[420px] overflow-y-auto rounded-xl border bg-card p-4">
+            <div className="prose prose-sm max-w-none dark:prose-invert" dangerouslySetInnerHTML={{ __html: v.richDoc.html }} />
+          </div>
         </div>
       )}
 

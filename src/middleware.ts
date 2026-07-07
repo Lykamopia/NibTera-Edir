@@ -152,6 +152,6 @@ export default withAuth(
 
 export const config = {
   matcher: [
-    "/((?!api/nib-callback|api/cron|_next/static|_next/image|favicon.ico|login|set-password|verify-email|portal|pay|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|mp3|SVG|PNG|JPG|JPEG|GIF|WEBP|ICO|MP3)).*)",
+    "/((?!api/nib-callback|api/cron|_next/static|_next/image|favicon.ico|login|forgot-password|set-password|verify-email|portal|pay|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|mp3|SVG|PNG|JPG|JPEG|GIF|WEBP|ICO|MP3)).*)",
   ],
 };

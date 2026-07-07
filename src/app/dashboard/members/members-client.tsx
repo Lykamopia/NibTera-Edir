@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import Papa from 'papaparse';
 import { toast } from 'sonner';
 import { cn, isValidEthiopianPhone } from '@/lib/utils';
+import { downloadCsv } from '@/lib/download';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -101,11 +102,7 @@ export default function MembersClient() {
   const onExport = async () => {
     try {
       const csv = await exportMembersDirectoryCsv({ edirId: edirFilter, range: toParam(dateRange) });
-      const blob = new Blob([csv], { type: 'text/csv' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url; a.download = 'members.csv'; a.click();
-      URL.revokeObjectURL(url);
+      downloadCsv(csv, 'members.csv');
     } catch { toast.error('Export failed.'); }
   };
 
@@ -602,8 +599,7 @@ function BulkImportMembersDialog({ ctx, onDone }: { ctx: DirectoryContext; onDon
 
   const downloadTemplate = () => {
     const csv = `${MEMBER_IMPORT_COLUMNS}\nAbebe Kebede,0912345678,abebe@example.com,Male,1980-05-12,ID123456,Merchant,"Bole, Addis Ababa",Addis Ababa,Bole,03,Almaz Kebede,0911000000,Member,2024-01-15,"Almaz Kebede:Spouse:0911000000|Kalkidan Abebe:Child"\n`;
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-    const a = document.createElement('a'); a.href = url; a.download = 'members-import-template.csv'; a.click(); URL.revokeObjectURL(url);
+    downloadCsv(csv, 'members-import-template.csv');
   };
 
   const submit = async () => {

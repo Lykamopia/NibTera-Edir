@@ -2,12 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
+import { downloadCsv } from '@/lib/download';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Card, CardContent } from '@/components/ui/card';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import {
@@ -27,7 +29,7 @@ const LINES = [
   ['interest', 'Interest'], ['serviceFees', 'Service Fees'], ['other', 'Other'],
 ] as const;
 type LineKey = (typeof LINES)[number][0];
-type SortKey = 'name' | 'due' | 'penalty' | 'arrears' | 'months';
+type SortKey = 'name' | 'due' | 'penalty' | 'contributions' | 'months';
 
 export default function PaymentsClient() {
   const [items, setItems] = useState<any[]>([]);
@@ -40,6 +42,7 @@ export default function PaymentsClient() {
   const [target, setTarget] = useState<any | null>(null);
   const [historyMember, setHistoryMember] = useState<any | null>(null);
   const [range, setRange] = useState<DateRangeValue>(ALL_TIME);
+  const [selected, setSelected] = useState<Map<string, any>>(new Map());
 
   const load = useCallback(() => {
     setLoading(true); setError(false);
@@ -59,7 +62,7 @@ export default function PaymentsClient() {
       if (sort.key === 'name') cmp = (a.name || '').localeCompare(b.name || '');
       else if (sort.key === 'due') cmp = due(a) - due(b);
       else if (sort.key === 'penalty') cmp = (a.latePenalty ?? 0) - (b.latePenalty ?? 0);
-      else if (sort.key === 'arrears') cmp = (a.contributionArrears ?? 0) - (b.contributionArrears ?? 0);
+      else if (sort.key === 'contributions') cmp = (a.monthlyContributions ?? 0) - (b.monthlyContributions ?? 0);
       else cmp = (a.monthsBehind ?? 0) - (b.monthsBehind ?? 0);
       return sort.dir === 'asc' ? cmp : -cmp;
     });
@@ -71,18 +74,54 @@ export default function PaymentsClient() {
   const toggleSort = (key: SortKey) => setSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: key === 'name' ? 'asc' : 'desc' });
   const SortIcon = ({ k }: { k: SortKey }) => sort.key !== k ? <ArrowUpDown className="h-3.5 w-3.5 opacity-40" /> : sort.dir === 'asc' ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />;
 
-  const exportCsv = () => {
-    const header = ['Member ID', 'Name', 'Phone', 'Status', 'Months Paid', 'Months Behind', `Contribution Arrears (${cur})`, `Late Penalty (${cur})`, 'Penalty Rule', `Other Charges (${cur})`, `Total Due (${cur})`, 'Last Payment'];
-    const data = rows.map(m => [
+  // ── Selection (by member id, persists across pages & filters) ──────────────
+  const pageAllSelected = pageItems.length > 0 && pageItems.every(m => selected.has(m.id));
+  const allFilteredSelected = rows.length > 0 && rows.every(m => selected.has(m.id));
+  const togglePage = () => setSelected(prev => {
+    const next = new Map(prev);
+    if (pageAllSelected) pageItems.forEach(m => next.delete(m.id));
+    else pageItems.forEach(m => next.set(m.id, m));
+    return next;
+  });
+  const toggleOne = (m: any) => setSelected(prev => {
+    const next = new Map(prev);
+    if (next.has(m.id)) next.delete(m.id); else next.set(m.id, m);
+    return next;
+  });
+  const selectAllFiltered = () => setSelected(prev => { const next = new Map(prev); rows.forEach(m => next.set(m.id, m)); return next; });
+  const clearSelection = () => setSelected(new Map());
+  const selectedRows = useMemo(() => Array.from(selected.values()), [selected]);
+  const selectedTotal = useMemo(() => selectedRows.reduce((s, m) => s + due(m), 0), [selectedRows]);
+
+  // ── Column totals for the footer (respects the active filter) ──────────────
+  const totals = useMemo(() => rows.reduce((t, m) => ({
+    monthlyContributions: t.monthlyContributions + (m.monthlyContributions ?? 0),
+    latePenalty: t.latePenalty + (m.latePenalty ?? 0),
+    registrationFee: t.registrationFee + (m.registrationFee ?? 0),
+    reinstatementFee: t.reinstatementFee + (m.reinstatementFee ?? 0),
+    assetCompensation: t.assetCompensation + (m.assetCompensation ?? 0),
+    eventPenalties: t.eventPenalties + (m.eventPenalties ?? 0),
+    accountBalance: t.accountBalance + (m.accountBalance ?? 0),
+    totalDue: t.totalDue + due(m),
+  }), { monthlyContributions: 0, latePenalty: 0, registrationFee: 0, reinstatementFee: 0, assetCompensation: 0, eventPenalties: 0, accountBalance: 0, totalDue: 0 }), [rows]);
+
+  const exportRows = (list: any[], name: string) => {
+    const header = ['Member ID', 'Name', 'Phone', 'Status', 'Months Paid', 'Months Behind',
+      `Monthly Contributions (${cur})`, `Late Penalty (${cur})`, 'Penalty Rule', `Registration Fee (${cur})`,
+      `Reinstatement Fee (${cur})`, `Asset Loss / Compensation (${cur})`, `Event Penalties (${cur})`,
+      `Account Balance (${cur})`, `Total Due (${cur})`, 'Last Payment'];
+    const data = list.map(m => [
       m.memberId, m.name, m.phone || '', m.status, String(m.monthsPaid ?? 0), String(m.monthsBehind ?? 0),
-      String(m.contributionArrears ?? 0), String(m.latePenalty ?? 0), m.penaltyRule || '',
-      String(m.otherCharges ?? 0), String(m.totalDue ?? 0),
+      String(m.monthlyContributions ?? 0), String(m.latePenalty ?? 0), m.penaltyRule || '',
+      String(m.registrationFee ?? 0), String(m.reinstatementFee ?? 0), String(m.assetCompensation ?? 0),
+      String(m.eventPenalties ?? 0), String(m.accountBalance ?? 0), String(due(m)),
       m.lastPayment ? new Date(m.lastPayment).toLocaleDateString() : '',
     ]);
     const csv = [header, ...data].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-    const a = document.createElement('a'); a.href = url; a.download = 'payments.csv'; a.click(); URL.revokeObjectURL(url);
+    downloadCsv(csv, name);
   };
+  const exportAll = () => exportRows(rows, 'payments.csv');
+  const exportSelected = () => { if (selectedRows.length) exportRows(selectedRows, `payments-selected-${selectedRows.length}.csv`); };
   const money = (n: number) => `${n.toLocaleString()} ${cur}`;
 
   return (
@@ -112,8 +151,23 @@ export default function PaymentsClient() {
             <SelectItem value="settled">Settled</SelectItem>
           </SelectContent>
         </Select>
-        <Button variant="outline" onClick={exportCsv}><Download className="mr-1.5 h-4 w-4" /> Export</Button>
+        <Button variant="outline" onClick={exportAll}><Download className="mr-1.5 h-4 w-4" /> Export{filter !== 'all' ? ' filtered' : ''}</Button>
       </div>
+
+      {/* Selection bar */}
+      {selected.size > 0 && (
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2">
+          <span className="text-sm font-medium">{selected.size} member{selected.size === 1 ? '' : 's'} selected</span>
+          <span className="text-sm text-muted-foreground">· Total due {money(selectedTotal)}</span>
+          {!allFilteredSelected && rows.length > selected.size && (
+            <button onClick={selectAllFiltered} className="text-sm font-medium text-primary hover:underline">Select all {rows.length} matching</button>
+          )}
+          <div className="ml-auto flex items-center gap-2">
+            <Button size="sm" variant="outline" onClick={exportSelected}><Download className="mr-1 h-4 w-4" /> Export selected</Button>
+            <Button size="sm" variant="ghost" onClick={clearSelection}>Clear</Button>
+          </div>
+        </div>
+      )}
 
       <Card>
         <CardContent className="p-0">
@@ -124,12 +178,16 @@ export default function PaymentsClient() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-10"><Checkbox checked={pageAllSelected} onCheckedChange={togglePage} aria-label="Select page" /></TableHead>
                   <TableHead><button onClick={() => toggleSort('name')} className="flex items-center gap-1 hover:text-foreground">Member <SortIcon k="name" /></button></TableHead>
-                  <TableHead>Phone</TableHead>
                   <TableHead className="text-center"><button onClick={() => toggleSort('months')} className="mx-auto flex items-center gap-1 hover:text-foreground">Months Behind <SortIcon k="months" /></button></TableHead>
-                  <TableHead className="text-right"><button onClick={() => toggleSort('arrears')} className="ml-auto flex items-center gap-1 hover:text-foreground">Contribution Arrears <SortIcon k="arrears" /></button></TableHead>
+                  <TableHead className="text-right"><button onClick={() => toggleSort('contributions')} className="ml-auto flex items-center gap-1 hover:text-foreground">Monthly Contributions <SortIcon k="contributions" /></button></TableHead>
                   <TableHead className="text-right"><button onClick={() => toggleSort('penalty')} className="ml-auto flex items-center gap-1 hover:text-foreground">Late Penalty <SortIcon k="penalty" /></button></TableHead>
-                  <TableHead className="text-right">Other Charges</TableHead>
+                  <TableHead className="text-right">Registration Fee</TableHead>
+                  <TableHead className="text-right">Reinstatement</TableHead>
+                  <TableHead className="text-right">Asset Loss</TableHead>
+                  <TableHead className="text-right">Event Penalties</TableHead>
+                  <TableHead className="text-right">Account Balance</TableHead>
                   <TableHead className="text-right"><button onClick={() => toggleSort('due')} className="ml-auto flex items-center gap-1 hover:text-foreground">Total Due <SortIcon k="due" /></button></TableHead>
                   <TableHead></TableHead>
                 </TableRow>
@@ -137,8 +195,10 @@ export default function PaymentsClient() {
               <TableBody>
                 {pageItems.map(m => {
                   const b = due(m);
+                  const amt = (n: number, cls = '') => n > 0 ? <span className={`tabular-nums ${cls}`}>{money(n)}</span> : <span className="text-muted-foreground">—</span>;
                   return (
-                    <TableRow key={m.id} className="group">
+                    <TableRow key={m.id} className={`group ${selected.has(m.id) ? 'bg-primary/5' : ''}`}>
+                      <TableCell><Checkbox checked={selected.has(m.id)} onCheckedChange={() => toggleOne(m)} aria-label={`Select ${m.name}`} /></TableCell>
                       <TableCell>
                         <button onClick={() => setHistoryMember(m)} className="text-left transition-colors hover:text-primary">
                           <div className="font-medium">{m.name}</div>
@@ -148,22 +208,25 @@ export default function PaymentsClient() {
                           {m.monthsPaid} mo paid{m.lastPayment ? ` · last ${new Date(m.lastPayment).toLocaleDateString()}` : ''}
                         </div>
                       </TableCell>
-                      <TableCell className="text-sm">{m.phone || '—'}</TableCell>
                       <TableCell className="text-center">
                         {m.monthsBehind > 0
                           ? <Badge variant="outline" className="border-warning/20 bg-warning/10 text-warning">{m.monthsBehind} mo</Badge>
                           : <Badge variant="outline" className="border-success/20 bg-success/10 text-success">Up to date</Badge>}
                       </TableCell>
-                      <TableCell className="text-right tabular-nums">{m.contributionArrears > 0 ? money(m.contributionArrears) : '—'}</TableCell>
+                      <TableCell className="text-right">{amt(m.monthlyContributions)}</TableCell>
                       <TableCell className="text-right">
                         {m.latePenalty > 0 ? (
                           <div>
                             <span className="font-medium tabular-nums text-warning">{money(m.latePenalty)}</span>
                             {m.penaltyRule && <div className="text-[10px] text-muted-foreground" title={`${m.overdueDays} day(s) overdue`}>{m.penaltyRule}</div>}
                           </div>
-                        ) : '—'}
+                        ) : <span className="text-muted-foreground">—</span>}
                       </TableCell>
-                      <TableCell className="text-right tabular-nums">{m.otherCharges > 0 ? money(m.otherCharges) : '—'}</TableCell>
+                      <TableCell className="text-right">{amt(m.registrationFee)}</TableCell>
+                      <TableCell className="text-right">{amt(m.reinstatementFee, 'text-destructive')}</TableCell>
+                      <TableCell className="text-right">{amt(m.assetCompensation)}</TableCell>
+                      <TableCell className="text-right">{amt(m.eventPenalties, 'text-warning')}</TableCell>
+                      <TableCell className="text-right">{amt(m.accountBalance)}</TableCell>
                       <TableCell className="text-right"><span className={`font-semibold tabular-nums ${b > 0 ? 'text-warning' : 'text-success'}`}>{money(b)}</span></TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1.5">
@@ -175,6 +238,22 @@ export default function PaymentsClient() {
                   );
                 })}
               </TableBody>
+              <TableFooter>
+                <TableRow className="border-t-2 font-medium">
+                  <TableCell />
+                  <TableCell className="text-xs uppercase tracking-wide text-muted-foreground">Totals · {rows.length} member{rows.length === 1 ? '' : 's'}</TableCell>
+                  <TableCell />
+                  <TableCell className="text-right tabular-nums">{money(totals.monthlyContributions)}</TableCell>
+                  <TableCell className="text-right tabular-nums text-warning">{money(totals.latePenalty)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{money(totals.registrationFee)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{money(totals.reinstatementFee)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{money(totals.assetCompensation)}</TableCell>
+                  <TableCell className="text-right tabular-nums text-warning">{money(totals.eventPenalties)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{money(totals.accountBalance)}</TableCell>
+                  <TableCell className="text-right font-bold tabular-nums text-warning">{money(totals.totalDue)}</TableCell>
+                  <TableCell />
+                </TableRow>
+              </TableFooter>
             </Table>
             </div>
           )}

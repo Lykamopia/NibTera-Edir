@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
+import { downloadCsv } from '@/lib/download';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
@@ -41,10 +42,6 @@ function StatusBadge({ status }: { status: string }) {
 
 const fmt = (d: any) => new Date(d).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 
-const downloadCsv = (csv: string, name: string) => {
-  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-  const a = document.createElement('a'); a.href = url; a.download = name; a.click(); URL.revokeObjectURL(url);
-};
 
 export default function ApprovalsClient() {
   const [tab, setTab] = useState<ApprovalTab>('pending');

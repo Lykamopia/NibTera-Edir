@@ -8,6 +8,7 @@
  */
 
 import * as React from 'react';
+import { downloadCsv } from '@/lib/download';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
@@ -64,8 +65,7 @@ export function ImportDialog({
     const example = (sampleRows.length ? sampleRows : [Object.fromEntries(columns.map(c => [c.key, c.example ?? '']))])
       .map(r => columns.map(c => csvCell(r[c.key] ?? '')).join(','));
     const csv = [header, ...example].join('\n');
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-    const a = document.createElement('a'); a.href = url; a.download = templateName; a.click(); URL.revokeObjectURL(url);
+    downloadCsv(csv, templateName);
   };
 
   const parse = (text: string) => {

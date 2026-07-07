@@ -141,13 +141,35 @@ export async function getPaymentsMatrix(params: { query?: string; status?: strin
     orderBy: { name: 'asc' },
     take: 500,
   });
+  const memberIds = members.map(m => m.id);
 
   // Per-Edir settings (penalty tiers, fees) for the members in scope.
   const edirIds = Array.from(new Set(members.map(m => m.edirId)));
-  const settingsRows = edirIds.length
-    ? await prisma.edirSettings.findMany({ where: { edirId: { in: edirIds } } })
-    : [];
+  // Decompose each member's pooled account balance into its named sources:
+  //  • pending REGISTRATION installments, • outstanding asset-loss/compensation,
+  //  • event-absence penalties. Queried from the authoritative source tables.
+  const [settingsRows, regInstallments, assetComp, eventPen] = await Promise.all([
+    edirIds.length ? prisma.edirSettings.findMany({ where: { edirId: { in: edirIds } } }) : Promise.resolve([]),
+    memberIds.length ? prisma.installment.findMany({
+      where: { status: 'PENDING', plan: { type: 'REGISTRATION', memberId: { in: memberIds } } },
+      select: { amount: true, plan: { select: { memberId: true } } },
+    }) : Promise.resolve([]),
+    memberIds.length ? prisma.assetIssuance.groupBy({
+      by: ['memberId'], where: { memberId: { in: memberIds }, status: 'COMPENSATION_PENDING' }, _sum: { compensation: true },
+    }) : Promise.resolve([]),
+    memberIds.length ? prisma.eventParticipant.findMany({
+      where: { memberId: { in: memberIds }, penalized: true }, select: { memberId: true, event: { select: { absencePenalty: true } } },
+    }) : Promise.resolve([]),
+  ]);
   const settingsByEdir = new Map(settingsRows.map(s => [s.edirId, s]));
+  const num = (v: unknown) => (v == null || isNaN(Number(v)) ? 0 : Number(v));
+
+  const regByMember = new Map<string, number>();
+  for (const i of regInstallments) { const id = i.plan.memberId; regByMember.set(id, (regByMember.get(id) ?? 0) + num(i.amount)); }
+  const assetByMember = new Map(assetComp.map(r => [r.memberId as string, num(r._sum.compensation)]));
+  const eventByMember = new Map<string, number>();
+  for (const e of eventPen) { if (!e.memberId) continue; eventByMember.set(e.memberId, (eventByMember.get(e.memberId) ?? 0) + num(e.event?.absencePenalty)); }
+
   const now = new Date();
 
   const items = members.map(m => {
@@ -170,6 +192,17 @@ export async function getPaymentsMatrix(params: { query?: string; status?: strin
     });
     const penaltyAmount = penalty?.amount ?? 0;
     const reinstatementFee = (m.status === 'SUSPENDED' || m.status === 'TERMINATED') ? Number(s?.reinstatementFee ?? 0) : 0;
+
+    // Waterfall-decompose the pooled balance into named buckets so they sum to
+    // the balance exactly (a member's registration fee, asset compensation, and
+    // event penalties are all folded into the one balance figure). Priority
+    // order: registration → asset compensation → event penalties → residual.
+    let remaining = balance;
+    const registrationFee = Math.min(regByMember.get(m.id) ?? 0, remaining); remaining -= registrationFee;
+    const assetCompensation = Math.min(assetByMember.get(m.id) ?? 0, remaining); remaining -= assetCompensation;
+    const eventPenalties = Math.min(eventByMember.get(m.id) ?? 0, remaining); remaining -= eventPenalties;
+    const accountBalance = Math.max(0, remaining);
+
     return {
       id: m.id,
       memberId: m.memberId,
@@ -181,12 +214,16 @@ export async function getPaymentsMatrix(params: { query?: string; status?: strin
       monthsPaid: m.paymentStatus?.monthsPaid ?? 0,
       lastPayment: m.paymentStatus?.lastPayment ?? null,
       monthsBehind,
-      contributionArrears: arrears,
+      // Named, distinct dues — these sum exactly to totalDue.
+      monthlyContributions: arrears,
       latePenalty: penaltyAmount,
       penaltyRule: penalty?.rule ?? null,
       overdueDays: penalty?.overdueDays ?? 0,
       reinstatementFee,
-      otherCharges: balance,
+      registrationFee,
+      assetCompensation,
+      eventPenalties,
+      accountBalance,
       totalDue: balance + arrears + penaltyAmount + reinstatementFee,
     };
   });

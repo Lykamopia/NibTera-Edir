@@ -16,6 +16,7 @@ import {
 import { LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
 import { DateRangeFilter, ALL_TIME, toParam, type DateRangeValue } from '@/components/ui/date-range-filter';
 import { getPlatformDashboard, exportOrgDashboardCsv } from '@/app/actions/dashboard';
+import { downloadCsv } from '@/lib/download';
 import { toast } from 'sonner';
 import { Download } from 'lucide-react';
 import { CollectionsBreakdown } from './collections-breakdown';
@@ -54,8 +55,7 @@ export default function PlatformDashboard() {
   const onExport = async () => {
     try {
       const csv = await exportOrgDashboardCsv(toParam(dateRange));
-      const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-      const a = document.createElement('a'); a.href = url; a.download = 'platform-report.csv'; a.click(); URL.revokeObjectURL(url);
+      downloadCsv(csv, 'platform-report.csv');
     } catch { toast.error('Export failed.'); }
   };
 

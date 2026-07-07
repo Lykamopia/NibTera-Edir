@@ -373,6 +373,10 @@ export const PLATFORM_PERMISSION_IDS: Permission[] = Array.from(new Set<Permissi
  */
 export const PLATFORM_GRANTABLE_EDIR_PERMISSION_IDS: Permission[] = [
   'view_payment_log', 'export_payments', 'void_payment',
+  // Payment settlement: a platform (branch/district/head-office) role may record
+  // a member's payment with a receipt. It routes through the Edir's own
+  // Maker–Checker, so the Edir Admin (approve_payment) still approves it.
+  'view_payments', 'record_payment', 'view_members',
 ];
 const PLATFORM_GRANTABLE_SET = new Set(PLATFORM_GRANTABLE_EDIR_PERMISSION_IDS as string[]);
 

@@ -1,10 +1,9 @@
 'use server';
 
 import { z } from 'zod';
+import { Prisma } from '@prisma/client';
 import prisma from '@/lib/prisma';
 import { getActor, actorHasPermission, assertPermission, resolveEdirId } from '@/lib/tenant-scope';
-import { submitForApproval, approveRequest, rejectRequest } from '@/lib/approval-engine';
-import '@/lib/approval-modules';
 import { writeAudit } from '@/lib/audit';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
@@ -84,7 +83,7 @@ const categorySchema = z.object({
   maxDependents: z.coerce.number().int().min(0).max(99).optional().nullable(),
 });
 
-/** Maker: create a new relationship category (pending until a Checker approves). */
+/** Create a new relationship category — applied immediately (no approval). */
 export async function submitCreateRelationshipCategory(input: z.infer<typeof categorySchema>) {
   try {
     const actor = await getActor();
@@ -96,32 +95,23 @@ export async function submitCreateRelationshipCategory(input: z.infer<typeof cat
     if (dupe) return { success: false as const, error: 'A category with this name already exists.' };
 
     const max = await prisma.relationshipCategory.aggregate({ where: { edirId }, _max: { displayOrder: true } });
-    const cat = await prisma.relationshipCategory.create({
+    await prisma.relationshipCategory.create({
       data: {
         edirId, name: data.name, description: data.description || null, isActive: data.isActive,
         benefitEligible: data.benefitEligible, emergencyEligible: data.emergencyEligible,
         requiredDocuments: data.requiredDocuments || null, maxDependents: data.maxDependents ?? null,
-        displayOrder: (max._max.displayOrder ?? 0) + 1, pendingAction: 'create',
+        displayOrder: (max._max.displayOrder ?? 0) + 1,
       },
     });
-
-    await submitForApproval(actor, {
-      edirId, module: 'RELATIONSHIP_CATEGORY',
-      title: `New relationship category: ${data.name}`,
-      summary: `Create the "${data.name}" relationship category`,
-      payload: { categoryId: cat.id, action: 'create' },
-      targetType: 'RelationshipCategory', targetId: cat.id,
-    });
-    await writeAudit({ edirId, userId: actor.id, action: 'RELATIONSHIP_CATEGORY_CREATE_SUBMITTED', targetType: 'RelationshipCategory', targetId: cat.id, details: data.name });
+    await writeAudit({ edirId, userId: actor.id, action: 'RELATIONSHIP_CATEGORY_CREATED', targetType: 'RelationshipCategory', targetId: edirId, details: data.name });
     revalidatePath('/dashboard/admin/settings');
-    revalidatePath('/dashboard/approvals');
     return { success: true as const };
   } catch (error) {
     return failure(error);
   }
 }
 
-/** Maker: edit a category's settings (incl. activate/deactivate) — routed through approval. */
+/** Edit a category's settings (incl. activate/deactivate) — applied immediately. */
 export async function submitUpdateRelationshipCategory(id: string, input: z.infer<typeof categorySchema>) {
   try {
     const actor = await getActor();
@@ -129,7 +119,6 @@ export async function submitUpdateRelationshipCategory(id: string, input: z.infe
     const edirId = await resolveEdirId(actor);
     const cat = await prisma.relationshipCategory.findFirst({ where: { id, edirId } });
     if (!cat) return { success: false as const, error: 'Category not found.' };
-    if (cat.pendingAction) return { success: false as const, error: 'This category already has a pending change awaiting approval.' };
     const data = categorySchema.parse(input);
 
     if (data.name !== cat.name) {
@@ -137,29 +126,24 @@ export async function submitUpdateRelationshipCategory(id: string, input: z.infe
       if (dupe) return { success: false as const, error: 'Another category already uses this name.' };
     }
 
-    const changes = {
-      name: data.name, description: data.description || null, isActive: data.isActive,
-      benefitEligible: data.benefitEligible, emergencyEligible: data.emergencyEligible,
-      requiredDocuments: data.requiredDocuments || null, maxDependents: data.maxDependents ?? null,
-    };
-    await prisma.relationshipCategory.update({ where: { id }, data: { pendingAction: 'edit', pendingPayload: changes } });
-    await submitForApproval(actor, {
-      edirId, module: 'RELATIONSHIP_CATEGORY',
-      title: `Edit relationship category: ${cat.name}`,
-      summary: `Update the "${cat.name}" relationship category`,
-      payload: { categoryId: id, action: 'edit', changes },
-      targetType: 'RelationshipCategory', targetId: id,
+    await prisma.relationshipCategory.update({
+      where: { id },
+      data: {
+        name: data.name, description: data.description || null, isActive: data.isActive,
+        benefitEligible: data.benefitEligible, emergencyEligible: data.emergencyEligible,
+        requiredDocuments: data.requiredDocuments || null, maxDependents: data.maxDependents ?? null,
+        pendingAction: null, pendingPayload: Prisma.DbNull,
+      },
     });
-    await writeAudit({ edirId, userId: actor.id, action: 'RELATIONSHIP_CATEGORY_EDIT_SUBMITTED', targetType: 'RelationshipCategory', targetId: id, details: cat.name });
+    await writeAudit({ edirId, userId: actor.id, action: 'RELATIONSHIP_CATEGORY_UPDATED', targetType: 'RelationshipCategory', targetId: id, details: data.name });
     revalidatePath('/dashboard/admin/settings');
-    revalidatePath('/dashboard/approvals');
     return { success: true as const };
   } catch (error) {
     return failure(error);
   }
 }
 
-/** Maker: request deletion of a category — routed through approval. */
+/** Delete a category — applied immediately. Blocked only if in use by a relative. */
 export async function submitDeleteRelationshipCategory(id: string) {
   try {
     const actor = await getActor();
@@ -167,19 +151,15 @@ export async function submitDeleteRelationshipCategory(id: string) {
     const edirId = await resolveEdirId(actor);
     const cat = await prisma.relationshipCategory.findFirst({ where: { id, edirId } });
     if (!cat) return { success: false as const, error: 'Category not found.' };
-    if (cat.pendingAction) return { success: false as const, error: 'This category already has a pending change awaiting approval.' };
 
-    await prisma.relationshipCategory.update({ where: { id }, data: { pendingAction: 'delete' } });
-    await submitForApproval(actor, {
-      edirId, module: 'RELATIONSHIP_CATEGORY',
-      title: `Delete relationship category: ${cat.name}`,
-      summary: `Delete the "${cat.name}" relationship category`,
-      payload: { categoryId: id, action: 'delete' },
-      targetType: 'RelationshipCategory', targetId: id,
-    });
-    await writeAudit({ edirId, userId: actor.id, action: 'RELATIONSHIP_CATEGORY_DELETE_SUBMITTED', targetType: 'RelationshipCategory', targetId: id, details: cat.name });
+    const inUse = await prisma.relative.count({ where: { relationship: cat.name, member: { edirId } } });
+    if (inUse > 0) {
+      return { success: false as const, error: `Cannot delete — ${inUse} relative(s) use "${cat.name}". Deactivate it instead to hide it from new entries.` };
+    }
+
+    await prisma.relationshipCategory.delete({ where: { id } });
+    await writeAudit({ edirId, userId: actor.id, action: 'RELATIONSHIP_CATEGORY_DELETED', targetType: 'RelationshipCategory', targetId: id, details: cat.name });
     revalidatePath('/dashboard/admin/settings');
-    revalidatePath('/dashboard/approvals');
     return { success: true as const };
   } catch (error) {
     return failure(error);
@@ -206,30 +186,3 @@ export async function reorderRelationshipCategories(orderedIds: string[]) {
   }
 }
 
-/** Checker: approve the category's pending request (delegates to the engine). */
-export async function approveRelationshipCategory(id: string, comment?: string) {
-  try {
-    const req = await prisma.approvalRequest.findFirst({ where: { module: 'RELATIONSHIP_CATEGORY', targetId: id, status: 'PENDING' }, orderBy: { createdAt: 'desc' } });
-    if (!req) return { success: false as const, error: 'No pending approval for this category.' };
-    await approveRequest(req.id, comment);
-    revalidatePath('/dashboard/admin/settings');
-    revalidatePath('/dashboard/approvals');
-    return { success: true as const };
-  } catch (error) {
-    return failure(error);
-  }
-}
-
-/** Checker: reject the category's pending request (delegates to the engine). */
-export async function rejectRelationshipCategory(id: string, comment?: string) {
-  try {
-    const req = await prisma.approvalRequest.findFirst({ where: { module: 'RELATIONSHIP_CATEGORY', targetId: id, status: 'PENDING' }, orderBy: { createdAt: 'desc' } });
-    if (!req) return { success: false as const, error: 'No pending approval for this category.' };
-    await rejectRequest(req.id, comment);
-    revalidatePath('/dashboard/admin/settings');
-    revalidatePath('/dashboard/approvals');
-    return { success: true as const };
-  } catch (error) {
-    return failure(error);
-  }
-}

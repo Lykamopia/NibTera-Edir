@@ -9,6 +9,7 @@ import { Users, Building2, DollarSign, Clock, AlertCircle, ShieldAlert, Download
 import { LoadingState } from '@/components/ui/states';
 import { DateRangeFilter, ALL_TIME, toParam, type DateRangeValue } from '@/components/ui/date-range-filter';
 import { getBranchDashboard, exportOrgDashboardCsv } from '@/app/actions/dashboard';
+import { downloadCsv } from '@/lib/download';
 import { OrgEdirRegistry } from './org-edir-registry';
 import { CollectionsBreakdown } from './collections-breakdown';
 
@@ -34,8 +35,7 @@ export default function BranchDashboard({ actor }: { actor: Actor }) {
   const onExport = async () => {
     try {
       const csv = await exportOrgDashboardCsv(toParam(range));
-      const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-      const a = document.createElement('a'); a.href = url; a.download = 'branch-dashboard-report.csv'; a.click(); URL.revokeObjectURL(url);
+      downloadCsv(csv, 'branch-dashboard-report.csv');
     } catch { toast.error('Export failed.'); }
   };
 
