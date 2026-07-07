@@ -274,11 +274,12 @@ export async function getOrgRoles(placement: { branchId?: string | null; distric
     await assertPermission(actor, ['view_users', 'manage_users']);
     let branchId = placement.branchId?.trim() || null;
     let districtId = placement.districtId?.trim() || null;
+    // Org-unit actors default to their own unit. Super-Admin / head-office
+    // managers with no branch/district are targeting a HEAD-OFFICE placement.
     if (!branchId && !districtId) {
       if (actor.orgScope === 'BRANCH') branchId = actor.branchId;
       else if (actor.orgScope === 'DISTRICT') districtId = actor.districtId;
     }
-    if (!branchId && !districtId) return { success: false as const, error: 'Select a branch or district.' };
     await assertOrgUnitScope(actor, { branchId, districtId });
 
     const roles = branchId
@@ -286,10 +287,16 @@ export async function getOrgRoles(placement: { branchId?: string | null; distric
           where: { scope: 'BRANCH', OR: [{ branchId }, { branchId: null }] },
           orderBy: { name: 'asc' }, select: { id: true, name: true, scope: true },
         })
-      : await prisma.role.findMany({
-          where: { scope: 'DISTRICT', OR: [{ districtId }, { districtId: null }] },
-          orderBy: { name: 'asc' }, select: { id: true, name: true, scope: true },
-        });
+      : districtId
+        ? await prisma.role.findMany({
+            where: { scope: 'DISTRICT', OR: [{ districtId }, { districtId: null }] },
+            orderBy: { name: 'asc' }, select: { id: true, name: true, scope: true },
+          })
+        // Head-office platform account (no branch/district placement).
+        : await prisma.role.findMany({
+            where: { scope: 'HEAD_OFFICE' },
+            orderBy: { name: 'asc' }, select: { id: true, name: true, scope: true },
+          });
     return { success: true as const, data: roles };
   } catch (error) {
     return failure(error);
@@ -311,8 +318,11 @@ async function validateOrgRole(roleId: string, branchId: string | null, district
   if (!role) return 'Role not found.';
   if (branchId) {
     if (role.scope !== 'BRANCH' || (role.branchId && role.branchId !== branchId)) return 'Select a branch-scoped role for a branch user.';
-  } else {
+  } else if (districtId) {
     if (role.scope !== 'DISTRICT' || (role.districtId && role.districtId !== districtId)) return 'Select a district-scoped role for a district user.';
+  } else {
+    // No placement → a head-office platform account.
+    if (role.scope !== 'HEAD_OFFICE') return 'Select a head-office role for this account.';
   }
   return null;
 }

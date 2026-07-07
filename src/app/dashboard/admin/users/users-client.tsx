@@ -157,9 +157,11 @@ export default function UsersClient() {
   };
 
   // A row this org operator may edit/delete directly: a platform (non-Edir)
-  // account. The server enforces the exact branch/district scope.
+  // account placed at head office, a district, or a branch. The server enforces
+  // the exact scope. Super-Admin accounts and role-less unassigned rows are out.
   const isOrgManageable = (r: PersonRow) =>
-    !!ctx?.canManageOrgUsers && !r.edirId && r.roleScope !== 'SUPER_ADMIN' && (!!r.branchId || !!r.districtId);
+    !!ctx?.canManageOrgUsers && !r.edirId && r.roleScope !== 'SUPER_ADMIN'
+    && (r.roleScope === 'HEAD_OFFICE' || r.roleScope === 'DISTRICT' || r.roleScope === 'BRANCH' || !!r.branchId || !!r.districtId);
 
   // A row editable via the Edit dialog: an Edir account (identity + role + status)
   // or an org-unit platform account. Role changes only ever go through this dialog.

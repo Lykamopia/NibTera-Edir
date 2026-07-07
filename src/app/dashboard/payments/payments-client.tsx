@@ -25,7 +25,8 @@ import { PaymentReceiptModal } from '@/components/payment-receipt-modal';
 import { getMemberOutstanding, recordManualPayment, getPaymentsSummary, getMemberPaymentHistory, getPaymentsMatrix } from '@/app/actions/payments';
 
 // Distinct, labeled charge lines so the operator knows exactly what each amount
-// pays for and can explain the payment to the member. Order = suggested priority.
+// pays for and can explain the payment to the member. These are the ONLY real
+// charge sources in the system. Order = suggested priority.
 const LINES = [
   ['arrears', 'Monthly Contributions', 'Unpaid monthly membership contributions (arrears).'],
   ['latePenalty', 'Late Penalty', 'Penalty accrued for overdue contributions.'],
@@ -33,9 +34,8 @@ const LINES = [
   ['reinstatementFee', 'Reinstatement Fee', 'Fee to restore a suspended or terminated membership.'],
   ['assetCompensation', 'Asset Loss / Compensation', 'Compensation owed for lost or damaged Edir assets.'],
   ['eventPenalties', 'Event Penalties', 'Penalties for missing mandatory events.'],
-  ['other', 'Other Charges', 'Any remaining account balance (interest, service fees, misc.).'],
 ] as const;
-type LineKey = (typeof LINES)[number][0];
+type LineKey = (typeof LINES)[number][0] | 'other';
 type SortKey = 'name' | 'due' | 'penalty' | 'contributions' | 'months';
 
 export default function PaymentsClient() {
@@ -112,11 +112,16 @@ export default function PaymentsClient() {
     totalDue: t.totalDue + due(m),
   }), { monthlyContributions: 0, latePenalty: 0, registrationFee: 0, reinstatementFee: 0, assetCompensation: 0, eventPenalties: 0, accountBalance: 0, totalDue: 0 }), [rows]);
 
+  // "Unclassified" is an anomaly column: a pooled balance not linked to any known
+  // charge. In healthy data it's always zero, so the column is hidden entirely —
+  // members only ever see the distinct, named fees.
+  const hasUnclassified = useMemo(() => rows.some(m => (m.accountBalance ?? 0) > 0), [rows]);
+
   const exportRows = (list: any[], name: string) => {
     const header = ['Member ID', 'Name', 'Phone', 'Status', 'Months Paid', 'Months Behind',
       `Monthly Contributions (${cur})`, `Late Penalty (${cur})`, 'Penalty Rule', `Registration Fee (${cur})`,
       `Reinstatement Fee (${cur})`, `Asset Loss / Compensation (${cur})`, `Event Penalties (${cur})`,
-      `Account Balance (${cur})`, `Total Due (${cur})`, 'Last Payment'];
+      `Unclassified (${cur})`, `Total Due (${cur})`, 'Last Payment'];
     const data = list.map(m => [
       m.memberId, m.name, m.phone || '', m.status, String(m.monthsPaid ?? 0), String(m.monthsBehind ?? 0),
       String(m.monthlyContributions ?? 0), String(m.latePenalty ?? 0), m.penaltyRule || '',
@@ -194,7 +199,7 @@ export default function PaymentsClient() {
                   <TableHead className="text-right">Reinstatement</TableHead>
                   <TableHead className="text-right">Asset Loss</TableHead>
                   <TableHead className="text-right">Event Penalties</TableHead>
-                  <TableHead className="text-right">Account Balance</TableHead>
+                  {hasUnclassified && <TableHead className="text-right text-warning">Unclassified</TableHead>}
                   <TableHead className="text-right"><button onClick={() => toggleSort('due')} className="ml-auto flex items-center gap-1 hover:text-foreground">Total Due <SortIcon k="due" /></button></TableHead>
                   <TableHead></TableHead>
                 </TableRow>
@@ -233,7 +238,7 @@ export default function PaymentsClient() {
                       <TableCell className="text-right">{amt(m.reinstatementFee, 'text-destructive')}</TableCell>
                       <TableCell className="text-right">{amt(m.assetCompensation)}</TableCell>
                       <TableCell className="text-right">{amt(m.eventPenalties, 'text-warning')}</TableCell>
-                      <TableCell className="text-right">{amt(m.accountBalance)}</TableCell>
+                      {hasUnclassified && <TableCell className="text-right">{amt(m.accountBalance, 'text-warning')}</TableCell>}
                       <TableCell className="text-right"><span className={`font-semibold tabular-nums ${b > 0 ? 'text-warning' : 'text-success'}`}>{money(b)}</span></TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1.5">
@@ -256,7 +261,7 @@ export default function PaymentsClient() {
                   <TableCell className="text-right tabular-nums">{money(totals.reinstatementFee)}</TableCell>
                   <TableCell className="text-right tabular-nums">{money(totals.assetCompensation)}</TableCell>
                   <TableCell className="text-right tabular-nums text-warning">{money(totals.eventPenalties)}</TableCell>
-                  <TableCell className="text-right tabular-nums">{money(totals.accountBalance)}</TableCell>
+                  {hasUnclassified && <TableCell className="text-right tabular-nums text-warning">{money(totals.accountBalance)}</TableCell>}
                   <TableCell className="text-right font-bold tabular-nums text-warning">{money(totals.totalDue)}</TableCell>
                   <TableCell />
                 </TableRow>
@@ -285,7 +290,7 @@ const STATUS_META: Record<string, { label: string; icon: any; cls: string; dot: 
 const LINE_LABEL: Record<string, string> = {
   installment: 'Installment', arrears: 'Monthly contributions', latePenalty: 'Late penalty',
   registrationFee: 'Registration fee', reinstatementFee: 'Reinstatement fee', assetCompensation: 'Asset loss',
-  eventPenalties: 'Event penalties', interest: 'Interest', serviceFees: 'Service fees', other: 'Other charges',
+  eventPenalties: 'Event penalties', interest: 'Interest', serviceFees: 'Service fees', other: 'Unclassified',
 };
 
 function HistoryDialog({ member, onClose, onRecord }: { member: any; onClose: () => void; onRecord: () => void }) {
@@ -510,6 +515,17 @@ function RecordDialog({ member, onClose, onDone }: { member: any; onClose: () =>
                   </div>
                 );
               })}
+              {/* Anomaly only: a balance not linked to any known charge. Hidden
+                  when zero (the normal case) so members see only real fees. */}
+              {(breakdown.other ?? 0) > 0 && (
+                <div className="flex items-start justify-between gap-3 rounded-lg border border-warning/30 bg-warning/[0.06] px-2.5 py-2">
+                  <div className="min-w-0">
+                    <Label htmlFor="line-other" className="flex items-center gap-1 text-sm font-medium text-warning"><AlertTriangle className="h-3.5 w-3.5" /> Unclassified Balance</Label>
+                    <p className="text-[11px] leading-tight text-muted-foreground">An outstanding balance not linked to a known charge — please reconcile with the Edir’s records.</p>
+                  </div>
+                  <Input id="line-other" type="number" min={0} className="w-32 shrink-0 text-right tabular-nums" value={breakdown.other ?? 0} onChange={e => set('other', e.target.value)} />
+                </div>
+              )}
             </div>
 
             <div className="flex items-center justify-between gap-2">
