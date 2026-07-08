@@ -365,6 +365,10 @@ export async function updateUserAccount(userId: string, input: z.infer<typeof us
         ...(roleChanged || statusChanged ? { tokenVersion: { increment: 1 } } : {}),
       },
     });
+    // Mirror the new contact details onto the member-directory row (Edir-scoped
+    // users are enrolled as members) so the profile doesn't keep showing a stale
+    // email/phone that no longer matches the login identity.
+    await prisma.member.updateMany({ where: { userId }, data: { name: data.name, email, phone } });
 
     const parts = [
       roleChanged ? 'role changed' : null,

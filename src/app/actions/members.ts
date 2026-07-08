@@ -689,34 +689,66 @@ export async function updateMember(id: string, input: MemberInput) {
   try {
     const actor = await getActor();
     await assertPermission(actor, ['edit_member', 'manage_members']);
-    const existing = await prisma.member.findUnique({ where: { id } });
+    const existing = await prisma.member.findUnique({
+      where: { id },
+      include: { user: { select: { id: true, email: true, phone: true } } },
+    });
     if (!existing) return { success: false as const, error: 'Member not found.' };
     await assertSameTenant(actor, existing.edirId);
     const data = memberSchema.parse(input);
 
-    const updated = await prisma.member.update({
-      where: { id },
-      data: {
-        name: data.name,
-        occupation: data.occupation || null,
-        photoUrl: data.photoUrl || null,
-        dateOfBirth: data.dateOfBirth ? new Date(data.dateOfBirth) : null,
-        gender: data.gender || null,
-        nationalId: data.nationalId || null,
-        phone: data.phone ? normalizeEthiopianPhone(data.phone) : null,
-        email: data.email ? data.email.toLowerCase().trim() : null,
-        address: data.address || null,
-        city: data.city || null,
-        subcity: data.subcity || null,
-        woreda: data.woreda || null,
-        emergencyContactName: data.emergencyContactName || null,
-        emergencyContactPhone: data.emergencyContactPhone ? normalizeEthiopianPhone(data.emergencyContactPhone) : null,
-        role: data.role || 'Member',
-        // Official registration date is editable (e.g. correcting an import).
-        ...(data.joinDate ? { joinDate: new Date(data.joinDate) } : {}),
-      },
+    const phone = data.phone ? normalizeEthiopianPhone(data.phone) : null;
+    const email = data.email ? data.email.toLowerCase().trim() : null;
+
+    // Sign-in and forgot-password resolve identity from User.email/phone, not the
+    // Member row — propagate contact changes to the linked login account so a
+    // member (e.g. an Edir admin) can still reset their password with the new
+    // address. Clearing a contact field on the profile keeps the old login
+    // identity rather than destroying it.
+    const userUpdates: { email?: string; phone?: string } = {};
+    if (existing.user) {
+      if (email && email !== existing.user.email) userUpdates.email = email;
+      if (phone && phone !== existing.user.phone) userUpdates.phone = phone;
+      if (userUpdates.email) {
+        const taken = await prisma.user.findFirst({ where: { email: userUpdates.email, id: { not: existing.user.id } }, select: { id: true } });
+        if (taken) return { success: false as const, error: 'Another user already uses this email.' };
+      }
+      if (userUpdates.phone) {
+        const taken = await prisma.user.findFirst({ where: { phone: userUpdates.phone, id: { not: existing.user.id } }, select: { id: true } });
+        if (taken) return { success: false as const, error: 'Another user already uses this phone.' };
+      }
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const member = await tx.member.update({
+        where: { id },
+        data: {
+          name: data.name,
+          occupation: data.occupation || null,
+          photoUrl: data.photoUrl || null,
+          dateOfBirth: data.dateOfBirth ? new Date(data.dateOfBirth) : null,
+          gender: data.gender || null,
+          nationalId: data.nationalId || null,
+          phone,
+          email,
+          address: data.address || null,
+          city: data.city || null,
+          subcity: data.subcity || null,
+          woreda: data.woreda || null,
+          emergencyContactName: data.emergencyContactName || null,
+          emergencyContactPhone: data.emergencyContactPhone ? normalizeEthiopianPhone(data.emergencyContactPhone) : null,
+          role: data.role || 'Member',
+          // Official registration date is editable (e.g. correcting an import).
+          ...(data.joinDate ? { joinDate: new Date(data.joinDate) } : {}),
+        },
+      });
+      if (existing.user && Object.keys(userUpdates).length > 0) {
+        await tx.user.update({ where: { id: existing.user.id }, data: userUpdates });
+      }
+      return member;
     });
-    await writeAudit({ edirId: existing.edirId, userId: actor.id, action: 'MEMBER_UPDATED', targetType: 'Member', targetId: id, details: `Updated ${updated.name}.` });
+    const loginSynced = Object.keys(userUpdates).length > 0 ? ` Login ${Object.keys(userUpdates).join('/')} updated.` : '';
+    await writeAudit({ edirId: existing.edirId, userId: actor.id, action: 'MEMBER_UPDATED', targetType: 'Member', targetId: id, details: `Updated ${updated.name}.${loginSynced}` });
     revalidatePath('/dashboard/members');
     return { success: true as const, member: serializeMember(updated) };
   } catch (error) {
