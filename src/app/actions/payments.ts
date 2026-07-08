@@ -99,6 +99,14 @@ export async function getMemberOutstanding(memberId: string) {
   ]);
   const eventPenaltiesTotal = eventPen.reduce((s, e) => s + num(e.event?.absencePenalty), 0);
 
+  // A manual payment awaiting checker approval blocks new manual entries (the
+  // dialog shows this and recordManualPayment enforces it server-side).
+  const pendingManual = await prisma.paymentLog.findFirst({
+    where: { memberId: member.id, method: 'MANUAL', status: 'PENDING' },
+    select: { amount: true, createdAt: true },
+    orderBy: { createdAt: 'desc' },
+  });
+
   // Waterfall the pooled balance in priority order so the lines sum exactly to
   // the balance (never double-count): registration → asset → event → residual.
   let remaining = balance;
@@ -128,6 +136,11 @@ export async function getMemberOutstanding(memberId: string) {
     edirName: member.edir?.name ?? null,
     status: member.status,
     balance,
+    // For the dialog's live coverage preview — mirrors the settlement engine,
+    // which stamps covered months from the join month + monthsPaid onward.
+    joinDate: member.joinDate,
+    monthsPaid,
+    pendingManual: pendingManual ? { amount: Number(pendingManual.amount), createdAt: pendingManual.createdAt } : null,
     monthlyFee: dues.monthlyFee,
     monthsBehind: dues.monthsBehind,
     currency: dues.currency,
@@ -251,6 +264,16 @@ export async function getPaymentsMatrix(params: { query?: string; status?: strin
     const accountBalance = Math.max(0, remaining);
 
     const pending = pendingByMember.get(m.id);
+
+    // Which contribution months the arrears cover — same month indexing the
+    // settlement engine stamps on receipts (join month + monthsPaid onward),
+    // so "what's owed" here matches "what was covered" after approval.
+    const monthsPaid = m.paymentStatus?.monthsPaid ?? 0;
+    const join = new Date(m.joinDate);
+    const monthStart = (n: number) => new Date(join.getFullYear(), join.getMonth() + n, 1);
+    const owedFrom = monthsBehind > 0 ? monthStart(monthsPaid).toISOString() : null;
+    const owedTo = monthsBehind > 0 ? monthStart(monthsPaid + monthsBehind - 1).toISOString() : null;
+
     return {
       id: m.id,
       memberId: m.memberId,
@@ -261,9 +284,11 @@ export async function getPaymentsMatrix(params: { query?: string; status?: strin
       edirName: m.edir?.name ?? null,
       joinDate: m.joinDate,
       monthlyFee,
-      monthsPaid: m.paymentStatus?.monthsPaid ?? 0,
+      monthsPaid,
       lastPayment: m.paymentStatus?.lastPayment ?? null,
       monthsBehind,
+      owedFrom,
+      owedTo,
       // Named, distinct dues — these sum exactly to totalDue.
       monthlyContributions: arrears,
       latePenalty: penaltyAmount,
@@ -440,25 +465,38 @@ export async function recordManualPayment(memberId: string, breakdownInput: z.in
     const total = Object.values(breakdown).reduce((a, b) => a + b, 0);
     if (total <= 0) return { success: false as const, error: 'Total must be greater than zero.' };
 
+    // ── One pending manual payment at a time ─────────────────────────────────
+    // A member's recorded payment must be settled or rejected by the checker
+    // before another can be entered — stacked pending entries would each settle
+    // the same dues once approved, double-charging the member.
+    const pendingExisting = await prisma.paymentLog.findFirst({
+      where: { memberId: member.id, method: 'MANUAL', status: 'PENDING' },
+      select: { amount: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (pendingExisting) {
+      return {
+        success: false as const,
+        error: `This member already has a manual payment of ${Number(pendingExisting.amount).toLocaleString()} (recorded ${new Date(pendingExisting.createdAt).toLocaleDateString()}) awaiting checker approval. A new payment can be recorded once it is approved or rejected.`,
+      };
+    }
+
     // ── Strict duplicate prevention ──────────────────────────────────────────
-    // Block an identical payment for the same member that is already awaiting
-    // approval or was just recorded — guards against double-clicks and repeated
-    // submissions creating duplicate pending payments/approvals.
+    // Block an identical payment that was just settled — guards against
+    // double-clicks and repeated submissions right after approval.
     const dupWindow = new Date(Date.now() - 5 * 60 * 1000);
     const duplicate = await prisma.paymentLog.findFirst({
       where: {
         memberId: member.id,
         method: 'MANUAL',
         amount: new Prisma.Decimal(total),
-        status: { in: ['PENDING', 'SUCCESS', 'PARTIAL'] },
+        status: { in: ['SUCCESS', 'PARTIAL'] },
         createdAt: { gte: dupWindow },
       },
-      select: { id: true, status: true },
+      select: { id: true },
     });
     if (duplicate) {
-      return { success: false as const, error: duplicate.status === 'PENDING'
-        ? 'An identical payment for this member is already awaiting approval. Avoid recording it twice.'
-        : 'An identical payment for this member was just recorded. Avoid recording it twice.' };
+      return { success: false as const, error: 'An identical payment for this member was just recorded. Avoid recording it twice.' };
     }
 
     const transactionId = crypto.randomUUID();

@@ -17,7 +17,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import {
   ArrowLeft, Upload, Trash2, Check, X, FileText, ExternalLink, Plus, Pencil, ShieldCheck, AlertTriangle,
   Users, ScrollText, CreditCard, Siren, FolderOpen, Gauge, CircleUser, KeyRound, RotateCcw, Lock, Loader2,
-  Power, UserX, Receipt, Eye, Download, FileImage, Wallet, CalendarClock, TrendingDown,
+  Power, UserX, Receipt, Eye, Download, FileImage, Wallet, CalendarClock, TrendingDown, Clock,
 } from 'lucide-react';
 import { EmptyState } from '@/components/ui/states';
 import { CredentialsDialog, type Credentials } from '@/components/credentials-dialog';
@@ -25,7 +25,7 @@ import { PaymentReceiptModal } from '@/components/payment-receipt-modal';
 import { ReceiptUpload, type ReceiptFile } from '@/components/ui/receipt-upload';
 import { useConfirm, usePrompt } from '@/components/ui/confirm-provider';
 import { getMemberProfile, updateMember, addRelative, updateRelative, removeRelative, addMemberDocument, deleteMemberDocument, reviewMemberDocument, resetMemberPassword, setMemberStatus, requestMemberRemoval } from '@/app/actions/members';
-import { getReinstatementQuote, requestMemberReinstatement } from '@/app/actions/payments';
+import { getReinstatementQuote, requestMemberReinstatement, getMemberOutstanding } from '@/app/actions/payments';
 import RelativeDocuments from './relative-documents-section';
 import { getActiveRelationshipCategories } from '@/app/actions/relationship-categories';
 import { getMemberRoles } from '@/app/actions/rule-config';
@@ -40,6 +40,12 @@ const DOC_STATUS: Record<string, string> = { PENDING: 'bg-warning/10 text-warnin
 const PAY_STATUS: Record<string, string> = { SUCCESS: 'bg-success/10 text-success', PARTIAL: 'bg-warning/10 text-warning', PENDING: 'bg-info/10 text-info', FAILED: 'bg-destructive/10 text-destructive', VOID: 'bg-muted text-muted-foreground' };
 const money = (n: number, cur = 'ETB') => `${Number(n).toLocaleString()} ${cur}`;
 const fmt = (d: any) => d ? new Date(d).toLocaleDateString() : '—';
+const monthFmt = (d: any) => d ? new Date(d).toLocaleDateString(undefined, { month: 'short', year: 'numeric' }) : '';
+// "Mar 2026" / "Mar – Jun 2026" — a contribution-month range.
+const monthRange = (from: any, to: any) => {
+  const f = monthFmt(from), t = monthFmt(to);
+  return f && t && t !== f ? `${f} – ${t}` : f || t;
+};
 
 async function uploadFile(file: File, type: 'profile' | 'documents'): Promise<{ path: string; name: string } | null> {
   const fd = new FormData(); fd.append('file', file); fd.append('type', type);
@@ -183,7 +189,8 @@ export default function MemberProfileClient({ initial, memberId }: { initial: Pr
         </CardContent>
       </Card>
 
-      <Tabs defaultValue="overview">
+      {/* Deep-linkable tabs — e.g. the Payments page links straight to ?tab=payments. */}
+      <Tabs defaultValue={['overview', 'dependents', 'documents', 'payments', 'benefits', 'audit'].includes(searchParams.get('tab') ?? '') ? searchParams.get('tab')! : 'overview'}>
         <TabsList className="flex w-full flex-wrap justify-start">
           <TabsTrigger value="overview"><CircleUser className="mr-1.5 h-4 w-4" /> Overview</TabsTrigger>
           <TabsTrigger value="dependents"><Users className="mr-1.5 h-4 w-4" /> Dependents</TabsTrigger>
@@ -244,6 +251,7 @@ export default function MemberProfileClient({ initial, memberId }: { initial: Pr
 
         {/* Payments */}
         <TabsContent value="payments" className="mt-4 space-y-4">
+          {caps.canViewPayments && <OutstandingDuesCard memberId={memberId} currency={cur} canRecord={caps.canRecordPayment} />}
           <PaymentStats profile={p} currency={cur} />
           <Card>
             <CardHeader>
@@ -265,7 +273,7 @@ export default function MemberProfileClient({ initial, memberId }: { initial: Pr
                             {l.contributionAmount > 0 && <span className="rounded bg-success/10 px-1.5 py-0.5 text-[10px] text-success">Contribution {money(l.contributionAmount, cur)}</span>}
                             {l.penaltyAmount > 0 && <span className="rounded bg-warning/10 px-1.5 py-0.5 text-[10px] text-warning">Penalty {money(l.penaltyAmount, cur)}</span>}
                             {l.otherAmount > 0 && <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">Other {money(l.otherAmount, cur)}</span>}
-                            {l.coverage?.months > 0 && <span className="rounded bg-primary/5 px-1.5 py-0.5 text-[10px] text-primary">{l.coverage.months} mo covered</span>}
+                            {l.coverage?.months > 0 && <span className="rounded bg-primary/5 px-1.5 py-0.5 text-[10px] text-primary">Covers {monthRange(l.coverage.from, l.coverage.to)} ({l.coverage.months} mo)</span>}
                             {!(l.contributionAmount > 0) && !(l.penaltyAmount > 0) && !(l.otherAmount > 0) && !(l.coverage?.months > 0) && <span className="text-xs text-muted-foreground">—</span>}
                           </div>
                         </TableCell>
@@ -434,6 +442,100 @@ function ReinstateDialog({ memberId, currency, onClose, onDone }: { memberId: st
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+// ─── Outstanding dues, itemized (Payments tab) ───────────────────────────────
+
+/**
+ * Live itemized dues for the member — the same figures the Payments page matrix
+ * shows (contribution arrears with the owed months, late penalty, registration,
+ * reinstatement, asset & event charges), plus the pending-approval lock state.
+ * Hidden silently when the viewer lacks payment permissions.
+ */
+function OutstandingDuesCard({ memberId, currency, canRecord }: { memberId: string; currency: string; canRecord: boolean }) {
+  const [o, setO] = useState<any | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    let active = true;
+    getMemberOutstanding(memberId)
+      .then(v => { if (active) setO(v); })
+      .catch(() => { if (active) setO(null); })
+      .finally(() => { if (active) setLoaded(true); });
+    return () => { active = false; };
+  }, [memberId]);
+  if (!loaded || !o) return null;
+
+  const cur = o.currency ?? currency;
+  const totalDue = Number(o.balance) + Number(o.contributionArrears) + Number(o.penalty?.amount ?? 0) + Number(o.reinstatementFee);
+
+  // Which contribution months the arrears cover — same indexing the settlement
+  // engine uses, so this matches the coverage stamped on the eventual receipt.
+  const owed = (() => {
+    if (!(o.monthsBehind > 0) || !o.joinDate) return null;
+    const j = new Date(o.joinDate);
+    const ms = (n: number) => new Date(j.getFullYear(), j.getMonth() + n, 1);
+    return monthRange(ms(o.monthsPaid ?? 0), ms((o.monthsPaid ?? 0) + o.monthsBehind - 1));
+  })();
+
+  const lines = [
+    { label: 'Monthly Contributions', value: Number(o.contributionArrears), hint: owed ? `${o.monthsBehind} month${o.monthsBehind === 1 ? '' : 's'} owed · ${owed}` : null, cls: 'text-warning' },
+    { label: 'Late Penalty', value: Number(o.penalty?.amount ?? 0), hint: o.penalty?.rule ?? null, cls: 'text-warning' },
+    { label: 'Registration Fee', value: Number(o.registrationFee), hint: null, cls: '' },
+    { label: 'Reinstatement Fee', value: Number(o.reinstatementFee), hint: null, cls: 'text-destructive' },
+    { label: 'Asset Loss / Compensation', value: Number(o.assetCompensation), hint: null, cls: '' },
+    { label: 'Event Penalties', value: Number(o.eventPenalties), hint: null, cls: 'text-warning' },
+    { label: 'Unclassified Balance', value: Number(o.accountBalance), hint: 'Not linked to a known charge — reconcile with Edir records.', cls: 'text-warning' },
+  ].filter(l => l.value > 0);
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <CardTitle className="text-base">Outstanding Dues</CardTitle>
+            <CardDescription>What this member currently owes, itemized by charge.</CardDescription>
+          </div>
+          <div className="text-right">
+            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Total Due</div>
+            <div className={`text-xl font-bold tabular-nums ${totalDue > 0 ? 'text-warning' : 'text-success'}`}>{money(totalDue, cur)}</div>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {o.pendingManual && (
+          <p className="flex items-start gap-1.5 rounded-md border border-warning/30 bg-warning/10 p-2.5 text-xs text-warning">
+            <Clock className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            A payment of {money(o.pendingManual.amount, cur)} recorded on {fmt(o.pendingManual.createdAt)} is awaiting checker approval —
+            new manual payments are blocked until it is approved or rejected.
+          </p>
+        )}
+        {lines.length === 0 ? (
+          <p className="flex items-center gap-1.5 rounded-md bg-success/10 p-2.5 text-sm text-success"><ShieldCheck className="h-4 w-4" /> All dues are settled — nothing outstanding.</p>
+        ) : (
+          <div className="divide-y overflow-hidden rounded-lg border">
+            {lines.map(l => (
+              <div key={l.label} className="flex items-center justify-between gap-3 px-3.5 py-2.5">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium">{l.label}</div>
+                  {l.hint && <div className="text-[11px] text-muted-foreground">{l.hint}</div>}
+                </div>
+                <span className={`shrink-0 font-semibold tabular-nums ${l.cls}`}>{money(l.value, cur)}</span>
+              </div>
+            ))}
+            <div className="flex items-center justify-between gap-3 bg-primary/5 px-3.5 py-2.5">
+              <span className="text-sm font-semibold">Total Due</span>
+              <span className="font-bold tabular-nums text-warning">{money(totalDue, cur)}</span>
+            </div>
+          </div>
+        )}
+        {canRecord && totalDue > 0 && !o.pendingManual && (
+          <div className="flex justify-end">
+            <Link href="/dashboard/payments"><Button size="sm"><CreditCard className="mr-1.5 h-4 w-4" /> Record payment</Button></Link>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

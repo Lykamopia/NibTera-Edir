@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { downloadCsv } from '@/lib/download';
 import { Button } from '@/components/ui/button';
@@ -38,7 +39,17 @@ const LINES = [
 type LineKey = (typeof LINES)[number][0] | 'other';
 type SortKey = 'name' | 'due' | 'penalty' | 'contributions' | 'months';
 
+// "Mar 2026" / "Mar – Jun 2026" — the contribution months a payment covers.
+const monthName = (d: Date) => d.toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
+const monthRangeLabel = (from: string | Date | null, to: string | Date | null) => {
+  if (!from) return null;
+  const f = monthName(new Date(from));
+  const t = to ? monthName(new Date(to)) : null;
+  return t && t !== f ? `${f} – ${t}` : f;
+};
+
 export default function PaymentsClient() {
+  const router = useRouter();
   const [items, setItems] = useState<any[]>([]);
   const [summary, setSummary] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
@@ -213,18 +224,22 @@ export default function PaymentsClient() {
                 {pageItems.map(m => {
                   const b = due(m);
                   const amt = (n: number, cls = '') => n > 0 ? <span className={`tabular-nums ${cls}`}>{money(n)}</span> : <span className="text-muted-foreground">—</span>;
+                  const owedRange = monthRangeLabel(m.owedFrom, m.owedTo);
+                  const hasPending = m.pendingCount > 0;
                   return (
-                    <TableRow key={m.id} className={`group ${selected.has(m.id) ? 'bg-primary/5' : ''}`}>
-                      <TableCell><Checkbox checked={selected.has(m.id)} onCheckedChange={() => toggleOne(m)} aria-label={`Select ${m.name}`} /></TableCell>
+                    // The whole row deep-links to the member's payment detail page
+                    // (full breakdown, history & receipts); interactive cells stop
+                    // the click so checkboxes/buttons still work.
+                    <TableRow key={m.id} onClick={() => router.push(`/dashboard/members/${m.id}?tab=payments`)}
+                      className={`group cursor-pointer ${selected.has(m.id) ? 'bg-primary/5' : ''}`} title="Open member payment details">
+                      <TableCell onClick={e => e.stopPropagation()}><Checkbox checked={selected.has(m.id)} onCheckedChange={() => toggleOne(m)} aria-label={`Select ${m.name}`} /></TableCell>
                       <TableCell>
-                        <button onClick={() => setHistoryMember(m)} className="text-left transition-colors hover:text-primary">
-                          <div className="font-medium">{m.name}</div>
-                          <div className="font-mono text-xs text-muted-foreground">{m.memberId}</div>
-                        </button>
+                        <div className="font-medium transition-colors group-hover:text-primary">{m.name}</div>
+                        <div className="font-mono text-xs text-muted-foreground">{m.memberId}</div>
                         <div className="mt-0.5 text-[11px] text-muted-foreground">
                           {m.monthsPaid} mo paid{m.lastPayment ? ` · last ${new Date(m.lastPayment).toLocaleDateString()}` : ''}
                         </div>
-                        {m.pendingCount > 0 && (
+                        {hasPending && (
                           <Badge variant="outline" className="mt-1 gap-1 border-warning/20 bg-warning/10 text-warning" title={`${money(m.pendingAmount)} awaiting checker approval`}>
                             <Clock className="h-3 w-3" /> {m.pendingCount} pending
                           </Badge>
@@ -233,7 +248,12 @@ export default function PaymentsClient() {
                       {showEdir && <TableCell><span className="text-sm">{m.edirName ?? '—'}</span></TableCell>}
                       <TableCell className="text-center">
                         {m.monthsBehind > 0
-                          ? <Badge variant="outline" className="border-warning/20 bg-warning/10 text-warning">{m.monthsBehind} mo</Badge>
+                          ? (
+                            <div>
+                              <Badge variant="outline" className="border-warning/20 bg-warning/10 text-warning">{m.monthsBehind} mo</Badge>
+                              {owedRange && <div className="mt-0.5 text-[10px] text-muted-foreground" title="Contribution months owed">{owedRange}</div>}
+                            </div>
+                          )
                           : <Badge variant="outline" className="border-success/20 bg-success/10 text-success">Up to date</Badge>}
                       </TableCell>
                       <TableCell className="text-right">{amt(m.monthlyContributions)}</TableCell>
@@ -251,10 +271,16 @@ export default function PaymentsClient() {
                       <TableCell className="text-right">{amt(m.eventPenalties, 'text-warning')}</TableCell>
                       {hasUnclassified && <TableCell className="text-right">{amt(m.accountBalance, 'text-warning')}</TableCell>}
                       <TableCell className="text-right"><span className={`font-semibold tabular-nums ${b > 0 ? 'text-warning' : 'text-success'}`}>{money(b)}</span></TableCell>
-                      <TableCell className="text-right">
+                      <TableCell className="text-right" onClick={e => e.stopPropagation()}>
                         <div className="flex justify-end gap-1.5">
-                          <Button size="sm" variant="ghost" onClick={() => setHistoryMember(m)} className="text-muted-foreground hover:text-primary" title="View payment history"><History className="mr-1 h-4 w-4" /> History</Button>
-                          <Button size="sm" variant="outline" onClick={() => setTarget(m)} className="opacity-80 group-hover:opacity-100"><CreditCard className="mr-1 h-4 w-4" /> Record</Button>
+                          <Button size="sm" variant="ghost" onClick={() => setHistoryMember(m)} className="text-muted-foreground hover:text-primary" title="Quick payment history"><History className="mr-1 h-4 w-4" /> History</Button>
+                          {hasPending ? (
+                            <span title="A recorded payment is awaiting checker approval — it must be approved or rejected before a new one can be entered.">
+                              <Button size="sm" variant="outline" disabled><Clock className="mr-1 h-4 w-4" /> Awaiting approval</Button>
+                            </span>
+                          ) : (
+                            <Button size="sm" variant="outline" onClick={() => setTarget(m)} className="opacity-80 group-hover:opacity-100"><CreditCard className="mr-1 h-4 w-4" /> Record</Button>
+                          )}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -435,7 +461,13 @@ function HistoryDialog({ member, onClose, onRecord }: { member: any; onClose: ()
 
         <DialogFooter className="border-t p-4">
           <Button variant="outline" onClick={onClose}>Close</Button>
-          <Button onClick={onRecord} className="gap-1.5"><CreditCard className="h-4 w-4" /> Record Payment</Button>
+          {member.pendingCount > 0 ? (
+            <span title="A recorded payment is awaiting checker approval — it must be approved or rejected before a new one can be entered.">
+              <Button disabled className="gap-1.5"><Clock className="h-4 w-4" /> Awaiting approval</Button>
+            </span>
+          ) : (
+            <Button onClick={onRecord} className="gap-1.5"><CreditCard className="h-4 w-4" /> Record Payment</Button>
+          )}
         </DialogFooter>
       </DialogContent>
       {receipt && <PaymentReceiptModal log={receipt} currency={cur} onClose={() => setReceipt(null)} />}
@@ -471,11 +503,26 @@ function RecordDialog({ member, onClose, onDone }: { member: any; onClose: () =>
   const set = (k: LineKey, v: string) => setBreakdown(b => ({ ...b, [k]: Number(v) || 0 }));
   const cur = info?.currency ?? 'ETB';
   const money = (n: number) => `${(Number(n) || 0).toLocaleString()} ${cur}`;
+  const blocked = !!info?.pendingManual;
+
+  // Live coverage preview — mirrors the settlement engine exactly: the non-penalty
+  // portion buys whole months, starting the month after the last one paid
+  // (indexed from the join month). Updates as the operator edits the lines.
+  const coverage = useMemo(() => {
+    if (!info?.joinDate || !(info.monthlyFee > 0)) return null;
+    const contribution = total - (Number(breakdown.latePenalty) || 0);
+    const months = Math.floor(Math.max(0, contribution) / info.monthlyFee);
+    if (months <= 0) return null;
+    const join = new Date(info.joinDate);
+    const monthStart = (n: number) => new Date(join.getFullYear(), join.getMonth() + n, 1);
+    return { months, from: monthStart(info.monthsPaid ?? 0), to: monthStart((info.monthsPaid ?? 0) + months - 1) };
+  }, [info, total, breakdown.latePenalty]);
 
   const submit = async () => {
     if (total <= 0) { toast.error('Total must be greater than zero.'); return; }
     setSaving(true);
-    const res = await recordManualPayment(member.id, breakdown, receipt?.path ?? null);
+    // The state map always carries every EMPTY_BREAKDOWN key; zod re-validates server-side.
+    const res = await recordManualPayment(member.id, breakdown as Parameters<typeof recordManualPayment>[1], receipt?.path ?? null);
     setSaving(false);
     if (res?.success) { toast.success('Payment recorded — pending checker approval.'); onDone(); }
     else toast.error(res?.error || 'Failed to record payment.');
@@ -512,9 +559,11 @@ function RecordDialog({ member, onClose, onDone }: { member: any; onClose: () =>
               </div>
             </div>
 
-            {member.pendingCount > 0 && (
-              <p className="flex items-start gap-1.5 rounded-md bg-warning/10 p-2 text-[11px] text-warning">
-                <Clock className="mt-0.5 h-3.5 w-3.5 shrink-0" /> This member already has {member.pendingCount} payment{member.pendingCount === 1 ? '' : 's'} ({money(member.pendingAmount)}) awaiting checker approval. Avoid recording a duplicate.
+            {blocked && (
+              <p className="flex items-start gap-1.5 rounded-md border border-warning/30 bg-warning/10 p-2.5 text-xs text-warning">
+                <Clock className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                A payment of {money(info.pendingManual.amount)} recorded on {new Date(info.pendingManual.createdAt).toLocaleDateString()} is awaiting checker approval.
+                A new payment can be recorded once it is <span className="font-semibold">approved or rejected</span>.
               </p>
             )}
 
@@ -524,7 +573,7 @@ function RecordDialog({ member, onClose, onDone }: { member: any; onClose: () =>
               Each line below is a <span className="font-medium text-foreground">distinct charge</span> with its own purpose, pre-filled from what the member owes. Only lines that apply carry an amount — adjust any of them to record a partial payment, and the member can see exactly what they’re paying for.
             </p>
 
-            <div className="space-y-1">
+            <fieldset disabled={blocked} className="space-y-1 disabled:opacity-60">
               {LINES.map(([key, label, description]) => {
                 const active = (breakdown[key] ?? 0) > 0;
                 return (
@@ -548,19 +597,34 @@ function RecordDialog({ member, onClose, onDone }: { member: any; onClose: () =>
                   <Input id="line-other" type="number" min={0} className="w-32 shrink-0 text-right tabular-nums" value={breakdown.other ?? 0} onChange={e => set('other', e.target.value)} />
                 </div>
               )}
-            </div>
+            </fieldset>
 
             <div className="flex items-center justify-between gap-2">
               <Button variant="ghost" size="sm" className="text-primary" onClick={() => applySuggested(info)}><Sparkles className="mr-1 h-4 w-4" /> Reset to suggested</Button>
               <div className="text-right"><div className="text-[11px] uppercase tracking-wide text-muted-foreground">Total</div><div className="text-lg font-bold">{money(total)}</div></div>
             </div>
 
+            {/* Which contribution months this payment will be credited to. */}
+            {coverage ? (
+              <p className="flex items-center gap-1.5 rounded-md bg-primary/5 p-2 text-[11px] text-primary">
+                <CalendarClock className="h-3.5 w-3.5 shrink-0" />
+                Covers <span className="font-semibold">{monthRangeLabel(coverage.from, coverage.to)}</span> ({coverage.months} month{coverage.months === 1 ? '' : 's'} of contributions)
+              </p>
+            ) : total > 0 && (info?.monthlyFee ?? 0) > 0 ? (
+              <p className="flex items-center gap-1.5 rounded-md bg-muted/40 p-2 text-[11px] text-muted-foreground">
+                <CalendarClock className="h-3.5 w-3.5 shrink-0" />
+                Covers no full contribution month — the non-penalty portion is below the monthly fee of {money(info.monthlyFee)}.
+              </p>
+            ) : null}
+
             <ReceiptUpload value={receipt} onChange={setReceipt} label="Payment receipt / evidence" />
           </div>
         )}
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
-          <Button onClick={submit} disabled={saving || loading}>{saving && <Loader2 className="mr-1 h-4 w-4 animate-spin" />} Submit for Approval</Button>
+          <Button onClick={submit} disabled={saving || loading || blocked} title={blocked ? 'The pending payment must be approved or rejected first.' : undefined}>
+            {saving && <Loader2 className="mr-1 h-4 w-4 animate-spin" />} {blocked ? 'Awaiting approval' : 'Submit for Approval'}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -10,7 +10,10 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { RichTextEditor } from '@/components/ui/rich-text-editor';
-import { Scale, Printer, Search, Plus, FilePlus2, Send, Trash2, Pencil, Paperclip, X, FileText, ExternalLink, History, Eye, CheckCircle2, Clock } from 'lucide-react';
+import {
+  Scale, Printer, Search, Plus, FilePlus2, Send, Trash2, Pencil, Paperclip, X, FileText,
+  ExternalLink, History, Eye, CheckCircle2, Clock, CalendarDays, UserRound, Archive, BookOpenCheck,
+} from 'lucide-react';
 import { PageHeader, LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
 import { SelectEdirNotice } from '@/components/select-edir-notice';
 import {
@@ -18,6 +21,7 @@ import {
   addRulesAttachment, removeRulesAttachment, searchRules,
 } from '@/app/actions/rules-doc';
 import { useConfirm } from '@/components/ui/confirm-provider';
+import { cn } from '@/lib/utils';
 
 const STATUS: Record<string, { label: string; cls: string }> = {
   APPROVED: { label: 'Approved', cls: 'border-success/20 bg-success/10 text-success' },
@@ -42,12 +46,20 @@ export default function RulesClient() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [viewing, setViewing] = useState<any | null>(null);
+  // Controlled so a data refresh never bounces the user off the tab they're on.
+  const [tab, setTab] = useState('current');
 
   const load = useCallback(() => {
     setLoading(true); setError(false);
     getRulesPage().then(setData).catch(() => setError(true)).finally(() => setLoading(false));
   }, []);
   useEffect(() => { load(); }, [load]);
+
+  // Refresh in place after edits — keeps the page mounted (no loading screen),
+  // so the active tab, selected draft, and editor state all survive.
+  const refresh = useCallback(() => {
+    getRulesPage().then(setData).catch(() => toast.error('Could not refresh — please reload the page.'));
+  }, []);
 
   if (loading) return <LoadingState label="Loading rules & bylaws…" className="min-h-[60vh]" />;
   if (data?.needsEdir) return <SelectEdirNotice what="rules & bylaws" />;
@@ -59,16 +71,29 @@ export default function RulesClient() {
     <div className="space-y-5">
       <PageHeader title="Rules & Bylaws" description="The official rules and bylaws of your Edir. Changes are reviewed and approved before members see them." icon={Scale} />
 
-      <Tabs defaultValue="current">
-        <TabsList>
-          <TabsTrigger value="current"><FileText className="mr-1.5 h-4 w-4" /> Current Rules</TabsTrigger>
-          {data.canManage && <TabsTrigger value="editor"><Pencil className="mr-1.5 h-4 w-4" /> Editor{drafts.length > 0 ? ` (${drafts.length})` : ''}</TabsTrigger>}
-          <TabsTrigger value="history"><History className="mr-1.5 h-4 w-4" /> Version History</TabsTrigger>
+      <Tabs value={tab} onValueChange={setTab}>
+        <TabsList className="h-11 gap-1 rounded-lg p-1">
+          <TabsTrigger value="current" className="group gap-1.5 rounded-md px-4">
+            <FileText className="h-4 w-4" /> Current Rules
+          </TabsTrigger>
+          {data.canManage && (
+            <TabsTrigger value="editor" className="group gap-1.5 rounded-md px-4">
+              <Pencil className="h-4 w-4" /> Editor
+              {drafts.length > 0 && (
+                <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-primary/10 px-1.5 text-[11px] font-semibold text-primary transition-colors group-data-[state=active]:bg-primary-foreground/25 group-data-[state=active]:text-primary-foreground">
+                  {drafts.length}
+                </span>
+              )}
+            </TabsTrigger>
+          )}
+          <TabsTrigger value="history" className="group gap-1.5 rounded-md px-4">
+            <History className="h-4 w-4" /> Version History
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="current" className="mt-4"><CurrentTab current={data.current} onView={setViewing} /></TabsContent>
-        {data.canManage && <TabsContent value="editor" className="mt-4"><EditorTab data={data} onChanged={load} /></TabsContent>}
-        <TabsContent value="history" className="mt-4"><HistoryTab history={data.history} canManage={data.canManage} onView={setViewing} onChanged={load} /></TabsContent>
+        {data.canManage && <TabsContent value="editor" className="mt-4"><EditorTab data={data} onChanged={refresh} /></TabsContent>}
+        <TabsContent value="history" className="mt-4"><HistoryTab history={data.history} canManage={data.canManage} onView={setViewing} onChanged={refresh} /></TabsContent>
       </Tabs>
 
       {viewing && <ViewDialog version={viewing} onClose={() => setViewing(null)} />}
@@ -77,6 +102,14 @@ export default function RulesClient() {
 }
 
 // ─── Current ─────────────────────────────────────────────────────────────────
+
+function MetaChip({ icon: Icon, children }: { icon: any; children: React.ReactNode }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full border bg-muted/40 px-2.5 py-1 text-xs text-muted-foreground">
+      <Icon className="h-3.5 w-3.5 text-primary" /> {children}
+    </span>
+  );
+}
 
 function CurrentTab({ current, onView }: { current: any | null; onView: (v: any) => void }) {
   const [q, setQ] = useState('');
@@ -123,17 +156,26 @@ function CurrentTab({ current, onView }: { current: any | null; onView: (v: any)
           </CardContent>
         </Card>
       ) : (
-        <Card>
-          <CardHeader>
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <CardTitle className="text-xl">{current.title}</CardTitle>
-                <CardDescription>Version {current.versionNumber} · Effective {fmt(current.effectiveDate)} · Approved by {current.approverName ?? '—'} on {fmt(current.approvedAt)}</CardDescription>
+        <Card className="overflow-hidden">
+          <CardHeader className="border-b bg-muted/30">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                  <BookOpenCheck className="h-6 w-6" />
+                </span>
+                <div className="space-y-1.5">
+                  <CardTitle className="text-xl">{current.title}</CardTitle>
+                  <div className="flex flex-wrap gap-1.5">
+                    <MetaChip icon={FileText}>Version {current.versionNumber}</MetaChip>
+                    <MetaChip icon={CalendarDays}>Effective {fmt(current.effectiveDate)}</MetaChip>
+                    <MetaChip icon={UserRound}>Approved by {current.approverName ?? '—'} on {fmt(current.approvedAt)}</MetaChip>
+                  </div>
+                </div>
               </div>
               <Badge variant="outline" className={STATUS.APPROVED.cls}><CheckCircle2 className="mr-1 h-3.5 w-3.5" /> In effect</Badge>
             </div>
           </CardHeader>
-          <CardContent>
+          <CardContent className="pt-6">
             <div className="prose prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: current.content }} />
             {current.attachments.length > 0 && (
               <div className="mt-6 border-t pt-4">
@@ -154,11 +196,19 @@ function CurrentTab({ current, onView }: { current: any | null; onView: (v: any)
 
 // ─── Editor ──────────────────────────────────────────────────────────────────
 
+const WORKFLOW_STEPS = [
+  'Write or revise a draft',
+  'Submit it for approval',
+  'A checker reviews & approves',
+  'It becomes the official rules',
+];
+
 function EditorTab({ data, onChanged }: { data: any; onChanged: () => void }) {
   const drafts = data.history.filter((v: any) => v.status === 'DRAFT');
   const [selectedId, setSelectedId] = useState<string | null>(drafts[0]?.id ?? null);
   const [busy, setBusy] = useState(false);
-  const selected = data.history.find((v: any) => v.id === selectedId) ?? null;
+  // Fall back to the first draft when the selected one disappears (e.g. deleted).
+  const selected = data.history.find((v: any) => v.id === selectedId) ?? drafts[0] ?? null;
 
   const newBlank = async () => {
     setBusy(true);
@@ -174,29 +224,61 @@ function EditorTab({ data, onChanged }: { data: any; onChanged: () => void }) {
   };
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[260px_1fr]">
+    <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
       <div className="space-y-3">
-        <div className="flex flex-col gap-2">
-          <Button onClick={revise} disabled={busy} variant="outline"><FilePlus2 className="mr-1.5 h-4 w-4" /> Revise current version</Button>
-          <Button onClick={newBlank} disabled={busy} variant="outline"><Plus className="mr-1.5 h-4 w-4" /> New blank draft</Button>
-        </div>
         <Card>
-          <CardHeader className="pb-2"><CardTitle className="text-sm">Drafts</CardTitle></CardHeader>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm">Start a draft</CardTitle>
+            <CardDescription className="text-xs">Drafts stay private until approved.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2 pt-0">
+            <Button onClick={revise} disabled={busy} variant="outline" className="w-full justify-start"><FilePlus2 className="mr-1.5 h-4 w-4 text-primary" /> Revise current version</Button>
+            <Button onClick={newBlank} disabled={busy} variant="outline" className="w-full justify-start"><Plus className="mr-1.5 h-4 w-4 text-primary" /> New blank draft</Button>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2"><CardTitle className="text-sm">Drafts{drafts.length > 0 ? ` (${drafts.length})` : ''}</CardTitle></CardHeader>
           <CardContent className="p-2">
             {drafts.length === 0 ? <p className="px-2 py-4 text-center text-xs text-muted-foreground">No drafts yet.</p> : (
               <div className="space-y-1">
-                {drafts.map((d: any) => (
-                  <button key={d.id} onClick={() => setSelectedId(d.id)} className={`block w-full rounded-md px-2.5 py-2 text-left text-sm hover:bg-muted/50 ${selectedId === d.id ? 'bg-muted' : ''}`}>
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="truncate font-medium">v{d.versionNumber} · {d.title}</span>
-                      {d.pending && <Badge variant="outline" className="border-warning/20 bg-warning/10 text-warning"><Clock className="mr-1 h-3 w-3" />Pending</Badge>}
-                    </div>
-                  </button>
-                ))}
+                {drafts.map((d: any) => {
+                  const active = selected?.id === d.id;
+                  return (
+                    <button
+                      key={d.id}
+                      onClick={() => setSelectedId(d.id)}
+                      className={cn(
+                        'block w-full rounded-md border px-3 py-2.5 text-left transition-colors',
+                        active ? 'border-primary/40 bg-primary/5 ring-1 ring-primary/20' : 'border-transparent hover:bg-muted/60',
+                      )}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className={cn('truncate text-sm font-medium', active && 'text-primary')}>v{d.versionNumber} · {d.title}</span>
+                        {d.pending && <Badge variant="outline" className="shrink-0 border-warning/20 bg-warning/10 text-warning"><Clock className="mr-1 h-3 w-3" />Pending</Badge>}
+                      </div>
+                      <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                        {d.changeSummary || `Last edited ${fmt(d.updatedAt)}`}
+                      </p>
+                    </button>
+                  );
+                })}
               </div>
             )}
           </CardContent>
         </Card>
+
+        <div className="rounded-lg border border-dashed p-3">
+          <p className="mb-2 text-xs font-semibold">How publishing works</p>
+          <ol className="space-y-1.5">
+            {WORKFLOW_STEPS.map((step, i) => (
+              <li key={step} className="flex items-center gap-2 text-xs text-muted-foreground">
+                <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[10px] font-semibold text-primary">{i + 1}</span>
+                {step}
+              </li>
+            ))}
+          </ol>
+        </div>
       </div>
 
       {selected ? <DraftEditor key={selected.id} draft={selected} onChanged={onChanged} /> : (
@@ -244,13 +326,16 @@ function DraftEditor({ draft, onChanged }: { draft: any; onChanged: () => void }
 
   return (
     <Card>
-      <CardHeader>
+      <CardHeader className="border-b bg-muted/30">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <CardTitle className="text-base">Edit Draft v{draft.versionNumber}</CardTitle>
+          <div>
+            <CardTitle className="text-base">Draft v{draft.versionNumber}</CardTitle>
+            <CardDescription className="text-xs">Last edited {fmt(draft.updatedAt)}{draft.authorName ? ` · by ${draft.authorName}` : ''}</CardDescription>
+          </div>
           {locked && <Badge variant="outline" className="border-warning/20 bg-warning/10 text-warning"><Clock className="mr-1 h-3.5 w-3.5" /> Awaiting approval — read only</Badge>}
         </div>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="space-y-4 pt-5">
         <fieldset disabled={locked} className="space-y-4">
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5"><Label className="text-xs">Title</Label><Input value={title} onChange={e => setTitle(e.target.value)} /></div>
@@ -292,33 +377,48 @@ function DraftEditor({ draft, onChanged }: { draft: any; onChanged: () => void }
 
 // ─── History ─────────────────────────────────────────────────────────────────
 
+const HISTORY_ICON: Record<string, { icon: any; cls: string }> = {
+  APPROVED: { icon: CheckCircle2, cls: 'bg-success/10 text-success' },
+  DRAFT: { icon: Pencil, cls: 'bg-muted text-muted-foreground' },
+  ARCHIVED: { icon: Archive, cls: 'bg-muted text-muted-foreground' },
+};
+
 function HistoryTab({ history, onView }: { history: any[]; canManage: boolean; onView: (v: any) => void; onChanged: () => void }) {
   if (history.length === 0) return <Card><CardContent className="p-0"><EmptyState icon={History} title="No versions yet" /></CardContent></Card>;
   return (
     <Card>
       <CardContent className="space-y-2 p-4">
-        {history.map(v => (
-          <div key={v.id} className="flex flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-semibold">v{v.versionNumber} · {v.title}</span>
-                <Badge variant="outline" className={STATUS[v.status]?.cls}>{STATUS[v.status]?.label ?? v.status}</Badge>
-                {v.requestStatus === 'PENDING' && <Badge variant="outline" className="border-warning/20 bg-warning/10 text-warning">Pending approval</Badge>}
-                {v.requestStatus === 'RETURNED' && <Badge variant="outline" className="border-info/20 bg-info/10 text-info">Returned</Badge>}
-                {v.requestStatus === 'REJECTED' && v.status === 'DRAFT' && <Badge variant="outline" className="border-destructive/20 bg-destructive/10 text-destructive">Rejected</Badge>}
+        {history.map(v => {
+          const marker = HISTORY_ICON[v.status] ?? HISTORY_ICON.DRAFT;
+          const MarkerIcon = marker.icon;
+          return (
+            <div key={v.id} className="flex flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex min-w-0 items-start gap-3">
+                <span className={cn('mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full', marker.cls)}>
+                  <MarkerIcon className="h-4 w-4" />
+                </span>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-semibold">v{v.versionNumber} · {v.title}</span>
+                    <Badge variant="outline" className={STATUS[v.status]?.cls}>{STATUS[v.status]?.label ?? v.status}</Badge>
+                    {v.requestStatus === 'PENDING' && <Badge variant="outline" className="border-warning/20 bg-warning/10 text-warning">Pending approval</Badge>}
+                    {v.requestStatus === 'RETURNED' && <Badge variant="outline" className="border-info/20 bg-info/10 text-info">Returned</Badge>}
+                    {v.requestStatus === 'REJECTED' && v.status === 'DRAFT' && <Badge variant="outline" className="border-destructive/20 bg-destructive/10 text-destructive">Rejected</Badge>}
+                  </div>
+                  <div className="mt-0.5 text-xs text-muted-foreground">
+                    By {v.authorName ?? '—'} · Created {fmt(v.createdAt)}
+                    {v.approverName && ` · Approved by ${v.approverName} on ${fmt(v.approvedAt)}`}
+                    {v.changeSummary && ` · ${v.changeSummary}`}
+                  </div>
+                </div>
               </div>
-              <div className="mt-0.5 text-xs text-muted-foreground">
-                By {v.authorName ?? '—'} · Created {fmt(v.createdAt)}
-                {v.approverName && ` · Approved by ${v.approverName} on ${fmt(v.approvedAt)}`}
-                {v.changeSummary && ` · ${v.changeSummary}`}
+              <div className="flex shrink-0 gap-1">
+                <Button size="sm" variant="outline" onClick={() => onView(v)}><Eye className="mr-1 h-4 w-4" /> View</Button>
+                <Button size="sm" variant="ghost" onClick={() => printDoc(v.title, v.content, `Version ${v.versionNumber} · ${STATUS[v.status]?.label ?? v.status}`)}><Printer className="h-4 w-4" /></Button>
               </div>
             </div>
-            <div className="flex shrink-0 gap-1">
-              <Button size="sm" variant="outline" onClick={() => onView(v)}><Eye className="mr-1 h-4 w-4" /> View</Button>
-              <Button size="sm" variant="ghost" onClick={() => printDoc(v.title, v.content, `Version ${v.versionNumber} · ${STATUS[v.status]?.label ?? v.status}`)}><Printer className="h-4 w-4" /></Button>
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </CardContent>
     </Card>
   );
