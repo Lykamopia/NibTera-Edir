@@ -75,14 +75,24 @@ export default function AccountClient() {
   const [error, setError] = useState(false);
   const [requestType, setRequestType] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<any | null>(null);
+  // Controlled so a post-action refresh never bounces the user off their tab.
+  // Null = "use the deep-link / default"; set once the user picks a tab.
+  const [tab, setTab] = useState<string | null>(null);
   const searchParams = useSearchParams();
 
-  const load = useCallback(() => {
-    setLoading(true); setError(false);
+  // Core fetch. `silent` refreshes in place (after a mutation) without flipping
+  // the full-page loading gate, which would remount the tabs and bounce the user
+  // back to the first tab.
+  const fetchData = useCallback((silent = false) => {
+    if (!silent) setLoading(true);
+    setError(false);
     Promise.all([getMyPortal(), getMyRequests()])
       .then(([portal, reqs]) => { setP(portal as Portal); setRequests(reqs); })
-      .catch(() => setError(true)).finally(() => setLoading(false));
+      .catch(() => { if (!silent) setError(true); else toast.error('Could not refresh — please reload the page.'); })
+      .finally(() => { if (!silent) setLoading(false); });
   }, []);
+  const load = useCallback(() => fetchData(false), [fetchData]);
+  const refresh = useCallback(() => fetchData(true), [fetchData]);
   useEffect(() => { load(); }, [load]);
 
   if (loading) return <LoadingState label="Loading your account…" className="min-h-[60vh]" />;
@@ -133,7 +143,7 @@ export default function AccountClient() {
         </CardContent>
       </Card>
 
-      <Tabs defaultValue={defaultTab}>
+      <Tabs value={tab ?? defaultTab} onValueChange={setTab}>
         <TabsList className="flex w-full flex-wrap justify-start">
           {p.hasMembership && <TabsTrigger value="overview"><CircleUser className="mr-1.5 h-4 w-4" /> Overview</TabsTrigger>}
           {p.hasMembership && <TabsTrigger value="payments"><CreditCard className="mr-1.5 h-4 w-4" /> Payments</TabsTrigger>}
@@ -289,7 +299,7 @@ export default function AccountClient() {
                     </div>
                     {r.phone && <div className="mt-0.5 text-xs text-muted-foreground">{r.phone}</div>}
                     {r.documents.length > 0 && <div className="mt-2 flex flex-wrap gap-1.5">{r.documents.map(d => <Badge key={d.id} variant="outline" className="text-[10px]">{d.fileName ?? 'Doc'} · {d.status}</Badge>)}</div>}
-                    <RelativeProofUpload relativeId={r.id} onDone={load} />
+                    <RelativeProofUpload relativeId={r.id} onDone={refresh} />
                   </CardContent></Card>
                 ))}
               </div>
@@ -415,7 +425,7 @@ export default function AccountClient() {
         </TabsContent>
       </Tabs>
 
-      {p.hasMembership && requestType && <RequestDialog type={requestType} onClose={() => setRequestType(null)} onDone={() => { setRequestType(null); load(); }} />}
+      {p.hasMembership && requestType && <RequestDialog type={requestType} onClose={() => setRequestType(null)} onDone={() => { setRequestType(null); refresh(); }} />}
       {receipt && <PaymentReceiptModal log={receipt} currency={cur} onClose={() => setReceipt(null)} />}
     </div>
   );

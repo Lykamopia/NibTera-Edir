@@ -3,11 +3,7 @@
 import { getActor, assertPermission } from '@/lib/tenant-scope';
 import prisma from '@/lib/prisma';
 import { dateWhere, type DateRangeParam } from '@/lib/date-range';
-
-function failure(error: unknown) {
-  console.error('Dashboard stats error:', error);
-  return { success: false as const, error: error instanceof Error ? error.message : 'Failed to load stats' };
-}
+import { failure } from '@/lib/action-result';
 
 export async function getBranchStats(branchId: string, range?: DateRangeParam) {
   try {

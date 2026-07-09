@@ -208,10 +208,25 @@ export async function saveRuleConfig(input: RuleConfigInput) {
       for (const [field, prev, curr] of compare) {
         if (String(prev) !== String(curr)) changes.push({ field, previous: String(prev), current: String(curr) });
       }
-      const prevTiers = JSON.stringify(existing.penaltyTiers ?? []);
-      const nextTiers = JSON.stringify(data.penaltyTiers);
-      if (prevTiers !== nextTiers) {
-        changes.push({ field: 'penaltyTiers', previous: `${(Array.isArray(existing.penaltyTiers) ? existing.penaltyTiers.length : 0)} tier(s)`, current: `${data.penaltyTiers.length} tier(s)` });
+      // Canonicalize tiers before diffing — the DB JSON and the form payload can
+      // differ in key order, number types, or null-vs-missing optional keys, which
+      // used to flag a bogus "3 tier(s) → 3 tier(s)" change on unrelated saves.
+      const canonTiers = (v: unknown) => (Array.isArray(v) ? v : [])
+        .map((t: any) => ({
+          fromDays: Number(t?.fromDays) || 0,
+          toDays: t?.toDays == null ? null : Number(t.toDays),
+          type: t?.type === 'PERCENT' ? 'PERCENT' : 'FIXED',
+          value: Number(t?.value) || 0,
+          label: t?.label || null,
+        }))
+        .sort((a, b) => a.fromDays - b.fromDays);
+      const describeTiers = (ts: ReturnType<typeof canonTiers>) => ts.length === 0
+        ? 'None'
+        : ts.map(t => `${t.fromDays}${t.toDays == null ? '+' : `–${t.toDays}`} days: ${t.type === 'PERCENT' ? `${t.value}%` : `${t.value} fixed`}`).join(' · ');
+      const prevTiers = canonTiers(existing.penaltyTiers);
+      const nextTiers = canonTiers(data.penaltyTiers);
+      if (JSON.stringify(prevTiers) !== JSON.stringify(nextTiers)) {
+        changes.push({ field: 'penaltyTiers', previous: describeTiers(prevTiers), current: describeTiers(nextTiers) });
       }
       const prevRoles = Array.isArray(existing.memberRoles) ? (existing.memberRoles as string[]) : [];
       if (JSON.stringify(prevRoles) !== JSON.stringify(data.memberRoles) && data.memberRoles.length) {

@@ -74,6 +74,8 @@ export default function RuleConfigClient() {
   const [needsEdir, setNeedsEdir] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editingType, setEditingType] = useState<any | null | undefined>(undefined);
+  // Controlled so a post-save refresh never bounces the user off their tab.
+  const [tab, setTab] = useState('contributions');
   // Change Log advanced filters
   const [logRange, setLogRange] = useState<DateRangeValue>(ALL_TIME);
   const [logUser, setLogUser] = useState('all');
@@ -94,8 +96,12 @@ export default function RuleConfigClient() {
     });
   }, [changeLog, logRange, logUser, logField, logQuery]);
 
-  const load = useCallback(() => {
-    setLoading(true); setError(false); setNeedsEdir(false);
+  // Core data fetch. `silent` refreshes in place (after a save/delete) without
+  // flipping the full-page loading gate — which would remount the tabs and bounce
+  // the user back to the first tab.
+  const fetchData = useCallback((silent = false) => {
+    if (!silent) { setLoading(true); setNeedsEdir(false); }
+    setError(false);
     getRuleConfig().then(r => {
       if ((r as any).needsEdir) { setNeedsEdir(true); return; }
       const s = r.settings ?? {
@@ -111,8 +117,10 @@ export default function RuleConfigClient() {
       setTiers(((penaltyTiers as any[]) ?? []).map(t => ({ id: t.id ?? newId(), label: t.label ?? '', fromDays: Number(t.fromDays ?? 0), toDays: t.toDays == null ? null : Number(t.toDays), type: t.type === 'PERCENT' ? 'PERCENT' : 'FIXED', value: Number(t.value ?? 0) })));
       setEmergencyTypes(r.emergencyTypes);
       setChangeLog(r.changeLog);
-    }).catch(() => setError(true)).finally(() => setLoading(false));
+    }).catch(() => { if (!silent) setError(true); else toast.error('Could not refresh — please reload the page.'); }).finally(() => { if (!silent) setLoading(false); });
   }, []);
+  const load = useCallback(() => fetchData(false), [fetchData]);
+  const refresh = useCallback(() => fetchData(true), [fetchData]);
   useEffect(() => { load(); }, [load]);
 
   const set = <K extends keyof Cfg>(k: K, v: Cfg[K]) => setCfg(c => (c ? { ...c, [k]: v } : c));
@@ -125,7 +133,7 @@ export default function RuleConfigClient() {
     if (res?.success) {
       toast.success((res as any).pendingApproval ? ((res as any).message || 'Settings changes submitted for approval.') : res.changed > 0 ? `Saved — ${res.changed} rule(s) updated.` : 'Saved. No changes detected.');
       setReason('');
-      load();
+      refresh();
     } else toast.error(res?.error || 'Failed to save rules.');
   };
 
@@ -152,7 +160,7 @@ export default function RuleConfigClient() {
 
       <BrandingCard />
 
-      <Tabs defaultValue="contributions">
+      <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="flex w-full flex-wrap justify-start">
           <TabsTrigger value="contributions"><Coins className="mr-1.5 h-4 w-4" /> Contributions</TabsTrigger>
           <TabsTrigger value="penalties"><AlertTriangle className="mr-1.5 h-4 w-4" /> Penalties</TabsTrigger>
@@ -345,7 +353,7 @@ export default function RuleConfigClient() {
                       </div>
                       <div className="flex shrink-0 gap-1">
                         <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => setEditingType(t)}><Pencil className="h-4 w-4" /></Button>
-                        <Button size="icon" variant="ghost" className="h-8 w-8" onClick={async () => { if (!(await confirm({ title: 'Delete emergency type', description: `Delete "${t.name}"? Types with claims are deactivated instead.`, destructive: true, confirmText: 'Delete' }))) return; const r = await deleteEmergencyType(t.id); if (r?.success) { toast.success('Removed.'); load(); } else toast.error(r?.error || 'Failed.'); }}><Trash2 className="h-4 w-4" /></Button>
+                        <Button size="icon" variant="ghost" className="h-8 w-8" onClick={async () => { if (!(await confirm({ title: 'Delete emergency type', description: `Delete "${t.name}"? Types with claims are deactivated instead.`, destructive: true, confirmText: 'Delete' }))) return; const r = await deleteEmergencyType(t.id); if (r?.success) { toast.success('Removed.'); refresh(); } else toast.error(r?.error || 'Failed.'); }}><Trash2 className="h-4 w-4" /></Button>
                       </div>
                     </div>
                     <div className="flex flex-wrap gap-1.5 text-xs">
@@ -425,7 +433,7 @@ export default function RuleConfigClient() {
         </TabsContent>
       </Tabs>
 
-      {editingType !== undefined && <EmergencyTypeDialog type={editingType} currency={cur} onClose={() => setEditingType(undefined)} onDone={() => { setEditingType(undefined); load(); }} />}
+      {editingType !== undefined && <EmergencyTypeDialog type={editingType} currency={cur} onClose={() => setEditingType(undefined)} onDone={() => { setEditingType(undefined); refresh(); }} />}
     </div>
   );
 }

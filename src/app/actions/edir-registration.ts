@@ -6,12 +6,7 @@ import { submitForApproval } from '@/lib/approval-engine';
 import { revalidatePath } from 'next/cache';
 import { writeAudit } from '@/lib/audit';
 import { isValidEthiopianPhone, normalizeEthiopianPhone } from '@/lib/utils';
-
-function failure(error: unknown): { success: false; error: string } {
-  console.error('Edir registration error:', error);
-  const message = error instanceof Error ? error.message : 'An error occurred';
-  return { success: false, error: message };
-}
+import { failure } from '@/lib/action-result';
 
 export interface EdirRegistrationInput {
   name: string;

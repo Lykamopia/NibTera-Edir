@@ -272,6 +272,12 @@ export const MODULE_CHECKER_PERMISSION: Record<ApprovalModule, Permission> = {
   ASSET_ISSUANCE: 'approve_asset_issuance',
   ASSET_RETURN: 'approve_asset_issuance',
   MEMBER_REMOVAL: 'approve_member_removal',
+  // Suspension/termination share the member-lifecycle checker permission, so
+  // existing checker roles work without a backfill.
+  MEMBER_STATUS_CHANGE: 'approve_member_removal',
+  // Voiding a payment reuses the existing void_payment permission as its checker
+  // gate, so existing roles that could void can also approve a void — no backfill.
+  PAYMENT_VOID: 'void_payment',
   RULE_CHANGE: 'approve_rule_change',
   PENALTY_WAIVER: 'approve_penalty_waiver',
   EDIR_REGISTRATION: 'approve_edir_registration',
@@ -300,6 +306,8 @@ export const MODULE_LABEL: Record<ApprovalModule, string> = {
   ASSET_ISSUANCE: 'Asset Issuance',
   ASSET_RETURN: 'Asset Return',
   MEMBER_REMOVAL: 'Member Removal',
+  MEMBER_STATUS_CHANGE: 'Member Status Change',
+  PAYMENT_VOID: 'Payment Void',
   RULE_CHANGE: 'Rule Change',
   PENALTY_WAIVER: 'Penalty Waiver',
   EDIR_REGISTRATION: 'Edir Registration',

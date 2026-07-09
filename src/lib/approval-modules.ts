@@ -84,6 +84,18 @@ export function ensureApprovalModules() {
         });
       }
     },
+    // Rejecting a manual payment voids its holding PaymentLog so it doesn't linger
+    // in PENDING (it was never settled, so no money moved). This makes the
+    // two-person rejection the clean close-out for a recorded payment.
+    async onReject(payload: ManualPaymentPayload, { tx, actor, request, comment }) {
+      const log = await tx.paymentLog.findUnique({ where: { id: payload.paymentLogId }, select: { status: true, description: true } });
+      if (!log || log.status !== 'PENDING') return;
+      let desc: any = {};
+      try { desc = JSON.parse(log.description || '{}') || {}; } catch { desc = {}; }
+      desc.voidReason = comment ? `Rejected: ${comment}` : 'Payment rejected by checker.';
+      await tx.paymentLog.update({ where: { id: payload.paymentLogId }, data: { status: 'VOID', description: JSON.stringify(desc) } });
+      await writeAudit({ edirId: request.edirId, userId: actor.id, action: 'PAYMENT_VOIDED', targetType: 'PaymentLog', targetId: payload.paymentLogId, details: 'Voided on rejected manual payment.' }, tx);
+    },
   });
 
   // ── Member Removal ─────────────────────────────────────────────────────────
@@ -92,6 +104,62 @@ export function ensureApprovalModules() {
       // Member relations cascade (relatives, paymentStatus, installment plans,
       // emergency claims, event participations); paymentLogs/issuances null out.
       await tx.member.delete({ where: { id: payload.memberId } });
+    },
+  });
+
+  // ── Member Status Change (manual suspend / terminate, checker-approved) ─────
+  registerModule('MEMBER_STATUS_CHANGE', {
+    async execute(payload: { memberId: string; status: 'SUSPENDED' | 'TERMINATED' }, { tx, request, actor }) {
+      const member = await tx.member.findUnique({
+        where: { id: payload.memberId },
+        select: { status: true, name: true, edirId: true, user: { select: { id: true, status: true } } },
+      });
+      if (!member) throw new Error('Member not found — they may have been removed since this request was made.');
+      if (member.status === payload.status) return; // already in the requested state
+
+      await tx.member.update({ where: { id: payload.memberId }, data: { status: payload.status } });
+
+      // Login-account consequences (mirrors the former direct setMemberStatus):
+      //  • TERMINATED — block the login entirely and revoke active sessions.
+      //  • SUSPENDED — login stays open on purpose: a suspended member signs in
+      //    and pays their dues (incl. the reinstatement fee) to come back.
+      if (payload.status === 'TERMINATED' && member.user?.id) {
+        await tx.user.update({ where: { id: member.user.id }, data: { status: 'TERMINATED', tokenVersion: { increment: 1 } } });
+      }
+
+      // Tell the member what happened to their standing.
+      if (member.user?.id) {
+        const copy = payload.status === 'SUSPENDED'
+          ? { title: 'Membership suspended', body: 'Your membership has been suspended. Please contact your Edir administrator for details.', priority: 'high' }
+          : { title: 'Membership terminated', body: 'Your membership has been terminated. Please contact your Edir administrator for details.', priority: 'critical' };
+        await tx.notification.create({
+          data: { userId: member.user.id, edirId: member.edirId, type: 'member', ...copy, linkUrl: '/dashboard/account' },
+        });
+      }
+
+      await writeAudit({
+        edirId: request.edirId, userId: actor.id, action: 'MEMBER_STATUS_CHANGED', targetType: 'Member', targetId: payload.memberId,
+        details: `${member.name}: ${member.status} → ${payload.status}${payload.status === 'TERMINATED' && member.user ? ' (login blocked)' : ''} — approved via Maker–Checker.`,
+      }, tx);
+    },
+  });
+
+  // ── Payment Void (checker-approved cancellation of a non-settled payment) ─────
+  registerModule('PAYMENT_VOID', {
+    async execute(payload: { paymentLogId: string; reason?: string | null }, { tx, request, actor }) {
+      const log = await tx.paymentLog.findUnique({ where: { id: payload.paymentLogId }, select: { status: true, description: true } });
+      if (!log) throw new Error('Payment not found — it may have been removed since this request was made.');
+      // Settled payments moved money and must never be voided; already-void is a no-op.
+      if (log.status === 'SUCCESS' || log.status === 'PARTIAL') throw new Error('This payment has since settled and can no longer be voided.');
+      if (log.status === 'VOID') return;
+      let desc: any = {};
+      try { desc = JSON.parse(log.description || '{}') || {}; } catch { desc = {}; }
+      if (payload.reason) desc.voidReason = payload.reason;
+      await tx.paymentLog.update({ where: { id: payload.paymentLogId }, data: { status: 'VOID', description: JSON.stringify(desc) } });
+      await writeAudit({
+        edirId: request.edirId, userId: actor.id, action: 'PAYMENT_VOIDED', targetType: 'PaymentLog', targetId: payload.paymentLogId,
+        details: `Voided via approval${payload.reason ? `: ${payload.reason}` : '.'}`,
+      }, tx);
     },
   });
 
@@ -342,6 +410,20 @@ export function ensureApprovalModules() {
         return;
       }
 
+      // Edir branding (logo) change — applies the reviewed image and logs it.
+      if (payload.kind === 'BRANDING') {
+        await tx.edir.update({ where: { id: edirId }, data: { logoUrl: payload.newLogoUrl ?? null } });
+        await tx.ruleChangeLog.create({
+          data: {
+            edirId, field: 'Edir logo',
+            previousValue: payload.previousLogoUrl ?? '(none)',
+            newValue: payload.newLogoUrl ?? '(removed)',
+            changedById: actor.id, comment: payload.comment ?? null,
+          },
+        });
+        return;
+      }
+
       if (payload.kind === 'SETTING') {
         const value = payload.fieldKind === 'money' ? new Prisma.Decimal(payload.newValue) : Number(payload.newValue);
         await tx.edirSettings.update({ where: { edirId }, data: { [payload.field]: value } as any });
@@ -479,7 +561,10 @@ export function ensureApprovalModules() {
           const user = await tx.user.create({
             data: { name: payload.admin.name, email, phone, edirId: edir.id, roleId: adminRole?.id ?? null, status: 'INVITED', mustChangePassword: true },
           });
-          // 48h single-use set-password token (reuses PasswordResetToken), mirroring inviteUser.
+          // 48h single-use set-password token (reuses PasswordResetToken). Kept
+          // inline on `tx` rather than the shared issueSetPasswordLink helper so the
+          // token write stays inside this approval transaction (the helper uses the
+          // global client and would commit the token even if the tx rolls back).
           const token = crypto.randomBytes(32).toString('hex');
           await tx.passwordResetToken.upsert({
             where: { email },

@@ -78,7 +78,9 @@ export function pendingScopeWhere(
   actor: Actor,
   eligible: ApprovalModule[] = eligibleModulesFor(actor),
 ): Prisma.ApprovalRequestWhereInput | null {
-  if (actor.isSuperAdmin) return {};
+  // Super admins see everything, but must still honor `eligible` — the UI narrows
+  // it to implement the module filter, which would otherwise be silently ignored.
+  if (actor.isSuperAdmin) return eligible.length ? { module: { in: eligible } } : null;
   const gov = eligible.filter(isOrgGovernanceModule);
   const op = eligible.filter(m => !isOrgGovernanceModule(m));
   const clauses: Prisma.ApprovalRequestWhereInput[] = [];

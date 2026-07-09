@@ -4,7 +4,8 @@
  * Shared user-association dialogs, surfaced on the Platform Users page (the system
  * user / account management hub). These replace the retired "User Associations" module:
  *  • CreateUserDialog — create an Edir user OR a platform (Head-Office/District/
- *    Branch) operator with scope-aware roles; returns one-time credentials.
+ *    Branch) operator with scope-aware roles; the account is activated via an
+ *    emailed set-password link (no plaintext credentials).
  *  • EditAssociationDialog — change a user's org scope, placement, role, and status
  *    (sessions are revoked on scope/status change).
  * All server actions live in @/app/actions/associations and are unchanged.
@@ -23,7 +24,6 @@ import {
   Loader2, Crown, Landmark, MapPin, Building2, Building, ShieldCheck, ArrowRight,
   CheckCircle2, PauseCircle, Ban, AlertTriangle,
 } from 'lucide-react';
-import { type Credentials } from '@/components/credentials-dialog';
 import {
   getEdirRolesForAssociation, getOrgUnitsForAssociation, getScopedRolesForAssociation,
   getUserAssociationDetail, updateUserAssociation, createPlatformUser, createPlatformAdmin,
@@ -269,7 +269,7 @@ export function EditAssociationDialog({ userId, userLabel, edirs, onClose, onDon
   );
 }
 
-export function CreateUserDialog({ edirs, canPlatform, initialKind, onClose, onDone }: { edirs: any[]; canPlatform: boolean; initialKind: 'edir' | 'platform'; onClose: () => void; onDone: (cred?: { name: string; credentials: Credentials }) => void }) {
+export function CreateUserDialog({ edirs, canPlatform, initialKind, onClose, onDone }: { edirs: any[]; canPlatform: boolean; initialKind: 'edir' | 'platform'; onClose: () => void; onDone: () => void }) {
   const [kind, setKind] = useState<'edir' | 'platform'>(initialKind);
   const [form, setForm] = useState({ name: '', email: '', phone: '', edirId: '', roleId: '', districtId: '', branchId: '' });
   const [edirRoles, setEdirRoles] = useState<any[]>([]);
@@ -317,8 +317,11 @@ export function CreateUserDialog({ edirs, canPlatform, initialKind, onClose, onD
     }
     setSaving(false);
     if (res?.success) {
-      toast.success(kind === 'platform' ? 'Platform user created.' : 'User created.');
-      onDone(res.credentials ? { name: form.name, credentials: res.credentials as Credentials } : undefined);
+      const d = res.delivery;
+      toast.success(d?.sent
+        ? `${kind === 'platform' ? 'Platform user' : 'User'} created — set-password link sent to ${d.emailMasked}.`
+        : `${kind === 'platform' ? 'Platform user' : 'User'} created, but the set-password email could not be sent — use the reset action on the user row to retry.`);
+      onDone();
     } else toast.error(res?.error || 'Failed to create user.');
   };
 
@@ -331,8 +334,8 @@ export function CreateUserDialog({ edirs, canPlatform, initialKind, onClose, onD
           <DialogTitle>{kind === 'platform' ? 'Create Platform User' : 'Create Edir User'}</DialogTitle>
           <DialogDescription>
             {kind === 'platform'
-              ? 'Create a platform user (no Edir). Place them at Head Office, or within a District and optionally a Branch — the role list adapts to the chosen scope. They get a temporary password (changed on first login).'
-              : 'Create a login account directly in an Edir. They get a temporary password to sign in (changed on first login) and are enrolled as a member of the Edir.'}
+              ? 'Create a platform user (no Edir). Place them at Head Office, or within a District and optionally a Branch — the role list adapts to the chosen scope. They receive a set-password link by email.'
+              : 'Create a login account directly in an Edir. They receive a set-password link by email and are enrolled as a member of the Edir.'}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">

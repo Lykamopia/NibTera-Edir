@@ -9,7 +9,8 @@ import { writeAudit } from '@/lib/audit';
 import { submitForApproval } from '@/lib/approval-engine';
 import '@/lib/approval-modules';
 import { normalizeEthiopianPhone, isValidEthiopianPhone } from '@/lib/utils';
-import { generateTempPassword } from '@/lib/temp-password';
+import { generateTempPassword } from '@/lib/secure-random';
+import { issueSetPasswordLink } from '@/lib/set-password-link';
 import bcrypt from 'bcrypt';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
@@ -672,13 +673,17 @@ export async function createMember(input: MemberInput) {
       return created;
     });
 
+    // Security policy: credentials are delivered as a set-password link by
+    // email — plaintext passwords are never returned to the UI.
+    const credentialDelivery = loginCreated
+      ? await issueSetPasswordLink({ email, name: data.name, mode: 'setup' })
+      : null;
+
     revalidatePath('/dashboard/members');
     return {
       success: true as const,
       member: serializeMember(member),
-      credentials: loginCreated && tempPassword
-        ? { username: phone ?? email ?? '', tempPassword, channel: phone ? 'SMS' : 'email' }
-        : null,
+      credentialDelivery,
     };
   } catch (error) {
     return failure(error);
@@ -757,12 +762,14 @@ export async function updateMember(id: string, input: MemberInput) {
 }
 
 /**
- * Reset (or issue) a member's login credentials. Generates a fresh temporary
- * password, forces a change on next login, invalidates existing sessions, and
- * returns the plaintext exactly once for the admin to share/print. If the member
- * has no login yet (e.g. registered without one), creates one from their phone.
+ * Reset (or issue) a member's login credentials — WITHOUT exposing a password.
+ * The account gets a fresh random hashed password (never returned), existing
+ * sessions are revoked, and the member receives a single-use set-password link
+ * by email. If no email is on file, returns `code: 'NO_EMAIL'` so the UI can
+ * collect one (passed back via `opts.email`, which is saved and synced to the
+ * member record). If the member has no login yet, one is created.
  */
-export async function resetMemberPassword(memberId: string) {
+export async function resetMemberPassword(memberId: string, opts?: { email?: string }) {
   try {
     // Scope to the member's own Edir (not the actor's) so a Super-Admin — who has
     // no Edir of their own — can reset credentials for any tenant's member.
@@ -779,14 +786,29 @@ export async function resetMemberPassword(memberId: string) {
       return { success: false as const, error: 'This membership is terminated — reinstate the member before issuing login credentials.' };
     }
 
-    const username = member.user?.phone ?? member.phone ?? member.user?.email ?? member.email ?? null;
-    if (!username) return { success: false as const, error: 'This member has no phone or email to use as a login username.' };
+    // Resolve the destination email: a newly supplied one wins, else the login's,
+    // else the member profile's. Without one we cannot deliver a link.
+    const suppliedEmail = opts?.email?.trim().toLowerCase() || null;
+    if (suppliedEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(suppliedEmail)) {
+      return { success: false as const, error: 'Enter a valid email address.' };
+    }
+    const email = suppliedEmail ?? member.user?.email ?? member.email ?? null;
+    if (!email) return { success: false as const, code: 'NO_EMAIL' as const, error: 'This member has no email on file — add one to send the set-password link.' };
 
-    const tempPassword = generateTempPassword();
-    const hashed = await bcrypt.hash(tempPassword, 12);
+    // Adopting a new/changed email: make sure no other login uses it, then save
+    // it on both the login and the member profile (kept in sync).
+    if (suppliedEmail && suppliedEmail !== member.user?.email) {
+      const taken = await prisma.user.findFirst({ where: { email: suppliedEmail, ...(member.user ? { id: { not: member.user.id } } : {}) }, select: { id: true } });
+      if (taken) return { success: false as const, error: 'Another user already uses this email.' };
+    }
+
+    // Random password the member never sees — the account is unusable until they
+    // set their own via the emailed link.
+    const hashed = await bcrypt.hash(generateTempPassword(), 12);
     const memberRole = await prisma.role.findFirst({ where: { edirId, name: 'Member' }, select: { id: true } });
 
     let userId = member.userId;
+    const isNewLogin = !member.user;
     if (member.user) {
       await prisma.user.update({
         where: { id: member.user.id },
@@ -795,13 +817,14 @@ export async function resetMemberPassword(memberId: string) {
           failedLoginAttempts: 0, lockoutUntil: null,
           passwordResetCount: { increment: 1 }, lastPasswordResetAt: new Date(),
           tokenVersion: { increment: 1 }, // invalidate any active sessions
+          ...(suppliedEmail && suppliedEmail !== member.user.email ? { email: suppliedEmail } : {}),
         },
       });
     } else {
       const phone = member.phone ? normalizeEthiopianPhone(member.phone) : null;
       const created = await prisma.user.create({
         data: {
-          name: member.name, phone, email: member.email, edirId, roleId: memberRole?.id ?? null,
+          name: member.name, phone, email, edirId, roleId: memberRole?.id ?? null,
           status: 'ACTIVE', hashedPassword: hashed, mustChangePassword: true, onboardingCompleted: false,
           passwordResetCount: 1, lastPasswordResetAt: new Date(),
         },
@@ -809,10 +832,18 @@ export async function resetMemberPassword(memberId: string) {
       userId = created.id;
       await prisma.member.update({ where: { id: memberId }, data: { userId: created.id } });
     }
+    if (suppliedEmail && suppliedEmail !== member.email) {
+      await prisma.member.update({ where: { id: memberId }, data: { email: suppliedEmail } });
+    }
 
-    await writeAudit({ edirId, userId: actor.id, action: 'MEMBER_PASSWORD_RESET', targetType: 'User', targetId: userId ?? undefined, details: `Credentials reset for ${member.name}.` });
+    const delivery = await issueSetPasswordLink({ email, name: member.name, mode: isNewLogin ? 'setup' : 'reset' });
+    if (!delivery.sent) {
+      return { success: false as const, error: 'The account was reset, but the email could not be sent — check the email settings and try again.' };
+    }
+
+    await writeAudit({ edirId, userId: actor.id, action: 'MEMBER_PASSWORD_RESET', targetType: 'User', targetId: userId ?? undefined, details: `Set-password link sent for ${member.name}.` });
     revalidatePath(`/dashboard/members/${memberId}`);
-    return { success: true as const, credentials: { username, tempPassword, channel: member.phone ? 'SMS' : 'email' } };
+    return { success: true as const, delivery };
   } catch (error) {
     return failure(error);
   }
@@ -834,34 +865,54 @@ export async function setMemberStatus(id: string, status: 'ACTIVE' | 'INACTIVE' 
     if (!existing) return { success: false as const, error: 'Member not found.' };
     await assertSameTenant(actor, existing.edirId);
     if (existing.status === status) return { success: false as const, error: `The member is already ${status.toLowerCase()}.` };
-    await prisma.member.update({ where: { id }, data: { status } });
 
-    // Login-account consequences:
-    //  • TERMINATED — the member is no longer part of the Edir: block their login
-    //    entirely (portal AND mini app session) and revoke active sessions.
-    //  • Reinstated (ACTIVE) — restore a login that was blocked by termination.
-    //  • SUSPENDED — login stays open on purpose: a suspended member signs in and
-    //    pays their dues (incl. the reinstatement fee) to come back.
-    if (existing.user?.id) {
-      if (status === 'TERMINATED') {
-        await prisma.user.update({ where: { id: existing.user.id }, data: { status: 'TERMINATED', tokenVersion: { increment: 1 } } });
-      } else if (status === 'ACTIVE' && existing.user.status === 'TERMINATED') {
-        await prisma.user.update({ where: { id: existing.user.id }, data: { status: 'ACTIVE', tokenVersion: { increment: 1 } } });
-      }
+    // Manual suspension/termination is a Maker–Checker action: the maker submits,
+    // a checker approves, and only then does the status (and any login block)
+    // actually change. Reinstatement keeps its own receipt-backed approval flow.
+    if (status === 'SUSPENDED' || status === 'TERMINATED') {
+      const open = await prisma.approvalRequest.findFirst({
+        where: { module: 'MEMBER_STATUS_CHANGE', targetId: existing.id, status: { in: ['PENDING', 'RETURNED'] } },
+        select: { id: true },
+      });
+      if (open) return { success: false as const, error: 'A status change for this member is already awaiting checker review.' };
+
+      const requestId = await submitForApproval(actor, {
+        edirId: existing.edirId,
+        module: 'MEMBER_STATUS_CHANGE',
+        title: status === 'SUSPENDED'
+          ? `Suspend member ${existing.name} (${existing.memberId})`
+          : `Terminate membership of ${existing.name} (${existing.memberId})`,
+        summary: `${existing.status} → ${status}`,
+        payload: { memberId: existing.id, status },
+        targetType: 'Member',
+        targetId: existing.id,
+      });
+      await writeAudit({ edirId: existing.edirId, userId: actor.id, action: 'MEMBER_STATUS_CHANGE_REQUESTED', targetType: 'Member', targetId: id, details: `${existing.name}: ${existing.status} → ${status} submitted for approval.` });
+      revalidatePath('/dashboard/approvals');
+      revalidatePath(`/dashboard/members/${id}`);
+      return { success: true as const, pendingApproval: true as const, requestId };
     }
 
-    await writeAudit({ edirId: existing.edirId, userId: actor.id, action: 'MEMBER_STATUS_CHANGED', targetType: 'Member', targetId: id, details: `${existing.name}: ${existing.status} → ${status}${status === 'TERMINATED' && existing.user ? ' (login blocked)' : ''}` });
+    // Direct path — only ACTIVE (reinstate an INACTIVE member / restore a
+    // terminated login) and INACTIVE reach here; suspension/termination went
+    // through Maker–Checker above and are applied by the approval executor.
+    await prisma.member.update({ where: { id }, data: { status } });
+
+    // Restore a login that was blocked by termination.
+    if (existing.user?.id && status === 'ACTIVE' && existing.user.status === 'TERMINATED') {
+      await prisma.user.update({ where: { id: existing.user.id }, data: { status: 'ACTIVE', tokenVersion: { increment: 1 } } });
+    }
+
+    await writeAudit({ edirId: existing.edirId, userId: actor.id, action: 'MEMBER_STATUS_CHANGED', targetType: 'Member', targetId: id, details: `${existing.name}: ${existing.status} → ${status}` });
 
     // Tell the member what happened to their standing (mirrors the auto cron).
-    if (existing.user?.id && (status === 'SUSPENDED' || status === 'TERMINATED' || status === 'ACTIVE')) {
-      const copy = status === 'SUSPENDED'
-        ? { title: 'Membership suspended', body: 'Your membership has been suspended. Please contact your Edir administrator for details.', priority: 'high' as const }
-        : status === 'TERMINATED'
-          ? { title: 'Membership terminated', body: 'Your membership has been terminated. Please contact your Edir administrator for details.', priority: 'critical' as const }
-          : { title: 'Membership reinstated', body: 'Your membership is active again — welcome back.', priority: 'normal' as const };
+    if (existing.user?.id && status === 'ACTIVE') {
       try {
         await prisma.notification.create({
-          data: { userId: existing.user.id, edirId: existing.edirId, type: 'member', ...copy, linkUrl: '/dashboard/account' },
+          data: {
+            userId: existing.user.id, edirId: existing.edirId, type: 'member', priority: 'normal',
+            title: 'Membership reinstated', body: 'Your membership is active again — welcome back.', linkUrl: '/dashboard/account',
+          },
         });
       } catch { /* non-fatal */ }
     }

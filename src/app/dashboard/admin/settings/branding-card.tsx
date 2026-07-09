@@ -28,7 +28,8 @@ export default function BrandingCard() {
       const d = await r.json();
       if (!r.ok || !d.success) { toast.error(d.error || 'Upload failed.'); return; }
       const res = await setEdirLogo({ logoUrl: d.path });
-      if (res?.success) { setLogoUrl(d.path); toast.success('Logo updated.'); }
+      if (res?.success && (res as any).pendingApproval) toast.success('Logo change submitted for checker approval — it applies once approved.');
+      else if (res?.success) { setLogoUrl(d.path); toast.success('Logo updated.'); }
       else toast.error(res?.error || 'Failed to save logo.');
     } catch { toast.error('Upload failed.'); }
     finally { setBusy(false); if (fileRef.current) fileRef.current.value = ''; }
@@ -39,7 +40,8 @@ export default function BrandingCard() {
     setBusy(true);
     const res = await setEdirLogo({ logoUrl: null });
     setBusy(false);
-    if (res?.success) { setLogoUrl(null); toast.success('Logo removed.'); }
+    if (res?.success && (res as any).pendingApproval) toast.success('Logo removal submitted for checker approval — it applies once approved.');
+    else if (res?.success) { setLogoUrl(null); toast.success('Logo removed.'); }
     else toast.error(res?.error || 'Failed to remove logo.');
   };
 

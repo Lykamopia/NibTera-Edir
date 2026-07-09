@@ -3,19 +3,13 @@
 import { getActor, assertPermission, type Actor } from '@/lib/tenant-scope';
 import prisma from '@/lib/prisma';
 import bcrypt from 'bcrypt';
-import crypto from 'crypto';
 import { revalidatePath } from 'next/cache';
 import { writeAudit } from '@/lib/audit';
 import { isValidEthiopianPhone, normalizeEthiopianPhone, normalizeNibEmail } from '@/lib/utils';
 import { generateTempPassword } from '@/lib/secure-random';
-import { sendVerificationEmail } from '@/lib/email';
+import { issueSetPasswordLink } from '@/lib/set-password-link';
+import { failure } from '@/lib/action-result';
 import { z } from 'zod';
-
-function failure(error: unknown): { success: false; error: string } {
-  console.error('User management error:', error);
-  const message = error instanceof Error ? error.message : 'An error occurred';
-  return { success: false, error: message };
-}
 
 // Strict server-side input contracts (length-bounded, required fields explicit).
 const branchUserSchema = z.object({
@@ -91,9 +85,9 @@ export async function createBranchUser(input: {
       if (role.scope !== 'BRANCH' && role.edirId) return { success: false as const, error: 'Invalid role for branch user.' };
     }
 
-    // Create user with BRANCH scope
-    const tempPassword = generateTempPassword();
-    const hashedPassword = await bcrypt.hash(tempPassword, 12);
+    // Create with a random hashed password the user never sees — they activate
+    // the account via the emailed set-password link (no plaintext credentials).
+    const hashedPassword = await bcrypt.hash(generateTempPassword(), 12);
 
     const user = await prisma.user.create({
       data: {
@@ -108,6 +102,8 @@ export async function createBranchUser(input: {
       },
     });
 
+    const delivery = await issueSetPasswordLink({ email, name: input.name, mode: 'setup' });
+
     await writeAudit({
       userId: actor.id,
       action: 'BRANCH_USER_CREATED',
@@ -120,7 +116,7 @@ export async function createBranchUser(input: {
     return {
       success: true as const,
       userId: user.id,
-      tempPassword, // In a real app, send this via email
+      delivery,
     };
   } catch (error) {
     return failure(error);
@@ -178,9 +174,9 @@ export async function createDistrictUser(input: {
       if (role.scope !== 'DISTRICT' && role.scope !== 'SUPER_ADMIN') return { success: false as const, error: 'Invalid role for district user.' };
     }
 
-    // Create user with DISTRICT scope
-    const tempPassword = generateTempPassword();
-    const hashedPassword = await bcrypt.hash(tempPassword, 12);
+    // Create with a random hashed password the user never sees — they activate
+    // the account via the emailed set-password link (no plaintext credentials).
+    const hashedPassword = await bcrypt.hash(generateTempPassword(), 12);
 
     const user = await prisma.user.create({
       data: {
@@ -195,6 +191,8 @@ export async function createDistrictUser(input: {
       },
     });
 
+    const delivery = await issueSetPasswordLink({ email, name: input.name, mode: 'setup' });
+
     await writeAudit({
       userId: actor.id,
       action: 'DISTRICT_USER_CREATED',
@@ -207,7 +205,7 @@ export async function createDistrictUser(input: {
     return {
       success: true as const,
       userId: user.id,
-      tempPassword, // In a real app, send this via email
+      delivery,
     };
   } catch (error) {
     return failure(error);
@@ -375,8 +373,9 @@ export async function createOrgUser(input: z.infer<typeof orgUserSchema>) {
     if (emailTaken) return { success: false as const, error: 'A user with this email already exists.' };
     if (phoneTaken) return { success: false as const, error: 'A user with this phone already exists.' };
 
-    const tempPassword = generateTempPassword();
-    const hashedPassword = await bcrypt.hash(tempPassword, 12);
+    // Create with a random hashed password the user never sees — they activate
+    // the account via the emailed set-password link (no plaintext credentials).
+    const hashedPassword = await bcrypt.hash(generateTempPassword(), 12);
     const user = await prisma.user.create({
       data: {
         name: data.name, email, phone,
@@ -388,21 +387,14 @@ export async function createOrgUser(input: z.infer<typeof orgUserSchema>) {
       },
     });
 
-    // Also email a set-password link (best-effort) alongside the temp password.
-    const token = crypto.randomBytes(32).toString('hex');
-    await prisma.passwordResetToken.upsert({
-      where: { email },
-      update: { token, expires: new Date(Date.now() + 48 * 60 * 60 * 1000) },
-      create: { email, token, expires: new Date(Date.now() + 48 * 60 * 60 * 1000) },
-    });
-    sendVerificationEmail({ to: email, name: data.name, token }).catch(() => {});
+    const delivery = await issueSetPasswordLink({ email, name: data.name, mode: 'setup' });
 
     await writeAudit({
       userId: actor.id, action: 'ORG_USER_CREATED', targetType: 'User', targetId: user.id,
       details: `Created ${data.name} (${email}) in ${placementLabel}.`,
     });
     revalidatePath('/dashboard/admin/users');
-    return { success: true as const, userId: user.id, credentials: { username: phone ?? email, tempPassword, channel: phone ? 'SMS' : 'email' } };
+    return { success: true as const, userId: user.id, delivery };
   } catch (error) {
     return failure(error);
   }

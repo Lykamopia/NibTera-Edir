@@ -8,12 +8,12 @@ import { logSecurityEvent, SecurityEvent } from '@/lib/security-logger';
 import { getGeneralSettings } from './settings';
 import { revalidatePath } from 'next/cache';
 import bcrypt from 'bcrypt';
-import crypto from 'crypto';
 import { AccessDeniedError, NotAuthenticatedError } from '@/lib/errors';
 import { pagePermissions } from '@/lib/permissions';
 import { IMPLEMENTED_PAGES } from '@/lib/nav';
 import { normalizeNibEmail } from '@/lib/utils';
-import { sendPasswordResetEmail, sendPasswordChangedNotificationEmail } from '@/lib/email';
+import { sendPasswordChangedNotificationEmail } from '@/lib/email';
+import { issueSetPasswordLink } from '@/lib/set-password-link';
 import { passwordSchema } from '@/lib/password-policy';
 
 /**
@@ -312,20 +312,10 @@ export async function requestPasswordReset(email: string): Promise<{ success: tr
             const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
 
             if (!existing || existing.createdAt <= fiveMinutesAgo) {
-                const token = crypto.randomBytes(32).toString('hex');
-                const expires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
-
-                await prisma.passwordResetToken.upsert({
-                    where:  { email: normalizedEmail },
-                    update: { token, expires, createdAt: new Date() },
-                    create: { email: normalizedEmail, token, expires },
-                });
-
-                await sendPasswordResetEmail({
-                    to: normalizedEmail,
-                    name: user.name ?? 'User',
-                    token,
-                });
+                // Mint the 1h token and email the reset link (shared with every
+                // other credential flow) — enumeration protection still returns
+                // success regardless of the delivery result.
+                await issueSetPasswordLink({ email: normalizedEmail, name: user.name, mode: 'reset' });
 
                 await logSecurityEvent({
                     event: SecurityEvent.PASSWORD_RESET_REQUEST,

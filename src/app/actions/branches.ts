@@ -5,12 +5,7 @@ import { getActor, assertPermission } from '@/lib/tenant-scope';
 import prisma from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
 import { writeAudit } from '@/lib/audit';
-
-function failure(error: unknown): { success: false; error: string } {
-  console.error('Branch action error:', error);
-  const message = error instanceof Error ? error.message : 'An error occurred';
-  return { success: false, error: message };
-}
+import { failure } from '@/lib/action-result';
 
 const BRANCH_MANAGER_PERMISSIONS = [
   'view_dashboard', 'view_branches',

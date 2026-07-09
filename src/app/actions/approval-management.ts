@@ -10,11 +10,7 @@ import {
   getApprovalHistory,
 } from '@/lib/approval-tracking';
 import { approveRequest, rejectRequest, returnRequest, commentOnRequest } from '@/lib/approval-engine';
-
-function failure(error: unknown) {
-  console.error('Approval management error:', error);
-  return { success: false as const, error: error instanceof Error ? error.message : 'An error occurred' };
-}
+import { failure } from '@/lib/action-result';
 
 /**
  * Approve an approval request (Checker action)

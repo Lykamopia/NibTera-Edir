@@ -20,7 +20,7 @@ import {
   Power, UserX, Receipt, Eye, Download, FileImage, Wallet, CalendarClock, TrendingDown, Clock,
 } from 'lucide-react';
 import { EmptyState } from '@/components/ui/states';
-import { CredentialsDialog, type Credentials } from '@/components/credentials-dialog';
+import { SetEmailDialog } from '@/components/set-email-dialog';
 import { PaymentReceiptModal } from '@/components/payment-receipt-modal';
 import { ReceiptUpload, type ReceiptFile } from '@/components/ui/receipt-upload';
 import { useConfirm, usePrompt } from '@/components/ui/confirm-provider';
@@ -57,7 +57,8 @@ async function uploadFile(file: File, type: 'profile' | 'documents'): Promise<{ 
 
 export default function MemberProfileClient({ initial, memberId }: { initial: Profile; memberId: string }) {
   const [p, setP] = useState<Profile>(initial);
-  const [cred, setCred] = useState<Credentials | null>(null);
+  // A credential reset that found no email on file — the dialog collects one.
+  const [emailPrompt, setEmailPrompt] = useState(false);
   const [editing, setEditing] = useState(false);
   const [receipt, setReceipt] = useState<any | null>(null);
   const [reinstating, setReinstating] = useState(false);
@@ -89,25 +90,16 @@ export default function MemberProfileClient({ initial, memberId }: { initial: Pr
       return;
     }
     const copy = status === 'SUSPENDED'
-      ? { title: `Suspend ${m.name}?`, description: 'The member is suspended and loses benefit eligibility until reinstated. They are notified.', confirmText: 'Suspend', ok: 'Member suspended.', destructive: true }
+      ? { title: `Suspend ${m.name}?`, description: 'Submits the suspension for checker approval. Once approved, the member loses benefit eligibility until reinstated (they can still sign in and pay their dues). They are notified on approval.', confirmText: 'Submit suspension', ok: 'Member suspended.', destructive: true }
       : status === 'TERMINATED'
-        ? { title: `Terminate ${m.name}'s membership?`, description: 'This formally ENDS the membership — the final stage after suspension. The record and full history are kept, and the member can only return via reinstatement (a reinstatement fee may apply). They are notified.', confirmText: 'Terminate membership', ok: 'Membership terminated.', destructive: true }
+        ? { title: `Terminate ${m.name}'s membership?`, description: 'Submits the termination for checker approval. Once approved, this formally ENDS the membership and blocks their login — the record and full history are kept, and only reinstatement (a fee may apply) brings them back. They are notified on approval.', confirmText: 'Submit termination', ok: 'Membership terminated.', destructive: true }
         : { title: `Reinstate ${m.name}?`, description: 'The member returns to active standing.', confirmText: 'Reinstate', ok: 'Member reinstated.', destructive: false };
     if (!(await confirm({ title: copy.title, description: copy.description, destructive: copy.destructive, confirmText: copy.confirmText }))) return;
     setBusy('status');
     const res = await setMemberStatus(memberId, status);
     setBusy(null);
-    if (res?.success) { toast.success(copy.ok); reload(); }
+    if (res?.success) { toast.success((res as any).pendingApproval ? 'Submitted for checker approval — the status changes once approved.' : copy.ok); reload(); }
     else toast.error(res?.error || 'Failed to update status.');
-  };
-
-  const onResetPassword = async () => {
-    if (!(await confirm({ title: 'Reset password', description: 'Generate a new temporary password? Existing sessions are signed out and the member must change it on next login.', confirmText: 'Generate' }))) return;
-    setBusy('reset');
-    const res = await resetMemberPassword(memberId);
-    setBusy(null);
-    if (res?.success && res.credentials) { toast.success('New credentials generated.'); setCred(res.credentials as Credentials); reload(); }
-    else toast.error((res && !res.success && res.error) || 'Failed to reset password.');
   };
 
   const onRequestRemoval = async () => {
@@ -171,11 +163,9 @@ export default function MemberProfileClient({ initial, memberId }: { initial: Pr
                   {busy === 'status' ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <UserX className="mr-1.5 h-4 w-4" />} Terminate
                 </Button>
               )}
-              {caps.canResetPassword && (
-                <Button size="sm" variant="outline" disabled={busy === 'reset'} onClick={onResetPassword}>
-                  {busy === 'reset' ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <KeyRound className="mr-1.5 h-4 w-4" />} Reset password
-                </Button>
-              )}
+              {/* Password reset lives in the Login Account card (Overview tab),
+                  where it's contextual to account status and also covers the
+                  "create login" case — so it's intentionally not duplicated here. */}
               {caps.canRecordPayment && (
                 <Link href="/dashboard/payments"><Button size="sm" variant="outline"><CreditCard className="mr-1.5 h-4 w-4" /> Record payment</Button></Link>
               )}
@@ -235,7 +225,7 @@ export default function MemberProfileClient({ initial, memberId }: { initial: Pr
                 </>) : <p className="text-muted-foreground">No rules configured yet.</p>}
               </CardContent>
             </Card>
-            <AccountCard account={p.account} memberId={memberId} onCredentials={setCred} onChanged={reload} />
+            <AccountCard account={p.account} memberId={memberId} onNeedsEmail={() => setEmailPrompt(true)} onChanged={reload} />
           </div>
         </TabsContent>
 
@@ -356,7 +346,18 @@ export default function MemberProfileClient({ initial, memberId }: { initial: Pr
         </TabsContent>
       </Tabs>
 
-      {cred && <CredentialsDialog memberName={m.name} credentials={cred} onClose={() => setCred(null)} />}
+      {emailPrompt && (
+        <SetEmailDialog
+          personName={m.name}
+          onClose={() => setEmailPrompt(false)}
+          onSubmit={async (email) => {
+            const res = await resetMemberPassword(memberId, { email });
+            if (res?.success) { toast.success(`Set-password link sent to ${(res as any).delivery?.emailMasked ?? email}.`); reload(); return true; }
+            toast.error((res && !res.success && res.error) || 'Failed to send the link.');
+            return false;
+          }}
+        />
+      )}
       {editing && <EditMemberDialog member={m} onClose={() => setEditing(false)} onDone={() => { setEditing(false); reload(); }} />}
       {receipt && <PaymentReceiptModal log={receipt} currency={cur} onClose={() => setReceipt(null)} />}
       {reinstating && <ReinstateDialog memberId={memberId} currency={cur} onClose={() => setReinstating(false)} onDone={() => { setReinstating(false); reload(); }} />}
@@ -711,15 +712,16 @@ function EditMemberDialog({ member, onClose, onDone }: { member: any; onClose: (
   );
 }
 
-function AccountCard({ account, memberId, onCredentials, onChanged }: { account: any; memberId: string; onCredentials: (c: Credentials) => void; onChanged: () => void }) {
+function AccountCard({ account, memberId, onNeedsEmail, onChanged }: { account: any; memberId: string; onNeedsEmail: () => void; onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
   const confirm = useConfirm();
   const reset = async () => {
-    if (!(await confirm({ title: 'Reset password', description: 'Generate a new temporary password? Existing sessions are signed out and the member must change it on next login.', confirmText: 'Generate' }))) return;
+    if (!(await confirm({ title: 'Reset password', description: 'Email the member a single-use set-password link? Existing sessions are signed out and no password is shown anywhere.', confirmText: 'Send link' }))) return;
     setBusy(true);
     const res = await resetMemberPassword(memberId);
     setBusy(false);
-    if (res?.success && res.credentials) { toast.success('New credentials generated.'); onCredentials(res.credentials as Credentials); onChanged(); }
+    if (res?.success) { toast.success(`Set-password link sent to ${(res as any).delivery?.emailMasked ?? 'their email'}.`); onChanged(); }
+    else if ((res as any)?.code === 'NO_EMAIL') onNeedsEmail();
     else toast.error((res && !res.success && res.error) || 'Failed to reset password.');
   };
 

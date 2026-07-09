@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useConfirm } from '@/components/ui/confirm-provider';
-import { CredentialsDialog, type Credentials } from '@/components/credentials-dialog';
+import { SetEmailDialog } from '@/components/set-email-dialog';
 import { adminGenerateTempPassword } from '@/app/actions/admin';
 
 type Doc = EdirProfile['documents'][number];
@@ -47,27 +47,29 @@ function docIcon(fileType: string) {
 export default function EdirDetailClient({ profile: p }: { profile: EdirProfile }) {
   const router = useRouter();
   const [preview, setPreview] = useState<Doc | null>(null);
-  const [cred, setCred] = useState<{ name: string; credentials: Credentials } | null>(null);
+  // A manager reset that found no email on file — the dialog collects one.
+  const [emailPrompt, setEmailPrompt] = useState<{ userId: string; name: string } | null>(null);
   const [resetting, setResetting] = useState<string | null>(null);
   const confirm = useConfirm();
   const cur = p.settings?.currency ?? 'ETB';
   const caps = p.caps;
 
   // Recover an administrator who can't sign in (e.g. their invite email failed):
-  // issue a temporary password, activate the account, and show it once for manual
-  // hand-off. The action is permission-gated and audited server-side.
+  // email a single-use set-password link and activate the account. No plaintext
+  // password is shown. Prompts for an email if none is on file. Audited server-side.
   const onResetManager = async (u: EdirProfile['admins'][number]) => {
     const who = u.name || u.email || 'this manager';
     const ok = await confirm({
-      title: 'Generate temporary password',
-      description: `Issue a new temporary password for ${who}? Their account is activated and any existing session is signed out. You'll see the password once to deliver it manually (phone or in person).`,
-      confirmText: 'Generate password',
+      title: 'Send set-password link',
+      description: `Email ${who} a single-use set-password link? Their account is activated and any existing session is signed out. No password appears anywhere.`,
+      confirmText: 'Send link',
     });
     if (!ok) return;
     setResetting(u.id);
     const res = await adminGenerateTempPassword(u.id);
     setResetting(null);
-    if (res?.success && res.credentials) setCred({ name: who, credentials: res.credentials as Credentials });
+    if (res?.success) toast.success(`Set-password link sent to ${(res as any).delivery?.emailMasked ?? 'their email'}.`);
+    else if ((res as any)?.code === 'NO_EMAIL') setEmailPrompt({ userId: u.id, name: who });
     else toast.error((res && !res.success && res.error) || 'Failed to reset password.');
   };
 
@@ -312,7 +314,18 @@ export default function EdirDetailClient({ profile: p }: { profile: EdirProfile 
       </Tabs>
 
       {/* One-time credentials slip after a manual password reset */}
-      {cred && <CredentialsDialog memberName={cred.name} credentials={cred.credentials} onClose={() => setCred(null)} />}
+      {emailPrompt && (
+        <SetEmailDialog
+          personName={emailPrompt.name}
+          onClose={() => setEmailPrompt(null)}
+          onSubmit={async (email) => {
+            const res = await adminGenerateTempPassword(emailPrompt.userId, { email });
+            if (res?.success) { toast.success(`Set-password link sent to ${(res as any).delivery?.emailMasked ?? email}.`); return true; }
+            toast.error((res && !res.success && res.error) || 'Failed to send the link.');
+            return false;
+          }}
+        />
+      )}
 
       {/* Document preview dialog */}
       <Dialog open={!!preview} onOpenChange={(o) => { if (!o) setPreview(null); }}>
@@ -385,7 +398,7 @@ function PeopleCard({ title, icon: Icon, people, empty, canReset, onReset, reset
                   <p className="truncate text-xs text-muted-foreground">{u.roleName || '—'}</p>
                 </div>
                 {canReset && onReset && (
-                  <Button size="icon" variant="ghost" className="h-8 w-8 shrink-0" title="Generate temporary password (manual delivery)" onClick={() => onReset(u)} disabled={resettingId === u.id}>
+                  <Button size="icon" variant="ghost" className="h-8 w-8 shrink-0" title="Email a set-password link" onClick={() => onReset(u)} disabled={resettingId === u.id}>
                     {resettingId === u.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
                   </Button>
                 )}

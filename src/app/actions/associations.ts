@@ -1,7 +1,6 @@
 'use server';
 
 import { z } from 'zod';
-import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import prisma from '@/lib/prisma';
 import { getActor, actorHasPermission } from '@/lib/tenant-scope';
@@ -10,8 +9,8 @@ import { writeAudit } from '@/lib/audit';
 import { ensureMembershipForUser } from '@/app/actions/members';
 import { ensureDefaultEdirRoles } from '@/app/actions/admin';
 import { normalizeEthiopianPhone, isValidEthiopianPhone } from '@/lib/utils';
-import { generateTempPassword } from '@/lib/temp-password';
-import { sendVerificationEmail } from '@/lib/email';
+import { generateTempPassword } from '@/lib/secure-random';
+import { issueSetPasswordLink } from '@/lib/set-password-link';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
 
@@ -243,25 +242,18 @@ export async function createPlatformAdmin(input: z.infer<typeof createPlatformAd
     if (emailTaken) return { success: false as const, error: 'A user with this email already exists.' };
     if (phoneTaken) return { success: false as const, error: 'A user with this phone already exists.' };
 
-    // Create ACTIVE with a temporary password so the platform user can sign in
-    // immediately (forced to change it on first login). Also email a link.
-    const tempPassword = generateTempPassword();
-    const hashed = await bcrypt.hash(tempPassword, 12);
+    // Create with a random hashed password the user never sees — they activate
+    // the account via the emailed set-password link (no plaintext credentials).
+    const hashed = await bcrypt.hash(generateTempPassword(), 12);
     const user = await prisma.user.create({
       data: { name: data.name, email, phone, edirId: null, districtId, branchId, roleId: data.roleId, status: 'ACTIVE', hashedPassword: hashed, mustChangePassword: true, onboardingCompleted: false },
     });
 
-    const token = crypto.randomBytes(32).toString('hex');
-    await prisma.passwordResetToken.upsert({
-      where: { email },
-      update: { token, expires: new Date(Date.now() + 48 * 60 * 60 * 1000) },
-      create: { email, token, expires: new Date(Date.now() + 48 * 60 * 60 * 1000) },
-    });
-    sendVerificationEmail({ to: email, name: data.name, token }).catch(err => console.error('Failed to send invite email:', err));
+    const delivery = await issueSetPasswordLink({ email, name: data.name, mode: 'setup' });
 
     await writeAudit({ userId: actor.id, action: 'PLATFORM_USER_CREATED', targetType: 'User', targetId: user.id, details: `Created ${placementLabel} user ${email} with role "${role.name}".` });
     revalidatePath('/dashboard/system/associations');
-    return { success: true as const, userId: user.id, credentials: { username: phone ?? email, tempPassword, channel: phone ? 'SMS' : 'email' } };
+    return { success: true as const, userId: user.id, delivery };
   } catch (error) {
     return failure(error);
   }
@@ -291,25 +283,50 @@ export async function getPlatformUsers() {
   }));
 }
 
-/** Issue a fresh temporary password for a user who cannot sign in (recovery). */
-export async function resetAssociationUserPassword(userId: string) {
+/** Recover a user who cannot sign in — emails a set-password link (no plaintext
+ *  password). Returns `code: 'NO_EMAIL'` when the account has no email so the UI
+ *  can collect one via `opts.email` (saved and synced to a linked member row). */
+export async function resetAssociationUserPassword(userId: string, opts?: { email?: string }) {
   try {
     const actor = await requireSuperAdmin();
-    const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true, phone: true, email: true, edirId: true, role: { select: { scope: true } } } });
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true, name: true, phone: true, email: true, edirId: true, role: { select: { scope: true } } } });
     if (!user) return { success: false as const, error: 'User not found.' };
     // Resetting a platform user is full-Super-Admin only (containment).
     if (user.role?.scope === 'SUPER_ADMIN' && !actor.isSuperAdmin) {
       return { success: false as const, error: 'Only Super Administrators can reset platform users.' };
     }
-    const tempPassword = generateTempPassword();
-    const hashed = await bcrypt.hash(tempPassword, 12);
+
+    const suppliedEmail = opts?.email?.trim().toLowerCase() || null;
+    if (suppliedEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(suppliedEmail)) {
+      return { success: false as const, error: 'Enter a valid email address.' };
+    }
+    const email = suppliedEmail ?? user.email ?? null;
+    if (!email) return { success: false as const, code: 'NO_EMAIL' as const, error: 'This account has no email on file — add one to send the set-password link.' };
+    if (suppliedEmail && suppliedEmail !== user.email) {
+      const taken = await prisma.user.findFirst({ where: { email: suppliedEmail, id: { not: userId } }, select: { id: true } });
+      if (taken) return { success: false as const, error: 'Another user already uses this email.' };
+    }
+
+    const hashed = await bcrypt.hash(generateTempPassword(), 12);
     await prisma.user.update({
       where: { id: userId },
-      data: { hashedPassword: hashed, mustChangePassword: true, status: 'ACTIVE', failedLoginAttempts: 0, lockoutUntil: null, tokenVersion: { increment: 1 } },
+      data: {
+        hashedPassword: hashed, mustChangePassword: true, status: 'ACTIVE', failedLoginAttempts: 0, lockoutUntil: null, tokenVersion: { increment: 1 },
+        ...(suppliedEmail && suppliedEmail !== user.email ? { email: suppliedEmail } : {}),
+      },
     });
-    await writeAudit({ edirId: user.edirId, userId: actor.id, action: 'USER_PASSWORD_RESET', targetType: 'User', targetId: userId, details: 'Temporary password issued.' });
+    if (suppliedEmail && suppliedEmail !== user.email) {
+      await prisma.member.updateMany({ where: { userId }, data: { email: suppliedEmail } });
+    }
+
+    const delivery = await issueSetPasswordLink({ email, name: user.name, mode: 'reset' });
+    if (!delivery.sent) {
+      return { success: false as const, error: 'The account was reset, but the email could not be sent — check the email settings and try again.' };
+    }
+
+    await writeAudit({ edirId: user.edirId, userId: actor.id, action: 'USER_PASSWORD_RESET', targetType: 'User', targetId: userId, details: 'Set-password link emailed.' });
     revalidatePath('/dashboard/system/associations');
-    return { success: true as const, credentials: { username: user.phone ?? user.email ?? '', tempPassword, channel: user.phone ? 'SMS' : 'email' } };
+    return { success: true as const, delivery };
   } catch (error) {
     return failure(error);
   }
@@ -355,28 +372,21 @@ export async function createPlatformUser(input: z.infer<typeof createUserSchema>
       if (role.edirId && role.edirId !== data.edirId) return { success: false as const, error: 'That role belongs to a different Edir.' };
     }
 
-    // Create ACTIVE with a temporary password so the user can sign in right away
-    // (forced to change it on first login). Also email a set-password link.
-    const tempPassword = generateTempPassword();
-    const hashed = await bcrypt.hash(tempPassword, 12);
+    // Create with a random hashed password the user never sees — they activate
+    // the account via the emailed set-password link (no plaintext credentials).
+    const hashed = await bcrypt.hash(generateTempPassword(), 12);
     const user = await prisma.user.create({
       data: { name: data.name, email, phone, edirId: data.edirId, roleId: data.roleId || null, status: 'ACTIVE', hashedPassword: hashed, mustChangePassword: true, onboardingCompleted: false },
     });
 
-    const token = crypto.randomBytes(32).toString('hex');
-    await prisma.passwordResetToken.upsert({
-      where: { email },
-      update: { token, expires: new Date(Date.now() + 48 * 60 * 60 * 1000) },
-      create: { email, token, expires: new Date(Date.now() + 48 * 60 * 60 * 1000) },
-    });
-    sendVerificationEmail({ to: email, name: data.name, token }).catch(err => console.error('Failed to send invite email:', err));
+    const delivery = await issueSetPasswordLink({ email, name: data.name, mode: 'setup' });
 
     await writeAudit({ edirId: data.edirId, userId: actor.id, action: 'USER_CREATED', targetType: 'User', targetId: user.id, details: `Created ${email} in ${edir.name}.` });
     // Enroll as a member of the Edir (obligations follow the bylaws).
     try { await ensureMembershipForUser(user.id); } catch { /* non-fatal */ }
 
     revalidatePath('/dashboard/system/associations');
-    return { success: true as const, userId: user.id, credentials: { username: phone ?? email, tempPassword, channel: phone ? 'SMS' : 'email' } };
+    return { success: true as const, userId: user.id, delivery };
   } catch (error) {
     return failure(error);
   }

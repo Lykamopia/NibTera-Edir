@@ -190,14 +190,14 @@ async function resolveApprovalContext(edirId: string, module: string, rawPayload
       if (r) ctx.role = r;
     }),
     safe(async () => {
-      // Manual payment: surface the recorded payment log (reference, evidence,
-      // amount, member balance) so the checker reviews the complete picture.
-      if (module !== 'MANUAL_PAYMENT' || !p.paymentLogId) return;
+      // Manual payment / payment void: surface the payment log (reference,
+      // evidence, amount, member balance) so the checker reviews the full picture.
+      if ((module !== 'MANUAL_PAYMENT' && module !== 'PAYMENT_VOID') || !p.paymentLogId) return;
       const log = await prisma.paymentLog.findUnique({
         where: { id: p.paymentLogId },
         select: {
           transactionId: true, method: true, status: true, receiptUrl: true, createdAt: true, amount: true,
-          member: { select: { paymentStatus: { select: { balance: true } } } },
+          member: { select: { name: true, memberId: true, phone: true, photoUrl: true, paymentStatus: { select: { balance: true } } } },
         },
       });
       if (!log) return;
@@ -206,6 +206,9 @@ async function resolveApprovalContext(edirId: string, module: string, rawPayload
         receiptUrl: log.receiptUrl, createdAt: log.createdAt.toISOString(), amount: Number(log.amount),
         memberBalance: log.member?.paymentStatus ? Number(log.member.paymentStatus.balance) : null,
       };
+      // The void request carries no memberId in its payload; resolve the subject
+      // from the payment's own member so the approval shows who it belongs to.
+      if (!ctx.member && log.member) ctx.member = { name: log.member.name, code: log.member.memberId, phone: log.member.phone, photoUrl: log.member.photoUrl };
       if (log.receiptUrl) {
         const fileName = log.receiptUrl.split('/').pop() ?? 'receipt';
         ctx.document = {

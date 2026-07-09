@@ -19,7 +19,7 @@ import {
   Users, UserCog, Building2, Search, Download, Plus, UserPlus, MoreHorizontal,
   Eye, UserX, Power, Loader2, Upload, Wallet, KeyRound,
 } from 'lucide-react';
-import { CredentialsDialog, type Credentials } from '@/components/credentials-dialog';
+import { SetEmailDialog } from '@/components/set-email-dialog';
 import { useConfirm } from '@/components/ui/confirm-provider';
 import { DateRangeFilter, ALL_TIME, toParam, type DateRangeValue } from '@/components/ui/date-range-filter';
 import { Avatar, SortHead, STATUS_COLORS, FormSection, FormField } from '@/app/dashboard/_directory/shared';
@@ -43,7 +43,8 @@ export default function MembersClient() {
   const [dateRange, setDateRange] = useState<DateRangeValue>(ALL_TIME);
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'name', dir: 'asc' });
 
-  const [cred, setCred] = useState<{ name: string; credentials: Credentials } | null>(null);
+  // A credential reset that found no email on file — the dialog collects one.
+  const [emailPrompt, setEmailPrompt] = useState<{ memberId: string; name: string } | null>(null);
   const confirm = useConfirm();
   const router = useRouter();
 
@@ -117,7 +118,8 @@ export default function MembersClient() {
   const onResetPassword = async (r: PersonRow) => {
     if (!r.memberId) return;
     const res = await resetMemberPassword(r.memberId);
-    if (res?.success) { setCred({ name: r.name, credentials: res.credentials as Credentials }); load(); }
+    if (res?.success) { toast.success(`Set-password link sent to ${(res as any).delivery?.emailMasked ?? 'their email'}.`); load(); }
+    else if ((res as any)?.code === 'NO_EMAIL') setEmailPrompt({ memberId: r.memberId, name: r.name });
     else toast.error(res?.error || 'Failed to reset password.');
   };
 
@@ -132,9 +134,9 @@ export default function MembersClient() {
       return;
     }
     const copy = status === 'SUSPENDED'
-      ? { title: `Suspend ${r.name}?`, description: 'The member loses benefit eligibility until reinstated (they can still sign in and pay their dues). They are notified.', confirmText: 'Suspend', ok: 'Member suspended.', destructive: true }
+      ? { title: `Suspend ${r.name}?`, description: 'Submits the suspension for checker approval. Once approved, the member loses benefit eligibility until reinstated (they can still sign in and pay their dues). They are notified on approval.', confirmText: 'Submit suspension', ok: 'Suspension submitted for checker approval.', destructive: true }
       : status === 'TERMINATED'
-        ? { title: `Terminate ${r.name}'s membership?`, description: 'This formally ENDS the membership and BLOCKS their login (portal and mini app). The record and history are kept; only reinstatement brings them back. They are notified.', confirmText: 'Terminate membership', ok: 'Membership terminated.', destructive: true }
+        ? { title: `Terminate ${r.name}'s membership?`, description: 'Submits the termination for checker approval. Once approved, this formally ENDS the membership and BLOCKS their login (portal and mini app). The record and history are kept; only reinstatement brings them back. They are notified on approval.', confirmText: 'Submit termination', ok: 'Termination submitted for checker approval.', destructive: true }
         : { title: `Reinstate ${r.name}?`, description: 'The member returns to active standing and their login is restored.', confirmText: 'Reinstate', ok: 'Member reinstated.', destructive: false };
     if (!(await confirm({ title: copy.title, description: copy.description, destructive: copy.destructive, confirmText: copy.confirmText }))) return;
     await act(() => setMemberStatus(r.memberId!, status), copy.ok);
@@ -150,7 +152,18 @@ export default function MembersClient() {
 
   return (
     <div className="space-y-5">
-      {cred && <CredentialsDialog memberName={cred.name} credentials={cred.credentials} onClose={() => setCred(null)} />}
+      {emailPrompt && (
+        <SetEmailDialog
+          personName={emailPrompt.name}
+          onClose={() => setEmailPrompt(null)}
+          onSubmit={async (email) => {
+            const res = await resetMemberPassword(emailPrompt.memberId, { email });
+            if (res?.success) { toast.success(`Set-password link sent to ${(res as any).delivery?.emailMasked ?? email}.`); load(); return true; }
+            toast.error(res?.error || 'Failed to send the link.');
+            return false;
+          }}
+        />
+      )}
 
       {/* Hero */}
       <div className="relative overflow-hidden rounded-2xl border bg-gradient-to-br from-primary/10 via-primary/[0.04] to-transparent p-5 sm:p-6">
@@ -242,7 +255,7 @@ export default function MembersClient() {
           <DateRangeFilter value={dateRange} onChange={setDateRange} className="h-9" align="end" />
           <Button variant="outline" size="sm" onClick={onExport}><Download className="mr-1 h-4 w-4" /> Export</Button>
           {ctx?.canManageMembers && <BulkImportMembersDialog ctx={ctx} onDone={load} />}
-          {ctx?.canManageMembers && <AddMemberDialog ctx={ctx} onCreated={load} onCredentials={setCred} />}
+          {ctx?.canManageMembers && <AddMemberDialog ctx={ctx} onCreated={load} onNeedsEmail={setEmailPrompt} />}
         </div>
       </div>
 
@@ -387,8 +400,8 @@ const EMPTY_MEMBER: MemberInput = {
 
 const today = () => new Date().toISOString().slice(0, 10);
 
-function AddMemberDialog({ ctx, onCreated, onCredentials }: {
-  ctx: DirectoryContext; onCreated: () => void; onCredentials: (c: { name: string; credentials: Credentials }) => void;
+function AddMemberDialog({ ctx, onCreated, onNeedsEmail }: {
+  ctx: DirectoryContext; onCreated: () => void; onNeedsEmail: (p: { memberId: string; name: string }) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [stage, setStage] = useState<'form' | 'confirm'>('form');
@@ -428,7 +441,12 @@ function AddMemberDialog({ ctx, onCreated, onCredentials }: {
     setSaving(false);
     if (res?.success) {
       toast.success(`Member created: ${res.member.memberId}`);
-      if (res.credentials) onCredentials({ name: res.member.name, credentials: res.credentials as Credentials });
+      // Credentials go out as a set-password link — never plaintext. If the new
+      // member has no email, offer to add one so the link can be delivered.
+      const d = (res as any).credentialDelivery;
+      if (d?.sent) toast.success(`Set-password link sent to ${d.emailMasked}.`);
+      else if (d && d.reason === 'NO_EMAIL') onNeedsEmail({ memberId: res.member.id, name: res.member.name });
+      else if (d && d.reason === 'SEND_FAILED') toast.error('The set-password email could not be sent — use “Reset login password” to retry.');
       setOpen(false); reset(); onCreated();
     } else { toast.error(res?.error || 'Failed to create member.'); setStage('form'); }
   };

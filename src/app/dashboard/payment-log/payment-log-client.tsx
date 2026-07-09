@@ -145,11 +145,11 @@ export default function PaymentLogClient() {
   };
 
   const onVoid = async (l: any) => {
-    const reason = await prompt({ title: 'Void transaction', description: `Transaction ${l.transactionId}`, label: 'Reason (optional)', multiline: true, confirmText: 'Void payment' });
+    const reason = await prompt({ title: 'Void transaction', description: `Submit a void of transaction ${l.transactionId} for checker approval. It is only voided once a different checker approves.`, label: 'Reason (optional)', multiline: true, confirmText: 'Submit void' });
     if (reason === null) return;
     const res = await voidPayment(l.id, reason || undefined);
-    if (res?.success) { toast.success('Payment voided.'); load(); }
-    else toast.error(res?.error || 'Failed to void payment.');
+    if (res?.success) { toast.success('Void submitted for checker approval.'); load(); }
+    else toast.error(res?.error || 'Failed to submit void.');
   };
 
   const showEdirColumn = (summary?.edirs?.length ?? 0) > 1;
@@ -289,7 +289,7 @@ export default function PaymentLogClient() {
                       <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-end gap-1">
                           <Button size="sm" variant="ghost" onClick={() => setReceipt(l)} title="View receipt"><Receipt className="h-4 w-4" /></Button>
-                          {(l.status === 'PENDING' || l.status === 'FAILED') && <Button size="sm" variant="ghost" className="text-destructive" onClick={() => onVoid(l)} title="Void"><Ban className="h-4 w-4" /></Button>}
+                          {(l.status === 'PENDING' || l.status === 'FAILED') && <Button size="sm" variant="ghost" className="text-destructive" onClick={() => onVoid(l)} title="Void (requires checker approval)"><Ban className="h-4 w-4" /></Button>}
                         </div>
                       </TableCell>
                     </TableRow>

@@ -865,6 +865,14 @@ export async function exportPaymentLogCsv(params: PaymentLogFilters = {}) {
  * Settled (SUCCESS/PARTIAL) payments are never voided here; reversing real
  * settlement would require a dedicated Maker–Checker reversal flow.
  */
+/**
+ * Void a non-settled payment. Like other sensitive operations this is routed
+ * through Maker–Checker: the operator submits, a different checker approves, and
+ * only then is the PaymentLog marked VOID (see the PAYMENT_VOID approval module).
+ * Settled payments can never be voided; a manual payment rejected by a checker is
+ * already auto-voided by MANUAL_PAYMENT.onReject, so this covers the residual
+ * cases (e.g. FAILED bank-callback logs, reconciliation).
+ */
 export async function voidPayment(paymentLogId: string, reason?: string) {
   try {
     const actor = await getActor();
@@ -879,13 +887,25 @@ export async function voidPayment(paymentLogId: string, reason?: string) {
     }
     if (log.status === 'VOID') return { success: false as const, error: 'This payment is already void.' };
 
-    await prisma.paymentLog.update({
-      where: { id: paymentLogId },
-      data: { status: 'VOID', description: reason ? JSON.stringify({ ...safeParse(log.description), voidReason: reason }) : log.description },
+    const open = await prisma.approvalRequest.findFirst({
+      where: { module: 'PAYMENT_VOID', targetId: paymentLogId, status: { in: ['PENDING', 'RETURNED'] } },
+      select: { id: true },
     });
-    await writeAudit({ edirId, userId: actor.id, action: 'PAYMENT_VOIDED', targetType: 'PaymentLog', targetId: paymentLogId, details: reason || 'No reason given.' });
+    if (open) return { success: false as const, error: 'A void for this payment is already awaiting checker review.' };
+
+    const requestId = await submitForApproval(actor, {
+      edirId,
+      module: 'PAYMENT_VOID',
+      title: `Void payment ${log.transactionId ?? paymentLogId.slice(-6)}`,
+      summary: reason || `Void a ${log.status.toLowerCase()} payment of ${Number(log.amount).toLocaleString()}`,
+      payload: { paymentLogId, reason: reason || null },
+      targetType: 'PaymentLog',
+      targetId: paymentLogId,
+    });
+    await writeAudit({ edirId, userId: actor.id, action: 'PAYMENT_VOID_REQUESTED', targetType: 'PaymentLog', targetId: paymentLogId, details: reason || 'Submitted for approval.' });
     revalidatePath('/dashboard/payment-log');
-    return { success: true as const };
+    revalidatePath('/dashboard/approvals');
+    return { success: true as const, pendingApproval: true as const, requestId };
   } catch (error) {
     return failure(error);
   }

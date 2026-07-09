@@ -12,7 +12,7 @@ import type { ReactNode, ComponentType } from 'react';
 import { cn } from '@/lib/utils';
 import {
   Wallet, Banknote, Siren, Package, PackageCheck, UserX, Scale, Building2, UserPlus,
-  FileText, Network, ArrowRight, ExternalLink, HandCoins, ShieldCheck, User,
+  FileText, Network, ArrowRight, ExternalLink, HandCoins, ShieldCheck, User, Image as ImageIcon, Ban,
 } from 'lucide-react';
 
 type Accent = 'primary' | 'success' | 'warning' | 'destructive' | 'info';
@@ -114,7 +114,40 @@ function buildView(detail: any): ViewModel {
         facts: [{ label: 'Action', value: 'Permanent removal', emphasis: true }],
         blocks: detail.summary ? [{ label: 'Reason', text: detail.summary }] : undefined,
       };
+    case 'MEMBER_STATUS_CHANGE':
+      return {
+        icon: UserX, accent: p.status === 'TERMINATED' ? 'destructive' : 'warning', subject: member,
+        facts: [{
+          label: 'Action',
+          value: p.status === 'TERMINATED' ? 'Terminate membership (blocks login)' : 'Suspend membership (login stays open to pay dues)',
+          emphasis: true,
+        }],
+        blocks: detail.summary ? [{ label: 'Change', text: detail.summary }] : undefined,
+      };
+    case 'PAYMENT_VOID': {
+      const pay = ctx.payment ?? {};
+      const facts: Fact[] = [{ label: 'Action', value: 'Void payment', emphasis: true }];
+      if (pay.amount != null) facts.push({ label: 'Amount', value: money(Number(pay.amount)) });
+      if (pay.status) facts.push({ label: 'Current status', value: titleCase(String(pay.status)) });
+      if (pay.method) facts.push({ label: 'Method', value: titleCase(String(pay.method)) });
+      if (pay.transactionId) facts.push({ label: 'Transaction Ref', value: pay.transactionId });
+      return {
+        icon: Ban, accent: 'destructive', subject: member, facts,
+        blocks: p.reason ? [{ label: 'Reason', text: String(p.reason) }] : (detail.summary ? [{ label: 'Reason', text: detail.summary }] : undefined),
+      };
+    }
     case 'RULE_CHANGE': {
+      // Edir branding (logo) — show the current and proposed image side by side.
+      if (p.kind === 'BRANDING') {
+        const logo = (url: string | null | undefined, alt: string) => url
+          ? <img src={url} alt={alt} className="h-20 w-20 rounded-lg border bg-card object-contain" />
+          : <span className="flex h-20 w-20 items-center justify-center rounded-lg border border-dashed text-[10px] text-muted-foreground">No logo</span>;
+        return {
+          icon: ImageIcon, accent: 'info',
+          facts: [{ label: 'Change', value: p.newLogoUrl ? 'Update Edir logo' : 'Remove Edir logo', emphasis: true }],
+          changes: [{ label: 'Edir logo — current → proposed', before: logo(p.previousLogoUrl, 'Current logo'), after: logo(p.newLogoUrl, 'Proposed logo') }],
+        };
+      }
       if (p.kind === 'SETTINGS_BULK') {
         const changes: Change[] = Array.isArray(p.changes)
           ? p.changes.map((c: any) => ({ label: String(c.field), before: String(c.previous ?? '—'), after: String(c.current ?? '—') }))

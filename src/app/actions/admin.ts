@@ -1,7 +1,6 @@
 'use server';
 
 import { z } from 'zod';
-import crypto from 'crypto';
 import prisma from '@/lib/prisma';
 import { Prisma } from '@prisma/client';
 import { getActor, requireActor, assertPermission, assertSameTenant, tenantWhere, resolveEdirId, actorHasPermission, type Actor } from '@/lib/tenant-scope';
@@ -10,8 +9,8 @@ import { logSecurityEvent, SecurityEvent } from '@/lib/security-logger';
 import { LogSeverity } from '@/lib/types';
 import { ALL_PERMISSION_IDS, PLATFORM_PERMISSION_IDS, filterPermissionsForScope, type RoleScopeKind } from '@/lib/permissions';
 import { normalizeEthiopianPhone, isValidEthiopianPhone } from '@/lib/utils';
-import { sendPasswordResetEmail, sendVerificationEmail } from '@/lib/email';
-import { generateTempPassword } from '@/lib/temp-password';
+import { generateTempPassword } from '@/lib/secure-random';
+import { issueSetPasswordLink } from '@/lib/set-password-link';
 import bcrypt from 'bcrypt';
 import { ensureMembershipForUser } from '@/app/actions/members';
 import { resubmitRequest, submitForApproval } from '@/lib/approval-engine';
@@ -86,15 +85,8 @@ async function inviteOneUser(
   const user = await prisma.user.create({
     data: { name: data.name, email: data.email, phone: data.phone, edirId: data.edirId, roleId: data.roleId || null, status: 'INVITED', mustChangePassword: true },
   });
-  // 48h single-use set-password token (reuses PasswordResetToken).
-  const token = crypto.randomBytes(32).toString('hex');
-  await prisma.passwordResetToken.upsert({
-    where: { email: data.email },
-    update: { token, expires: new Date(Date.now() + 48 * 60 * 60 * 1000) },
-    create: { email: data.email, token, expires: new Date(Date.now() + 48 * 60 * 60 * 1000) },
-  });
-  sendVerificationEmail({ to: data.email, name: data.name, token })
-    .catch(err => console.error('Failed to send invite email:', err));
+  // Emails a 48h single-use set-password link (best-effort; non-blocking).
+  await issueSetPasswordLink({ email: data.email, name: data.name, mode: 'setup' });
   await writeAudit({ edirId: data.edirId, userId: actor.id, action: 'USER_INVITED', targetType: 'User', targetId: user.id, details: `Invited ${data.email}.` });
   // Invited users are also regular Edir members (obligations follow the bylaws, not the role).
   try { await ensureMembershipForUser(user.id); } catch { /* non-fatal */ }
@@ -428,40 +420,21 @@ async function setUserLock(userId: string, lock: boolean) {
   }
 }
 
-export async function adminResetUserPassword(userId: string) {
-  try {
-    const actor = await getActor();
-    await assertPermission(actor, 'reset_password');
-    const user = await prisma.user.findUnique({ where: { id: userId } });
-    if (!user?.email) return { success: false as const, error: 'User has no email for reset.' };
-    await assertCanAdministerUser(actor, user);
-    const token = crypto.randomBytes(32).toString('hex');
-    await prisma.passwordResetToken.upsert({
-      where: { email: user.email },
-      update: { token, expires: new Date(Date.now() + 48 * 60 * 60 * 1000) },
-      create: { email: user.email, token, expires: new Date(Date.now() + 48 * 60 * 60 * 1000) },
-    });
-    sendPasswordResetEmail({ to: user.email, name: user.name || user.email, token }).catch(() => {});
-    await writeAudit({ edirId: user.edirId, userId: actor.id, action: 'USER_PASSWORD_RESET', targetType: 'User', targetId: userId });
-    return { success: true as const };
-  } catch (error) {
-    return failure(error);
-  }
-}
+// NOTE: The former `adminResetUserPassword` (which emailed a reset link but
+// hard-failed when no email was on file) was retired in favor of the single
+// `adminGenerateTempPassword` reset path, which emails a set-password link,
+// activates the account, and prompts for an email when none exists.
 
 /**
- * Issue a fresh temporary password and RETURN it (instead of emailing) so an
- * administrator can deliver the credentials manually — e.g. when the invitation
- * email to a newly-activated Edir manager failed to send. The account is also
- * ACTIVATED so the user can sign in immediately (auth rejects non-ACTIVE accounts)
- * and is forced to change the password on first login. Existing sessions are
- * revoked. Restricted to `reset_password` or an Edir-provisioning permission
- * (manage_edirs / create_edir / register_edir / manage_edir_users) — whoever
- * creates or registers an Edir and its admin can also recover that admin;
- * super_admin bypasses. Org scope still applies (assertCanAdministerUser), so a
- * branch/district provisioner only reaches the Edirs of their own unit. Audited.
+ * Recover a user's login WITHOUT exposing a password: the account gets a fresh
+ * random hashed password (never returned), is ACTIVATED so they can sign in once
+ * they set their own password, existing sessions are revoked, and a single-use
+ * set-password link is emailed. If the account has no email, `code: 'NO_EMAIL'`
+ * is returned so the UI can collect one (passed via `opts.email` — saved on the
+ * account and synced to a linked member profile). Restricted to `reset_password`
+ * or an Edir-provisioning permission; org scope applies (assertCanAdministerUser).
  */
-export async function adminGenerateTempPassword(userId: string) {
+export async function adminGenerateTempPassword(userId: string, opts?: { email?: string }) {
   try {
     const actor = await getActor();
     await assertPermission(actor, ['reset_password', 'manage_edirs', 'create_edir', 'register_edir', 'manage_edir_users']);
@@ -470,27 +443,50 @@ export async function adminGenerateTempPassword(userId: string) {
     if (user.role?.scope === 'SUPER_ADMIN') return { success: false as const, error: 'Platform Super-Admins cannot be reset here.' };
     await assertCanAdministerUser(actor, user);
 
-    const tempPassword = generateTempPassword();
-    const hashedPassword = await bcrypt.hash(tempPassword, 12);
+    const suppliedEmail = opts?.email?.trim().toLowerCase() || null;
+    if (suppliedEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(suppliedEmail)) {
+      return { success: false as const, error: 'Enter a valid email address.' };
+    }
+    const email = suppliedEmail ?? user.email ?? null;
+    if (!email) return { success: false as const, code: 'NO_EMAIL' as const, error: 'This account has no email on file — add one to send the set-password link.' };
+    if (suppliedEmail && suppliedEmail !== user.email) {
+      const taken = await prisma.user.findFirst({ where: { email: suppliedEmail, id: { not: userId } }, select: { id: true } });
+      if (taken) return { success: false as const, error: 'Another user already uses this email.' };
+    }
+
+    const hashedPassword = await bcrypt.hash(generateTempPassword(), 12);
     await prisma.user.update({
       where: { id: userId },
       // Activate (so an INVITED/email-failed manager can sign in), force a change on
       // first login, and rotate the session so any old credential stops working.
-      data: { hashedPassword, status: 'ACTIVE', mustChangePassword: true, tokenVersion: { increment: 1 }, lockoutUntil: null, failedLoginAttempts: 0 },
+      data: {
+        hashedPassword, status: 'ACTIVE', mustChangePassword: true, tokenVersion: { increment: 1 }, lockoutUntil: null, failedLoginAttempts: 0,
+        ...(suppliedEmail && suppliedEmail !== user.email ? { email: suppliedEmail } : {}),
+      },
     });
+    if (suppliedEmail && suppliedEmail !== user.email) {
+      // Keep a linked member-directory row consistent with the login identity.
+      await prisma.member.updateMany({ where: { userId }, data: { email: suppliedEmail } });
+    }
+
+    const delivery = await issueSetPasswordLink({ email, name: user.name, mode: 'reset' });
+    if (!delivery.sent) {
+      return { success: false as const, error: 'The account was reset, but the email could not be sent — check the email settings and try again.' };
+    }
+
     await writeAudit({
       edirId: user.edirId, userId: actor.id, action: 'USER_PASSWORD_RESET', targetType: 'User', targetId: userId,
-      details: 'Temporary password issued for manual delivery (email bypass).',
+      details: 'Set-password link emailed (no plaintext credentials issued).',
     });
     await logSecurityEvent({
       event: SecurityEvent.PASSWORD_RESET_SUCCESS,
       severity: LogSeverity.WARN,
       actor,
-      details: `User '${actor.name}' issued a temporary password for user ${userId} (manual delivery).`,
+      details: `User '${actor.name}' emailed a set-password link to user ${userId}.`,
       targetId: userId, targetType: 'User',
     });
     revalidatePath('/dashboard/edirs');
-    return { success: true as const, credentials: { username: user.phone ?? user.email ?? '', tempPassword, channel: user.phone ? 'SMS' : 'email' } };
+    return { success: true as const, delivery };
   } catch (error) {
     return failure(error);
   }

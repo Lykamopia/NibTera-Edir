@@ -19,7 +19,7 @@ import {
   Eye, UserMinus, ArrowRightLeft, Lock, Unlock, KeyRound, Power, Loader2, Upload, History,
   Pencil, Trash2,
 } from 'lucide-react';
-import { CredentialsDialog, type Credentials } from '@/components/credentials-dialog';
+import { SetEmailDialog } from '@/components/set-email-dialog';
 import { CreateUserDialog, EditAssociationDialog } from './association-dialogs';
 import { OrgUserDialog } from './org-user-dialog';
 import { EditUserDialog } from './edit-user-dialog';
@@ -28,7 +28,7 @@ import { useConfirm } from '@/components/ui/confirm-provider';
 import { DateRangeFilter, ALL_TIME, toParam, type DateRangeValue } from '@/components/ui/date-range-filter';
 import { Avatar, SortHead, STATUS_COLORS } from '@/app/dashboard/_directory/shared';
 import { getUsersDirectory, exportUsersDirectoryCsv, type PersonRow, type DirectoryContext, type UsersStats } from '@/app/actions/people';
-import { setUserStatus, lockUser, unlockUser, adminResetUserPassword, adminGenerateTempPassword, bulkInviteUsers, inviteUser } from '@/app/actions/admin';
+import { setUserStatus, lockUser, unlockUser, adminGenerateTempPassword, bulkInviteUsers, inviteUser } from '@/app/actions/admin';
 import { deleteOrgUser } from '@/app/actions/user-management';
 import { removeUserFromEdir, getAssociationAudit } from '@/app/actions/associations';
 
@@ -58,7 +58,8 @@ export default function UsersClient() {
   const [orgDialog, setOrgDialog] = useState<{ edit: PersonRow | null } | null>(null);
   const [editUser, setEditUser] = useState<PersonRow | null>(null);
   const [showActivity, setShowActivity] = useState(false);
-  const [cred, setCred] = useState<{ name: string; credentials: Credentials } | null>(null);
+  // A credential reset that found no email on file — the dialog collects one.
+  const [emailPrompt, setEmailPrompt] = useState<{ userId: string; name: string } | null>(null);
   const confirm = useConfirm();
 
   const rangeKey = `${dateRange.preset}:${dateRange.from?.toISOString() ?? ''}:${dateRange.to?.toISOString() ?? ''}`;
@@ -131,17 +132,18 @@ export default function UsersClient() {
     await act(() => removeUserFromEdir(r.userId!), 'User removed from Edir.');
   };
 
-  // Issue a fresh temporary password (manual delivery) — used when a user cannot
-  // receive the reset email; the credentials are shown exactly once.
+  // Recover a login — emails a single-use set-password link (no plaintext
+  // password is ever shown). Prompts for an email when none is on file.
   const onTempPassword = async (r: PersonRow) => {
     if (!r.userId) return;
     if (!(await confirm({
-      title: 'Generate temporary password',
-      description: `Issue a new temporary password for ${r.name}? Their account is activated, existing sessions are signed out, and they must change it on first login. You'll see the password once to deliver it manually.`,
-      confirmText: 'Generate password',
+      title: 'Send set-password link',
+      description: `Email ${r.name} a single-use set-password link? Their account is activated, existing sessions are signed out, and no password appears anywhere.`,
+      confirmText: 'Send link',
     }))) return;
     const res = await adminGenerateTempPassword(r.userId);
-    if (res?.success && res.credentials) { setCred({ name: r.name, credentials: res.credentials as Credentials }); load(); }
+    if (res?.success) { toast.success(`Set-password link sent to ${(res as any).delivery?.emailMasked ?? 'their email'}.`); load(); }
+    else if ((res as any)?.code === 'NO_EMAIL') setEmailPrompt({ userId: r.userId, name: r.name });
     else toast.error((res && !res.success && res.error) || 'Failed to reset password.');
   };
 
@@ -182,7 +184,18 @@ export default function UsersClient() {
 
   return (
     <div className="space-y-5">
-      {cred && <CredentialsDialog memberName={cred.name} credentials={cred.credentials} onClose={() => setCred(null)} />}
+      {emailPrompt && (
+        <SetEmailDialog
+          personName={emailPrompt.name}
+          onClose={() => setEmailPrompt(null)}
+          onSubmit={async (email) => {
+            const res = await adminGenerateTempPassword(emailPrompt.userId, { email });
+            if (res?.success) { toast.success(`Set-password link sent to ${(res as any).delivery?.emailMasked ?? email}.`); load(); return true; }
+            toast.error((res && !res.success && res.error) || 'Failed to send the link.');
+            return false;
+          }}
+        />
+      )}
 
       {/* Hero */}
       <div className="relative overflow-hidden rounded-2xl border bg-gradient-to-br from-primary/10 via-primary/[0.04] to-transparent p-5 sm:p-6">
@@ -385,11 +398,8 @@ export default function UsersClient() {
                   {detail.locked ? <><Unlock className="mr-1 h-4 w-4" /> Unlock</> : <><Lock className="mr-1 h-4 w-4" /> Lock</>}
                 </Button>
               )}
-              {ctx.canResetPassword && detail.userId && (
-                <Button size="sm" variant="outline" onClick={() => act(() => adminResetUserPassword(detail.userId!), 'Reset email sent.')}><KeyRound className="mr-1 h-4 w-4" /> Reset password</Button>
-              )}
               {ctx.canTempPassword && detail.userId && (
-                <Button size="sm" variant="outline" onClick={() => { const r = detail; setDetail(null); onTempPassword(r); }}><KeyRound className="mr-1 h-4 w-4" /> Temp password</Button>
+                <Button size="sm" variant="outline" onClick={() => { const r = detail; setDetail(null); onTempPassword(r); }}><KeyRound className="mr-1 h-4 w-4" /> Reset password</Button>
               )}
               {isEditable(detail) && (
                 <Button size="sm" variant="outline" onClick={() => { const r = detail; setDetail(null); onEditUser(r); }}><Pencil className="mr-1 h-4 w-4" /> Edit</Button>
@@ -405,13 +415,13 @@ export default function UsersClient() {
         />
       )}
       {editAccess?.userId && ctx && <EditAssociationDialog userId={editAccess.userId} userLabel={editAccess.name} edirs={ctx.edirs} onClose={() => setEditAccess(null)} onDone={() => { setEditAccess(null); load(); }} />}
-      {addUser && ctx && <CreateUserDialog edirs={ctx.edirs} canPlatform={isSuper} initialKind="edir" onClose={() => setAddUser(false)} onDone={(c) => { setAddUser(false); if (c) setCred(c); load(); }} />}
+      {addUser && ctx && <CreateUserDialog edirs={ctx.edirs} canPlatform={isSuper} initialKind="edir" onClose={() => setAddUser(false)} onDone={() => { setAddUser(false); load(); }} />}
       {inviteOpen && ctx && <InviteUserDialog ctx={ctx} onClose={() => setInviteOpen(false)} onDone={() => { setInviteOpen(false); load(); }} />}
       {orgDialog && ctx && (
         <OrgUserDialog
           ctx={ctx} edit={orgDialog.edit}
           onClose={() => setOrgDialog(null)}
-          onDone={(c) => { setOrgDialog(null); if (c) setCred(c); load(); }}
+          onDone={() => { setOrgDialog(null); load(); }}
         />
       )}
       {editUser && (
@@ -456,13 +466,11 @@ function RowActions({ r, ctx, canAssociate, orgManageable, editable, onView, onR
             {ctx.canLock && (r.locked
               ? <DropdownMenuItem onClick={() => act(() => unlockUser(r.userId!), 'User unlocked.')}><Unlock className="mr-2 h-4 w-4" /> Unlock</DropdownMenuItem>
               : <DropdownMenuItem onClick={() => act(() => lockUser(r.userId!), 'User locked.')}><Lock className="mr-2 h-4 w-4" /> Lock</DropdownMenuItem>)}
-            {ctx.canResetPassword && (
-              <DropdownMenuItem onClick={() => act(() => adminResetUserPassword(r.userId!), 'Reset email sent.')}><KeyRound className="mr-2 h-4 w-4" /> Reset password (email)</DropdownMenuItem>
-            )}
-            {/* Edir provisioners (branch/district creators) may recover the admins
-                they provisioned even without the reset_password permission. */}
+            {/* Single reset path — emails a set-password link (prompts for an email
+                if none is on file). Available to holders of reset_password and to
+                Edir provisioners (branch/district creators) recovering their admins. */}
             {ctx.canTempPassword && (
-              <DropdownMenuItem onClick={onTempPassword}><KeyRound className="mr-2 h-4 w-4" /> Temporary password</DropdownMenuItem>
+              <DropdownMenuItem onClick={onTempPassword}><KeyRound className="mr-2 h-4 w-4" /> Reset password</DropdownMenuItem>
             )}
           </>
         )}

@@ -4,8 +4,8 @@
  * Create / edit dialog for platform (branch/district) user accounts — a
  * HEAD-OFFICE capability on the Platform Users page. Branch and district users
  * never manage other platform users (they manage their unit's Edir users
- * instead); the server actions enforce this. Returns one-time credentials on
- * creation.
+ * instead); the server actions enforce this. New accounts receive a set-password
+ * link by email — no plaintext credentials are ever shown.
  */
 
 import { useEffect, useState } from 'react';
@@ -16,7 +16,6 @@ import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Loader2, Building2 } from 'lucide-react';
-import { type Credentials } from '@/components/credentials-dialog';
 import { createOrgUser, updateOrgUser, getOrgRoles } from '@/app/actions/user-management';
 import type { DirectoryContext, PersonRow } from '@/app/actions/people';
 
@@ -26,7 +25,7 @@ export function OrgUserDialog({ ctx, edit, onClose, onDone }: {
   ctx: DirectoryContext;
   edit?: PersonRow | null; // present → edit mode
   onClose: () => void;
-  onDone: (cred?: { name: string; credentials: Credentials }) => void;
+  onDone: () => void;
 }) {
   const isDistrict = ctx.orgScope === 'DISTRICT';
   const showPlacement = true; // head-office managers always pick the target branch
@@ -76,8 +75,11 @@ export function OrgUserDialog({ ctx, edit, onClose, onDone }: {
       });
       setSaving(false);
       if (res?.success) {
-        toast.success('User created.');
-        onDone(res.credentials ? { name: form.name, credentials: res.credentials as Credentials } : undefined);
+        const d = (res as any).delivery;
+        toast.success(d?.sent
+          ? `User created — set-password link sent to ${d.emailMasked}.`
+          : 'User created, but the set-password email could not be sent — use “Send set-password link” on the user row to retry.');
+        onDone();
       } else toast.error(res?.error || 'Failed to create user.');
     }
   };
@@ -97,8 +99,8 @@ export function OrgUserDialog({ ctx, edit, onClose, onDone }: {
             {edit
               ? `${edit.placement ?? 'Org unit'} — update the account's details and role.`
               : isDistrict
-                ? 'Create an operator account in your district — at the district office or in one of its branches. They receive a temporary password (changed on first login).'
-                : 'Create an operator account in your branch. They receive a temporary password (changed on first login).'}
+                ? 'Create an operator account in your district — at the district office or in one of its branches. They receive a set-password link by email.'
+                : 'Create an operator account in your branch. They receive a set-password link by email.'}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
