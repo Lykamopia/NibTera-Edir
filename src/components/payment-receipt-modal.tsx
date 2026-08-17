@@ -9,10 +9,12 @@
  * payment-history dialog; the downloaded PDF mirrors this layout.
  */
 
+import { useState } from 'react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
-import { Download } from 'lucide-react';
+import { Download, ExternalLink, Loader2 } from 'lucide-react';
+import { getOfficialBankReceipt } from '@/app/actions/payments';
 import { paymentLogStatusLabel, PAYMENT_LOG_STATUS_TONE } from '@/lib/payment-log-status';
 import { downloadPaymentReceiptPdf, amountInWords } from '@/lib/receipt-pdf';
 
@@ -48,6 +50,7 @@ function PartyPanel({ title, children }: { title: string; children: React.ReactN
 }
 
 export function PaymentReceiptModal({ log, currency = 'ETB', onClose }: { log: any; currency?: string; onClose: () => void }) {
+  const [loadingBank, setLoadingBank] = useState(false);
   let parsed: any = {};
   try { parsed = JSON.parse(log.description || '{}') || {}; } catch { parsed = {}; }
   const cur = log.currency || currency || 'ETB';
@@ -104,6 +107,34 @@ export function PaymentReceiptModal({ log, currency = 'ETB', onClose }: { log: a
       });
       toast.success('Receipt downloaded.');
     } catch { toast.error('Could not generate the receipt.'); }
+  };
+
+  // A bank-stamped receipt only exists for payments settled THROUGH the bank —
+  // those carrying an FT reference. A manual payment's receiptUrl is an uploaded
+  // file path, so anything path-like is not an FT reference.
+  const settled = log.status === 'SUCCESS' || log.status === 'PARTIAL';
+  const ftRef = settled && log.bankRef && !/[/\\]|^https?:/i.test(String(log.bankRef)) ? String(log.bankRef) : null;
+
+  const onBankReceipt = async () => {
+    // Open the tab up front: a popup opened after an await is blocked, and the
+    // bank + invoice round-trip takes a moment.
+    const tab = window.open('', '_blank');
+    setLoadingBank(true);
+    try {
+      const res: any = await getOfficialBankReceipt(log.id);
+      if (res?.success && res.viewUrl) {
+        if (tab) tab.location.href = res.viewUrl;
+        else window.open(res.viewUrl, '_blank', 'noopener');
+      } else {
+        tab?.close();
+        toast.error(res?.error || 'Could not generate the bank receipt.');
+      }
+    } catch {
+      tab?.close();
+      toast.error('Could not generate the bank receipt.');
+    } finally {
+      setLoadingBank(false);
+    }
   };
 
   return (
@@ -228,8 +259,14 @@ export function PaymentReceiptModal({ log, currency = 'ETB', onClose }: { log: a
         </div>
 
         {/* Actions */}
-        <div className="flex shrink-0 gap-2 border-t bg-card p-3">
+        <div className="flex shrink-0 flex-wrap gap-2 border-t bg-card p-3">
           <Button variant="outline" className="flex-1" onClick={onClose}>Close</Button>
+          {ftRef && (
+            <Button variant="outline" className="flex-1" onClick={onBankReceipt} disabled={loadingBank}>
+              {loadingBank ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <ExternalLink className="mr-1.5 h-4 w-4" />}
+              Bank Receipt
+            </Button>
+          )}
           <Button className="flex-1" onClick={onDownload}><Download className="mr-1.5 h-4 w-4" /> Download Receipt</Button>
         </div>
       </DialogContent>

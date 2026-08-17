@@ -11,6 +11,8 @@ import { getPendingPaymentStatus } from '@/lib/payment-status';
 import prisma from '@/lib/prisma';
 import { debugLog } from '@/lib/debug';
 import { payLog, maskToken } from '@/lib/pay-log';
+import { generateOfficialReceipt } from '@/lib/nib-receipt';
+import { normalizeEthiopianPhone } from '@/lib/utils';
 
 /** Resolve the active Super App token from header → cookie → query → mock. */
 async function resolveToken(queryToken?: string): Promise<string | null> {
@@ -310,4 +312,58 @@ export async function checkTransactionStatus(transactionId: string) {
   const log = await prisma.paymentLog.findUnique({ where: { transactionId } });
   if (log) return { status: log.status.toLowerCase(), amount: Number(log.amount) };
   return { status: 'pending' };
+}
+
+/**
+ * Official BANK receipt for a settled mini-app payment.
+ *
+ * Authorization mirrors the rest of this file: the Super App token is validated
+ * with NIB, and the authenticated phone must be a party to the payment — either
+ * the payer or the beneficiary member. Keyed on OUR transaction reference, the
+ * same id the history list shows.
+ */
+export async function getOfficialBankReceipt(transactionId: string, queryToken?: string) {
+  payLog('receipt', 'mini-app receipt requested', { transactionId });
+  try {
+    const token = await resolveToken(queryToken);
+    if (!token) return { success: false as const, error: 'Your payment session has expired. Please reopen from the Super App.' };
+    const v = await validateToken(token);
+    if (!v.ok || !v.phone) return { success: false as const, error: 'Your payment session is no longer valid. Please reopen from the Super App.' };
+
+    const log = await prisma.paymentLog.findUnique({
+      where: { transactionId },
+      include: {
+        member: { select: { name: true, memberId: true, phone: true } },
+        edir: { select: { name: true, accountNumber: true } },
+      },
+    });
+    if (!log) return { success: false as const, error: 'Payment not found.' };
+    if (log.status !== 'SUCCESS' && log.status !== 'PARTIAL') {
+      return { success: false as const, error: 'Only settled payments have a bank receipt.' };
+    }
+
+    let meta: any = {};
+    try { meta = JSON.parse(log.description || '{}') || {}; } catch { meta = {}; }
+
+    // The caller must be a party to this payment — the payer or the beneficiary.
+    const tail = (s?: string | null) => normalizeEthiopianPhone(s || '').replace(/\D/g, '').slice(-9);
+    const caller = tail(v.phone);
+    const isParty = !!caller && [log.member?.phone, meta.payerPhone, meta.beneficiaryPhone].some(p => tail(p) === caller);
+    if (!isParty) {
+      payLog('receipt', 'caller is not a party to this payment → denied', { transactionId, phone: v.phone });
+      return { success: false as const, error: 'This receipt does not belong to your account.' };
+    }
+
+    return await generateOfficialReceipt(log, {
+      memberName: log.member?.name ?? null,
+      memberCode: log.member?.memberId ?? null,
+      edirName: meta.edirName ?? log.edir?.name ?? null,
+      edirAccount: meta.edirAccount ?? log.edir?.accountNumber ?? null,
+      payerName: meta.payerName ?? null,
+      payerAccount: meta.payerAccount ?? null,
+    });
+  } catch (error) {
+    payLog('receipt', 'mini-app receipt EXCEPTION', String(error));
+    return { success: false as const, error: 'Could not generate the bank receipt. Please try again.' };
+  }
 }

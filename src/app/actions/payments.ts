@@ -13,6 +13,7 @@ import { failure } from '@/lib/action-result';
 import { dateWhere, type DateRangeParam } from '@/lib/date-range';
 import { paymentLogStatusLabel } from '@/lib/payment-log-status';
 import { computePenalty, computeContributionArrears, computeMemberDues } from '@/lib/data';
+import { generateOfficialReceipt } from '@/lib/nib-receipt';
 
 // ─── Edir settings ───────────────────────────────────────────────────────────
 
@@ -906,6 +907,46 @@ export async function voidPayment(paymentLogId: string, reason?: string) {
     revalidatePath('/dashboard/payment-log');
     revalidatePath('/dashboard/approvals');
     return { success: true as const, pendingApproval: true as const, requestId };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/**
+ * Official BANK receipt for a settled payment (staff side).
+ *
+ * Resolves the bank's FT reference from the payment, asks the bank core for the
+ * stamped transaction details and returns a hosted receipt URL. Read-only and
+ * tenant-scoped: the payment must be inside the actor's scope, exactly like the
+ * payment log rows the button is rendered from.
+ */
+export async function getOfficialBankReceipt(paymentLogId: string) {
+  try {
+    const actor = await getActor();
+    await assertPermission(actor, ['view_payment_log', 'view_payments']);
+    const log = await prisma.paymentLog.findUnique({
+      where: { id: paymentLogId },
+      include: {
+        member: { select: { name: true, memberId: true } },
+        edir: { select: { name: true, accountNumber: true } },
+      },
+    });
+    if (!log) return { success: false as const, error: 'Payment not found.' };
+    // Scope derives from the payment itself, not the top-bar selection.
+    await assertSameTenant(actor, log.edirId);
+    if (log.status !== 'SUCCESS' && log.status !== 'PARTIAL') {
+      return { success: false as const, error: 'Only settled payments have a bank receipt.' };
+    }
+
+    const meta = safeParse(log.description);
+    return await generateOfficialReceipt(log, {
+      memberName: log.member?.name ?? null,
+      memberCode: log.member?.memberId ?? null,
+      edirName: (meta.edirName as string) ?? log.edir?.name ?? null,
+      edirAccount: (meta.edirAccount as string) ?? log.edir?.accountNumber ?? null,
+      payerName: (meta.payerName as string) ?? null,
+      payerAccount: (meta.payerAccount as string) ?? null,
+    });
   } catch (error) {
     return failure(error);
   }

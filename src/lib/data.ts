@@ -1,6 +1,7 @@
 import { format, formatDistanceToNow } from 'date-fns';
 import prisma from '@/lib/prisma';
 import { normalizeEthiopianPhone } from '@/lib/utils';
+import { extractBankReference } from '@/lib/nib-receipt';
 
 export interface PenaltyBreakdown {
   amount: number;
@@ -64,6 +65,9 @@ export interface DetailedMember {
   paymentHistory: {
     transactionId: string; amount: number; status: string; method: string; receiptUrl: string | null; createdAt: Date;
     coverage: { months: number; from: string; to: string } | null;
+    /** Bank FT reference — present when the payment settled through the bank
+     *  (drives the official bank-receipt action). */
+    bankRef: string | null;
   }[];
 }
 
@@ -223,6 +227,7 @@ export async function fetchDetailedMemberByPhone(phone: string): Promise<Detaile
       try { coverage = JSON.parse(l.description || '{}')?.coverage ?? null; } catch { coverage = null; }
       return {
         transactionId: l.transactionId, amount: Number(l.amount), status: l.status.toLowerCase(), method: l.method, receiptUrl: l.receiptUrl ?? null, createdAt: l.createdAt, coverage,
+        bankRef: extractBankReference(l),
       };
     }),
   };

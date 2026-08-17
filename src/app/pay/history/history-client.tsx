@@ -6,8 +6,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
-import { Loader2, ArrowLeft, Search, History, Receipt, AlertTriangle, CheckCircle2, XCircle, Building2, CalendarCheck } from 'lucide-react';
-import { fetchMemberForPayment } from '../actions';
+import { Loader2, ArrowLeft, Search, History, Receipt, AlertTriangle, CheckCircle2, XCircle, Building2, CalendarCheck, ExternalLink } from 'lucide-react';
+import { fetchMemberForPayment, getOfficialBankReceipt } from '../actions';
 import type { DetailedMember as Member } from '@/lib/data';
 import { LangProvider, useLang } from '../i18n';
 
@@ -141,6 +141,35 @@ function ReceiptModal({ h, member, onClose }: { h: any; member: Member; onClose:
   const m = member as any;
   const cur = member.currency ?? 'ETB';
   const partial = h.status === 'partial';
+  const [bankLoading, setBankLoading] = useState(false);
+  const [bankError, setBankError] = useState('');
+
+  // The bank-stamped receipt exists only for payments settled through the bank,
+  // i.e. those carrying an FT reference (never a manual upload path).
+  const ftRef = h.bankRef ? String(h.bankRef) : null;
+
+  const openBankReceipt = async () => {
+    // Open the tab before awaiting so the popup blocker lets it through.
+    const tab = window.open('', '_blank');
+    setBankLoading(true);
+    setBankError('');
+    try {
+      const token = new URLSearchParams(window.location.search).get('token') || undefined;
+      const res: any = await getOfficialBankReceipt(h.transactionId, token);
+      if (res?.success && res.viewUrl) {
+        if (tab) tab.location.href = res.viewUrl;
+        else window.open(res.viewUrl, '_blank', 'noopener');
+      } else {
+        tab?.close();
+        setBankError(res?.error || t('bankReceiptFailed'));
+      }
+    } catch {
+      tab?.close();
+      setBankError(t('bankReceiptFailed'));
+    } finally {
+      setBankLoading(false);
+    }
+  };
 
   const Row = ({ label, value, mono }: { label: string; value: React.ReactNode; mono?: boolean }) => (
     <div className="flex items-start justify-between gap-3 py-1.5 text-sm">
@@ -187,7 +216,14 @@ function ReceiptModal({ h, member, onClose }: { h: any; member: Member; onClose:
             </div>
           </CardContent>
 
-          <div className="border-t p-3">
+          <div className="space-y-2 border-t p-3">
+            {bankError && <p className="text-center text-xs text-destructive">{bankError}</p>}
+            {ftRef && (
+              <Button className="w-full" onClick={openBankReceipt} disabled={bankLoading}>
+                {bankLoading ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <ExternalLink className="mr-1.5 h-4 w-4" />}
+                {t('bankReceipt')}
+              </Button>
+            )}
             <Button variant="outline" className="w-full" onClick={onClose}>{t('close')}</Button>
           </div>
         </Card>

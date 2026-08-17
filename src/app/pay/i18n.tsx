@@ -108,6 +108,8 @@ const en: Record<string, string> = {
   method: 'Method',
   amountPaid: 'Amount Paid',
   paidOn: 'Paid On',
+  bankReceipt: 'Bank Receipt',
+  bankReceiptFailed: 'Could not open the bank receipt. Please try again.',
   close: 'Close',
   // statuses
   ACTIVE: 'Active', INACTIVE: 'Inactive', SUSPENDED: 'Suspended', TERMINATED: 'Terminated',
@@ -226,6 +228,8 @@ const am: Record<string, string> = {
   method: 'ዘዴ',
   amountPaid: 'የተከፈለ መጠን',
   paidOn: 'የተከፈለበት ቀን',
+  bankReceipt: 'የባንክ ደረሰኝ',
+  bankReceiptFailed: 'የባንክ ደረሰኝ መክፈት አልተቻለም። እባክዎ እንደገና ይሞክሩ።',
   close: 'ዝጋ',
   ACTIVE: 'ንቁ', INACTIVE: 'ቦዝኗል', SUSPENDED: 'ታግዷል', TERMINATED: 'ተቋርጧል',
   PAID: 'ተከፍሏል', PENDING: 'በመጠባበቅ ላይ',
