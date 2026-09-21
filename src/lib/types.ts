@@ -142,6 +142,7 @@ export type Permission =
   | 'manage_edir_associations'
   | 'view_edir_reports'
   | 'manage_associations'
+  | 'manage_platform_settings'
   | 'super_admin';
 
 export type Role = PrismaRole;

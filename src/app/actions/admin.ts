@@ -8,6 +8,7 @@ import { writeAudit } from '@/lib/audit';
 import { logSecurityEvent, SecurityEvent } from '@/lib/security-logger';
 import { LogSeverity } from '@/lib/types';
 import { ALL_PERMISSION_IDS, PLATFORM_PERMISSION_IDS, filterPermissionsForScope, type RoleScopeKind } from '@/lib/permissions';
+import { pickPrimaryMembership } from '@/lib/membership-policy';
 import { normalizeEthiopianPhone, isValidEthiopianPhone } from '@/lib/utils';
 import { generateTempPassword } from '@/lib/secure-random';
 import { issueSetPasswordLink } from '@/lib/set-password-link';
@@ -509,11 +510,12 @@ export async function getPlatformUserProfile(userId: string) {
       edir: { select: { id: true, name: true } },
       branch: { select: { id: true, name: true, code: true, district: { select: { name: true } } } },
       district: { select: { id: true, name: true } },
-      member: { include: { paymentStatus: true, edir: { select: { name: true } } } },
+      members: { include: { paymentStatus: true, edir: { select: { name: true } } }, orderBy: { createdAt: 'asc' } },
     },
   });
   if (!user) return null;
   await assertCanAdministerUser(actor, user);
+  const primaryMembership = pickPrimaryMembership(user.members, user.edirId);
 
   const [approvalsMade, approvalsChecked, pendingSubmitted, activity] = await Promise.all([
     prisma.approvalRequest.count({ where: { makerId: userId } }),
@@ -554,16 +556,29 @@ export async function getPlatformUserProfile(userId: string) {
       passwordResetCount: user.passwordResetCount,
       lastPasswordResetAt: user.lastPasswordResetAt,
     },
-    membership: user.member
+    // `membership` stays the primary (home-Edir) one for existing callers;
+    // `memberships` lists them all, since the platform membership policy may
+    // allow a person to belong to several Edirs.
+    membership: primaryMembership
       ? {
-          memberId: user.member.id,
-          memberCode: user.member.memberId,
-          status: user.member.status,
-          edirName: user.member.edir?.name ?? null,
-          joinDate: user.member.joinDate,
-          balance: Number(user.member.paymentStatus?.balance ?? 0),
+          memberId: primaryMembership.id,
+          memberCode: primaryMembership.memberId,
+          status: primaryMembership.status,
+          edirName: primaryMembership.edir?.name ?? null,
+          joinDate: primaryMembership.joinDate,
+          balance: Number(primaryMembership.paymentStatus?.balance ?? 0),
         }
       : null,
+    memberships: user.members.map(m => ({
+      memberId: m.id,
+      memberCode: m.memberId,
+      status: m.status,
+      edirId: m.edirId,
+      edirName: m.edir?.name ?? null,
+      joinDate: m.joinDate,
+      balance: Number(m.paymentStatus?.balance ?? 0),
+      isPrimary: m.id === primaryMembership?.id,
+    })),
     workload: { approvalsMade, approvalsChecked, pendingSubmitted },
     activity,
   };

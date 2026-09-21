@@ -28,6 +28,7 @@ const ROUTE_PERMISSIONS: { path: string; perms: string[] }[] = [
   { path: '/dashboard/system/districts', perms: ['view_districts', 'manage_districts', 'create_district', 'edit_district', 'delete_district', 'import_districts', 'super_admin'] },
   { path: '/dashboard/system/branches', perms: ['view_branches', 'manage_branches', 'create_branch', 'edit_branch', 'delete_branch', 'import_branches', 'manage_districts', 'super_admin'] },
   { path: '/dashboard/system/associations', perms: ['manage_associations', 'manage_edirs', 'super_admin'] },
+  { path: '/dashboard/system/settings', perms: ['manage_platform_settings', 'super_admin'] },
   // Any single Edir permission grants access to the Edirs page (mirrors the
   // 'edir-registration' page definition in src/lib/permissions.ts).
   { path: '/dashboard/edir-registration', perms: ['view_edir', 'register_edir', 'approve_edir_registration', 'approve_edir_update', 'manage_edirs', 'create_edir', 'edit_edir', 'revoke_edir', 'delete_edir', 'view_edir_reports', 'super_admin'] },

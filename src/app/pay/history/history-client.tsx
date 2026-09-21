@@ -36,8 +36,16 @@ function HistoryInner() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const phone = params.get('phone') || '';
+    // A phone can hold memberships in several Edirs; `edirId` (carried over from
+    // the Pay page) says which one's history to show. Falls back to the first.
+    const edirId = params.get('edirId') || '';
     fetchMemberForPayment(phone, params.get('token') || undefined)
-      .then(res => { if (res.status === 'success' && res.member) setMember(res.member); else setError(t(`err_${res.status}`)); })
+      .then(res => {
+        if (res.status === 'success' && res.member) {
+          const list = ((res as any).members as Member[] | undefined) ?? [res.member];
+          setMember(list.find(m => m.edirId === edirId) ?? res.member);
+        } else setError(t(`err_${res.status}`));
+      })
       .catch(() => setError(t('err_error')))
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps

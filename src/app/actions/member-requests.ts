@@ -11,6 +11,7 @@ import '@/lib/approval-modules';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
 import { dateWhere, type DateRangeParam } from '@/lib/date-range';
+import { resolveOwnMembership } from '@/lib/membership-policy';
 
 const TYPE_LABEL: Record<string, string> = {
   RELATIVE: 'Relative Request', EMERGENCY: 'Emergency Request', ASSET: 'Asset Request',
@@ -30,10 +31,14 @@ function fileTypeOf(name: string): string {
   return 'file';
 }
 
-/** Resolve the signed-in user's own member record (self-service scope). */
+/**
+ * Resolve the signed-in user's own member record (self-service scope). A user may
+ * hold memberships in several Edirs when the platform membership policy allows
+ * it, so this resolves the one for their home Edir rather than an arbitrary row.
+ */
 async function getActorMember() {
   const actor = await getActor();
-  const member = await prisma.member.findFirst({ where: { userId: actor.id } });
+  const member = await resolveOwnMembership(actor.id, { homeEdirId: actor.edirId });
   return { actor, member };
 }
 

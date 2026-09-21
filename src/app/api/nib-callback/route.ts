@@ -4,7 +4,7 @@ import prisma from '@/lib/prisma';
 import { nibCallbackSchema, validateData } from '@/lib/validation';
 import { settlePaymentTx } from '@/lib/payment-settlement';
 import { resolveEdirPaymentAccount } from '@/lib/edir-payment-account';
-import { fetchDetailedMemberByPhone } from '@/lib/data';
+import { fetchDetailedMembersByPhone } from '@/lib/data';
 import { writeAudit } from '@/lib/audit';
 import { debugLog } from '@/lib/debug';
 import { payLog } from '@/lib/pay-log';
@@ -107,8 +107,17 @@ export async function POST(request: NextRequest) {
 
     if (!memberId) {
       const phone = claims?.phone || paidByNumber;
-      const member = phone ? await fetchDetailedMemberByPhone(phone) : null;
-      if (!member) { payLog('callback', 'self-heal failed — no member → 404', { phone }); return NextResponse.json({ message: 'No matching transaction or member.' }, { status: 404 }); }
+      const candidates = phone ? await fetchDetailedMembersByPhone(phone) : [];
+      if (candidates.length === 0) { payLog('callback', 'self-heal failed — no member → 404', { phone }); return NextResponse.json({ message: 'No matching transaction or member.' }, { status: 404 }); }
+      // With multi-Edir membership one phone can resolve to several memberships in
+      // different Edirs, each with its own bank account. Guessing here would credit
+      // the wrong Edir, so refuse instead — the PaymentIntent above is the only
+      // authoritative binding, and every mini-app payment writes one.
+      if (candidates.length > 1) {
+        payLog('callback', 'self-heal ambiguous — phone maps to several Edirs → 409', { phone, edirs: candidates.map(c => c.edirName) });
+        return NextResponse.json({ message: 'Ambiguous beneficiary.' }, { status: 409 });
+      }
+      const member = candidates[0];
       memberId = member.id; logEdirId = member.edirId;
       beneficiaryPhone = beneficiaryPhone ?? member.phone ?? phone ?? null;
       payLog('callback', 'self-healed beneficiary from token phone claim', { memberId, phone });

@@ -8,6 +8,13 @@ import { hasPermission } from './auth';
 import { LogSeverity } from '@/lib/types';
 import { logSecurityEvent, SecurityEvent } from '@/lib/security-logger';
 import { revalidatePath } from 'next/cache';
+import { getActor, assertPermission } from '@/lib/tenant-scope';
+import {
+  MEMBERSHIP_SETTING_KEY,
+  getMembershipPolicy,
+  type MembershipPolicy,
+} from '@/lib/membership-policy';
+import { writeAudit } from '@/lib/audit';
 
 // Define the types locally as they are simple and specific to settings
 type AcknowledgementType = 'BADGE' | 'SIGNATURE';
@@ -219,4 +226,82 @@ export async function saveEmailSettings(settings: {
     });
     revalidatePath('/dashboard/admin/email');
     return { success: true };
+}
+
+// ─── Platform membership policy (Super-Admin) ────────────────────────────────
+// Whether one person may hold memberships in more than one Edir. Cross-tenant by
+// nature, so it is a single platform-wide switch rather than a per-Edir setting.
+// See lib/membership-policy.ts for how it is enforced.
+
+/** Read the platform membership policy (Platform Settings → Membership). */
+export async function getMembershipSettings(): Promise<MembershipPolicy> {
+  const actor = await getActor();
+  await assertPermission(actor, ['manage_platform_settings', 'super_admin']);
+  return getMembershipPolicy();
+}
+
+/**
+ * Save the platform membership policy.
+ *
+ * Turning it OFF is non-destructive: memberships created while it was ON are
+ * kept, and only NEW cross-Edir memberships are refused from that point on. The
+ * response reports how many people currently hold more than one membership so
+ * the admin can see what they are leaving in place.
+ */
+export async function saveMembershipSettings(settings: MembershipPolicy) {
+  try {
+    const actor = await getActor();
+    await assertPermission(actor, ['manage_platform_settings', 'super_admin']);
+
+    const allowMultiEdir = !!settings?.allowMultiEdir;
+    const previous = await getMembershipPolicy();
+
+    await prisma.setting.upsert({
+      where: { key: MEMBERSHIP_SETTING_KEY },
+      update: { value: { allowMultiEdir } },
+      create: { key: MEMBERSHIP_SETTING_KEY, value: { allowMultiEdir } },
+    });
+
+    if (previous.allowMultiEdir !== allowMultiEdir) {
+      await logSecurityEvent({
+        event: SecurityEvent.SETTINGS_UPDATED,
+        severity: LogSeverity.WARN,
+        actor: { id: actor.id, name: actor.name, email: actor.email } as any,
+        details: `Multi-Edir membership ${allowMultiEdir ? 'ENABLED' : 'DISABLED'} platform-wide.`,
+      });
+      await writeAudit({
+        edirId: null,
+        userId: actor.id,
+        action: 'PLATFORM_MEMBERSHIP_POLICY_CHANGED',
+        targetType: 'Setting',
+        targetId: MEMBERSHIP_SETTING_KEY,
+        details: `Multi-Edir membership ${allowMultiEdir ? 'enabled' : 'disabled'}.`,
+      });
+    }
+
+    revalidatePath('/dashboard/system/settings');
+    return { success: true as const, policy: { allowMultiEdir } };
+  } catch (error) {
+    return { success: false as const, error: error instanceof Error ? error.message : 'Could not save membership settings.' };
+  }
+}
+
+/** Count the people who currently hold memberships in more than one Edir. */
+export async function getMultiEdirMemberStats() {
+  const actor = await getActor();
+  await assertPermission(actor, ['manage_platform_settings', 'super_admin']);
+
+  // Group linked memberships by login account; anything with >1 row spans Edirs
+  // (a second membership in the SAME Edir is blocked by a unique constraint).
+  const grouped = await prisma.member.groupBy({
+    by: ['userId'],
+    where: { userId: { not: null } },
+    _count: { _all: true },
+    having: { userId: { _count: { gt: 1 } } },
+  });
+
+  return {
+    peopleWithMultipleEdirs: grouped.length,
+    membershipsInvolved: grouped.reduce((sum, g) => sum + g._count._all, 0),
+  };
 }

@@ -5,7 +5,7 @@ import crypto from 'crypto';
 import { format } from 'date-fns';
 import { Prisma } from '@prisma/client';
 import { NIB_CONFIG, type NibValidateResponse, type NibPaymentResponse } from '@/lib/nib-config';
-import { fetchDetailedMemberByPhone, computeMemberPayWindow } from '@/lib/data';
+import { fetchDetailedMembersByPhone, computeMemberPayWindow } from '@/lib/data';
 import { resolveEdirPaymentAccount } from '@/lib/edir-payment-account';
 import { getPendingPaymentStatus } from '@/lib/payment-status';
 import prisma from '@/lib/prisma';
@@ -84,6 +84,11 @@ export async function validateNibToken(queryToken?: string) {
  * requests it. Requires a valid Super App token (so an arbitrary visitor cannot
  * enumerate members), but the phone may differ from the token's phone, enabling
  * payment on behalf of another member.
+ *
+ * When the platform membership policy allows multi-Edir membership, one phone can
+ * resolve to several memberships. All of them are returned in `members` so the
+ * payer can choose which Edir to pay; `member` stays the first one for callers
+ * that only ever expect a single record.
  */
 export async function fetchMemberForPayment(phone: string, queryToken?: string) {
   payLog('fetchMember', 'START', { phone });
@@ -96,11 +101,12 @@ export async function fetchMemberForPayment(phone: string, queryToken?: string) 
     const v = await validateToken(token);
     if (!v.ok) { payLog('fetchMember', 'token invalid → unauthorized'); return { status: 'unauthorized' as const, message: 'Your payment session is no longer valid. Please reopen from the Super App.' }; }
 
-    const member = await fetchDetailedMemberByPhone(cleaned);
-    if (!member) { payLog('fetchMember', 'no member for phone → not_found', { phone: cleaned }); return { status: 'not_found' as const, message: 'No member is registered with this phone number.' }; }
+    const members = await fetchDetailedMembersByPhone(cleaned);
+    if (members.length === 0) { payLog('fetchMember', 'no member for phone → not_found', { phone: cleaned }); return { status: 'not_found' as const, message: 'No member is registered with this phone number.' }; }
 
-    payLog('fetchMember', 'member found', { id: member.id, memberId: member.memberId, name: member.name, edirId: member.edirId, outstanding: member.totalOutstanding, monthlyFee: member.monthlyFee });
-    return { status: 'success' as const, token, member };
+    const member = members[0];
+    payLog('fetchMember', `${members.length} membership(s) found`, members.map(m => ({ id: m.id, memberId: m.memberId, name: m.name, edirId: m.edirId, edirName: m.edirName, outstanding: m.totalOutstanding, monthlyFee: m.monthlyFee })));
+    return { status: 'success' as const, token, member, members };
   } catch (error) {
     payLog('fetchMember', 'EXCEPTION', String(error));
     console.error('[NIB] fetch member exception', error);

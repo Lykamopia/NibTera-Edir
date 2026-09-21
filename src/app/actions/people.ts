@@ -7,6 +7,7 @@ import { isSystemUserRole } from '@/lib/permissions';
 import { AccessDeniedError } from '@/lib/errors';
 import { ensureMembershipForUser } from '@/app/actions/members';
 import { dateWhere, type DateRangeParam } from '@/lib/date-range';
+import { pickPrimaryMembership } from '@/lib/membership-policy';
 
 /**
  * Shared "directory" backend for the two separate management surfaces:
@@ -123,7 +124,9 @@ function placementLabel(u: any): string | null {
 }
 
 function personFromUser(u: any): PersonRow {
-  const m = u.member;
+  // A user may hold memberships in several Edirs (platform membership policy);
+  // this row represents them in their home Edir.
+  const m = pickPrimaryMembership<any>(u.members ?? [], u.edirId);
   return {
     key: `u:${u.id}`,
     userId: u.id,
@@ -211,7 +214,7 @@ async function collectUserRows(baseWhere: any, dateFilter: Record<string, any> =
     include: {
       role: true, edir: true,
       district: { select: { name: true } }, branch: { select: { name: true } },
-      member: { include: { paymentStatus: true } },
+      members: { include: { paymentStatus: true }, orderBy: { createdAt: 'asc' } },
     },
     orderBy: { createdAt: 'desc' },
     take: 5000,
@@ -281,7 +284,9 @@ async function ensureEdirUserMemberships(edirId: string): Promise<void> {
   const missing = await prisma.user.findMany({
     where: {
       edirId,
-      member: { is: null },
+      // Missing a membership in THIS Edir. Under multi-Edir membership a user may
+      // already be a member elsewhere, which does not heal their home Edir.
+      members: { none: { edirId } },
       role: { isNot: null, is: { scope: { not: 'SUPER_ADMIN' } } },
     },
     select: { id: true },

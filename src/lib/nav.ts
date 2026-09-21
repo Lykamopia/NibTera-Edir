@@ -23,6 +23,7 @@ export const IMPLEMENTED_PAGES = new Set<string>([
   'admin-settings',
   'system-districts', // District management (Super Admin / DISTRICT scope)
   'system-branches', // Branch management (Super Admin / DISTRICT scope)
+  'system-settings', // Platform-wide policies (Super Admin) — e.g. multi-Edir membership
   // 'system-associations' retired — user creation/association now lives on the Platform Users page.
 ]);
 

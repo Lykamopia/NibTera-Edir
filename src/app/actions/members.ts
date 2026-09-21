@@ -16,6 +16,7 @@ import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
 import { dateWhere, type DateRangeParam } from '@/lib/date-range';
 import { computeContributionArrears } from '@/lib/data';
+import { checkCanJoinEdir, getMembershipPolicy } from '@/lib/membership-policy';
 
 const memberSchema = z.object({
   name: z.string().min(2, 'Name is required'),
@@ -69,13 +70,19 @@ async function nextMemberId(edirId: string, client: Prisma.TransactionClient | t
 export async function ensureMembershipForUser(userId: string): Promise<{ created: boolean }> {
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    include: { role: { select: { scope: true } }, member: { select: { id: true } } },
+    include: { role: { select: { scope: true } }, members: { select: { id: true, edirId: true } } },
   });
-  if (!user || user.member || !user.edirId) return { created: false };
+  if (!user || !user.edirId) return { created: false };
   if (user.role?.scope === 'SUPER_ADMIN') return { created: false };
+  // Already a member of their home Edir — nothing to provision.
+  if (user.members.some(m => m.edirId === user.edirId)) return { created: false };
+  // They belong to a DIFFERENT Edir and the platform forbids multi-Edir
+  // membership: healing here would quietly create the very thing the policy
+  // blocks, so leave it to an administrator to resolve.
+  if (user.members.length > 0 && !(await getMembershipPolicy()).allowMultiEdir) return { created: false };
 
   return prisma.$transaction(async (tx) => {
-    if (await tx.member.findFirst({ where: { userId }, select: { id: true } })) return { created: false };
+    if (await tx.member.findFirst({ where: { userId, edirId: user.edirId! }, select: { id: true } })) return { created: false };
 
     // Link an existing unlinked member with the same phone/email, if any.
     const matchers = [user.phone ? { phone: user.phone } : undefined, user.email ? { email: user.email } : undefined].filter(Boolean) as any[];
@@ -555,6 +562,18 @@ export async function createMember(input: MemberInput) {
     const phone = data.phone ? normalizeEthiopianPhone(data.phone) : null;
     const email = data.email ? data.email.toLowerCase().trim() : null;
 
+    // ── Membership policy gate ────────────────────────────────────────────────
+    // Never two memberships in the same Edir; memberships across several Edirs
+    // only when the platform policy allows it. See lib/membership-policy.ts.
+    const linkedUser = phone || email
+      ? await prisma.user.findFirst({
+          where: { OR: [phone ? { phone } : undefined, email ? { email } : undefined].filter(Boolean) as any },
+          select: { id: true },
+        })
+      : null;
+    const joinCheck = await checkCanJoinEdir(edirId, { userId: linkedUser?.id ?? null, phone, email });
+    if (!joinCheck.ok) return { success: false as const, error: joinCheck.error };
+
     const settings = await prisma.edirSettings.findUnique({ where: { edirId } });
     const registrationFee = settings?.registrationFee ?? new Prisma.Decimal(0);
 
@@ -704,6 +723,17 @@ export async function updateMember(id: string, input: MemberInput) {
 
     const phone = data.phone ? normalizeEthiopianPhone(data.phone) : null;
     const email = data.email ? data.email.toLowerCase().trim() : null;
+
+    // Re-check the membership policy: changing a phone/email can make this member
+    // resolve to a person who already belongs to another Edir. Excludes itself.
+    if (phone !== existing.phone || email !== existing.email) {
+      const joinCheck = await checkCanJoinEdir(
+        existing.edirId,
+        { userId: existing.user?.id ?? null, phone, email },
+        { excludeMemberId: id },
+      );
+      if (!joinCheck.ok) return { success: false as const, error: joinCheck.error };
+    }
 
     // Sign-in and forgot-password resolve identity from User.email/phone, not the
     // Member row — propagate contact changes to the linked login account so a
@@ -1054,18 +1084,29 @@ export async function bulkImportMembers(input: { edirId?: string | null; rows: B
       };
     });
 
-    // Existing members with the same phone/email in this Edir → skipped as duplicates.
+    // Existing members with the same phone/email → skipped as duplicates. When the
+    // platform forbids multi-Edir membership the lookup spans ALL Edirs, so an
+    // import cannot smuggle in a person who already belongs somewhere else;
+    // otherwise it stays scoped to this Edir.
     const okRows = normalized.filter(n => !n.error);
     const phones = okRows.map(n => n.phone).filter(Boolean) as string[];
     const emails = okRows.map(n => n.email).filter(Boolean) as string[];
+    const allowMultiEdir = (await getMembershipPolicy()).allowMultiEdir;
     const existing = (phones.length || emails.length)
       ? await prisma.member.findMany({
-          where: { edirId, OR: [...(phones.length ? [{ phone: { in: phones } }] : []), ...(emails.length ? [{ email: { in: emails } }] : [])] },
-          select: { phone: true, email: true },
+          where: {
+            ...(allowMultiEdir ? { edirId } : {}),
+            OR: [...(phones.length ? [{ phone: { in: phones } }] : []), ...(emails.length ? [{ email: { in: emails } }] : [])],
+          },
+          select: { phone: true, email: true, edirId: true, edir: { select: { name: true } } },
         })
       : [];
-    const takenPhones = new Set(existing.map(m => m.phone).filter(Boolean) as string[]);
-    const takenEmails = new Set(existing.map(m => m.email).filter(Boolean) as string[]);
+    const takenPhones = new Map(existing.filter(m => m.phone).map(m => [m.phone as string, m]));
+    const takenEmails = new Map(existing.filter(m => m.email).map(m => [m.email as string, m]));
+    const dupeError = (hit: { edirId: string; edir: { name: string } | null } | undefined, field: 'phone' | 'email') =>
+      hit && hit.edirId !== edirId
+        ? `Already a member of ${hit.edir?.name ?? 'another Edir'}; the platform allows only one Edir membership per person.`
+        : `A member with this ${field} already exists.`;
 
     const failed: { row: number; name?: string; error: string }[] = [];
     const seenPhone = new Set<string>();
@@ -1074,8 +1115,8 @@ export async function bulkImportMembers(input: { edirId?: string | null; rows: B
     for (const n of normalized) {
       const row = n.idx + 1;
       if (n.error) { failed.push({ row, name: n.name || undefined, error: n.error }); continue; }
-      if (n.phone && (seenPhone.has(n.phone) || takenPhones.has(n.phone))) { failed.push({ row, name: n.name, error: 'A member with this phone already exists.' }); continue; }
-      if (n.email && (seenEmail.has(n.email) || takenEmails.has(n.email))) { failed.push({ row, name: n.name, error: 'A member with this email already exists.' }); continue; }
+      if (n.phone && (seenPhone.has(n.phone) || takenPhones.has(n.phone))) { failed.push({ row, name: n.name, error: dupeError(takenPhones.get(n.phone), 'phone') }); continue; }
+      if (n.email && (seenEmail.has(n.email) || takenEmails.has(n.email))) { failed.push({ row, name: n.name, error: dupeError(takenEmails.get(n.email), 'email') }); continue; }
       if (n.phone) seenPhone.add(n.phone);
       if (n.email) seenEmail.add(n.email);
       toCreate.push(n);

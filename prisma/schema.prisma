@@ -1,4 +1,4 @@
-// Edir Management Platform — multi-tenant schema
+// Edir Management Platform Ã¢ÂÂ multi-tenant schema
 // learn more: https://pris.ly/d/prisma-schema
 
 generator client {
@@ -10,7 +10,7 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// ─── Tenancy & Identity ──────────────────────────────────────────────────────
+// Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂ Tenancy & Identity Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 enum EdirStatus {
   PENDING
@@ -59,7 +59,7 @@ model Edir {
   @@index([branchId])
 }
 
-// ─── Bank Operational Structure ──────────────────────────────────────────────
+// Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂ Bank Operational Structure Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 model District {
   id          String   @id @default(cuid())
@@ -127,7 +127,7 @@ model User {
   districtId String?
   district   District?  @relation("DistrictUsers", fields: [districtId], references: [id])
 
-  member                    Member?               @relation("MemberLogin")
+  members                   Member[]              @relation("MemberLogin")
   securityLogs              SecurityLog[]
   notifications             Notification[]
   auditLogs                 AuditLog[]
@@ -174,7 +174,7 @@ model Role {
   @@index([branchId])
 }
 
-// ─── Members ─────────────────────────────────────────────────────────────────
+// Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂ Members Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 enum MemberStatus {
   ACTIVE
@@ -188,7 +188,10 @@ model Member {
   edirId                String
   edir                  Edir         @relation(fields: [edirId], references: [id])
   memberId              String // EDR-YYYY-NNNN, unique within an edir
-  userId                String?      @unique
+  // A person holds at most ONE membership per Edir (see @@unique below). Whether
+  // they may hold memberships in SEVERAL Edirs is governed by the platform-wide
+  // "membership" policy - see lib/membership-policy.ts.
+  userId                String?
   user                  User?        @relation("MemberLogin", fields: [userId], references: [id], onDelete: SetNull)
 
   // Personal
@@ -233,7 +236,14 @@ model Member {
   requests        MemberRequest[]
 
   @@unique([edirId, memberId])
+  // One membership per login account per Edir. Rows with a NULL userId (members
+  // with no login) are exempt - Postgres treats NULLs as distinct.
+  @@unique([edirId, userId])
   @@index([edirId])
+  @@index([userId])
+  // Phone is the lookup key for the NIB mini-app (fetchDetailedMembersByPhone) and
+  // for the membership-policy identity check, both of which now scan across Edirs.
+  @@index([phone])
   @@index([status])
 }
 
@@ -279,7 +289,7 @@ model RelativeDocument {
   supersedesId    String?
   supersedes      RelativeDocument?  @relation("RelDocVersions", fields: [supersedesId], references: [id], onDelete: SetNull)
   versions        RelativeDocument[] @relation("RelDocVersions")
-  // Maker–checker lifecycle (mirrors DmsDocument).
+  // MakerÃ¢ÂÂchecker lifecycle (mirrors DmsDocument).
   pendingAction   String? // upload | edit | delete (awaiting approval)
   pendingPayload  Json?
   rejectionReason String?
@@ -312,9 +322,9 @@ model MemberDocument {
 }
 
 // Per-Edir configurable family relationship categories (Spouse, Child, Guardian,
-// custom, …). Replaces the hard-coded relationship list; populates every
+// custom, Ã¢ÂÂ¦). Replaces the hard-coded relationship list; populates every
 // relationship selector. Changes flow through the RELATIONSHIP_CATEGORY
-// maker–checker module. Scoped to a single Edir.
+// makerÃ¢ÂÂchecker module. Scoped to a single Edir.
 model RelationshipCategory {
   id                String   @id @default(cuid())
   edirId            String
@@ -327,7 +337,7 @@ model RelationshipCategory {
   emergencyEligible Boolean  @default(true) // eligible for emergency claims
   requiredDocuments String? // CSV of required document types for this relationship
   maxDependents     Int? // max members of this relationship per member (null = unlimited)
-  // Maker–checker lifecycle.
+  // MakerÃ¢ÂÂchecker lifecycle.
   pendingAction     String? // create | edit | delete (awaiting approval)
   pendingPayload    Json?
   createdAt         DateTime @default(now())
@@ -337,7 +347,7 @@ model RelationshipCategory {
   @@index([edirId])
 }
 
-// ─── Payments & Contributions ────────────────────────────────────────────────
+// Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂ Payments & Contributions Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 enum PaymentStatusValue {
   PAID
@@ -428,7 +438,7 @@ model PaymentLog {
 // Written at payment-initiation time so the bank settlement callback settles against
 // the fetched member rather than the payer's token phone. Kept separate from
 // PaymentLog so an abandoned/in-flight payment is never persisted as a real payment
-// record — the PaymentLog is still born-and-settled atomically in the callback.
+// record Ã¢ÂÂ the PaymentLog is still born-and-settled atomically in the callback.
 model PaymentIntent {
   id               String    @id @default(cuid())
   transactionId    String    @unique // our reference (UUID from Step 3); ties to the bank callback
@@ -445,7 +455,7 @@ model PaymentIntent {
   @@index([edirId])
 }
 
-// ─── Maker–Checker Engine ────────────────────────────────────────────────────
+// Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂ MakerÃ¢ÂÂChecker Engine Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 enum ApprovalModule {
   MANUAL_PAYMENT
@@ -466,7 +476,7 @@ enum ApprovalModule {
   RELATIONSHIP_CATEGORY
 }
 
-// ─── Document Management System (maker–checker) ──────────────────────────────
+// Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂ Document Management System (makerÃ¢ÂÂchecker) Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 enum DmsDocStatus {
   DRAFT
@@ -476,7 +486,7 @@ enum DmsDocStatus {
   ARCHIVED
 }
 
-// A first-class repository document with its own maker–checker lifecycle. Stays
+// A first-class repository document with its own makerÃ¢ÂÂchecker lifecycle. Stays
 // PENDING until a Checker approves; every sensitive action (upload, edit, delete,
 // classify, share, archive, revoke) is routed through an ApprovalRequest. Kept
 // separate from member profile pictures (which live on Member, not here).
@@ -566,7 +576,7 @@ model ApprovalEvent {
   @@index([requestId])
 }
 
-// ─── Per-Edir Settings & Rules ───────────────────────────────────────────────
+// Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂ Per-Edir Settings & Rules Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 model EdirSettings {
   id                String  @id @default(cuid())
@@ -630,7 +640,7 @@ model Bylaw {
   @@index([edirId])
 }
 
-// ─── Rules & Bylaws (versioned official document) ────────────────────────────
+// Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂ Rules & Bylaws (versioned official document) Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 enum RulesVersionStatus {
   DRAFT     // editable; pending approval is represented by an open ApprovalRequest
@@ -673,7 +683,7 @@ model RulesAttachment {
   @@index([versionId])
 }
 
-// ─── Member self-service requests (relative / emergency / asset / grievance) ──
+// Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂ Member self-service requests (relative / emergency / asset / grievance) Ã¢ÂÂÃ¢ÂÂ
 
 enum MemberRequestType {
   RELATIVE
@@ -716,7 +726,7 @@ model MemberRequest {
   @@index([status])
 }
 
-// ─── Emergencies (later-iteration models, defined now) ───────────────────────
+// Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂ Emergencies (later-iteration models, defined now) Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 model EmergencyType {
   id            String  @id @default(cuid())
@@ -783,7 +793,7 @@ model EmergencyNote {
   @@index([claimId])
 }
 
-// ─── Events & Attendance (later-iteration models, defined now) ───────────────
+// Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂ Events & Attendance (later-iteration models, defined now) Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 enum EventStatus {
   SCHEDULED
@@ -829,7 +839,7 @@ model EventParticipant {
   @@index([eventId])
 }
 
-// ─── Assets (later-iteration models, defined now) ────────────────────────────
+// Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂ Assets (later-iteration models, defined now) Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 model AssetCategory {
   id     String  @id @default(cuid())
@@ -889,7 +899,7 @@ model AssetIssuance {
   @@index([assetId])
 }
 
-// ─── Notifications, Audit, System ────────────────────────────────────────────
+// Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂ Notifications, Audit, System Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 model Notification {
   id         String    @id @default(cuid())

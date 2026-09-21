@@ -9,6 +9,7 @@ import { computeContributionArrears, computePenalty, computePayWindow } from '@/
 import { paymentLogStatusLabel } from '@/lib/payment-log-status';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
+import { pickPrimaryMembership } from '@/lib/membership-policy';
 
 function safeMeta(s: string | null): Record<string, any> {
   if (!s) return {};
@@ -23,17 +24,20 @@ export async function getMyAccount() {
     include: {
       role: { select: { name: true } },
       edir: { select: { name: true } },
-      member: {
+      members: {
         include: {
           paymentStatus: true,
           relatives: { include: { documents: true } },
         },
+        orderBy: { createdAt: 'asc' },
       },
     },
   });
   if (!user) return null;
 
-  const m = user.member;
+  // A user may hold memberships in several Edirs (platform membership policy);
+  // self-service shows the one for their home Edir.
+  const m = pickPrimaryMembership(user.members, user.edirId);
   return {
     id: user.id,
     name: user.name,
@@ -74,7 +78,7 @@ export async function getMyPortal() {
     include: {
       role: { select: { name: true } },
       edir: { select: { name: true } },
-      member: {
+      members: {
         include: {
           paymentStatus: true,
           relatives: { include: { documents: true }, orderBy: { createdAt: 'asc' } },
@@ -83,13 +87,16 @@ export async function getMyPortal() {
           paymentLogs: { orderBy: { createdAt: 'desc' }, take: 50 },
           emergencyClaims: { include: { type: { select: { name: true } } }, orderBy: { createdAt: 'desc' } },
         },
+        orderBy: { createdAt: 'asc' },
       },
     },
   });
   if (!user) return null;
 
   const num = (v: any) => (v == null ? 0 : Number(v));
-  const m = user.member;
+  // A user may hold memberships in several Edirs (platform membership policy);
+  // self-service shows the one for their home Edir.
+  const m = pickPrimaryMembership(user.members, user.edirId);
 
   const account = {
     name: user.name, title: user.title, email: user.email, phone: user.phone,

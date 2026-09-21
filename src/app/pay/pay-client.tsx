@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import {
   Loader2, Wallet, CheckCircle2, AlertTriangle, Search, Phone, RefreshCw, User, CalendarClock,
-  TrendingDown, ReceiptText, ShieldAlert, History, Building2, ChevronDown,
+  TrendingDown, ReceiptText, ShieldAlert, History, Building2, ChevronDown, ChevronRight,
 } from 'lucide-react';
 import { validateNibToken, fetchMemberForPayment, getPaymentToken, checkTransactionStatus } from './actions';
 import type { DetailedMember as Member } from '@/lib/data';
@@ -43,6 +43,10 @@ function PayInner() {
   // Preserved separately from `phone`, which the user may change to pay for someone else.
   const [payerPhone, setPayerPhone] = useState<string | null>(null);
   const [member, setMember] = useState<Member | null>(null);
+  // A phone can resolve to memberships in several Edirs when the platform allows
+  // multi-Edir membership. `choices` holds them all; the payer picks one, and
+  // `member` is only set once a single Edir is settled on.
+  const [choices, setChoices] = useState<Member[]>([]);
   const [amount, setAmount] = useState('');
   const [fetching, setFetching] = useState(false);
   const [paying, setPaying] = useState(false);
@@ -72,24 +76,39 @@ function PayInner() {
   const fetchMember = async () => {
     if (!phone.trim()) { setError(t('err_enterPhone')); return; }
     payLog('client/fetch', 'Fetch clicked', { phone: phone.trim() });
-    setFetching(true); setError(''); setMember(null); setSettled(false);
+    setFetching(true); setError(''); setMember(null); setChoices([]); setSettled(false);
     const res = await fetchMemberForPayment(phone.trim(), token || undefined);
     setFetching(false);
     payLog('client/fetch', 'result', { status: res.status });
     if (res.status === 'success' && res.member) {
-      setMember(res.member);
       if (res.token) setToken(res.token);
-      // Default the payable amount to the FULL dues total — every obligation the
-      // shared calculator summed: contribution arrears (all unpaid months), late
-      // penalty, reinstatement fee (if suspended/terminated), and the pooled
-      // balance (registration + event/asset charges).
-      setAmount(String(Number((res.member as any).dues?.total ?? res.member.totalOutstanding)));
+      const found = ((res as any).members as Member[] | undefined) ?? [res.member];
+      if (found.length > 1) {
+        // Several Edirs — ask which one before showing any amount.
+        payLog('client/fetch', 'multiple memberships → showing Edir picker', found.map(m => m.edirName));
+        setChoices(found);
+      } else {
+        selectMembership(found[0]);
+      }
     } else {
       setError(t(`err_${res.status}`));
     }
   };
 
-  const reset = () => { setMember(null); setAmount(''); setError(''); setTxn(null); setSettled(false); setPaidAmount(null); setPrevOutstanding(null); setRefreshing(false); };
+  /**
+   * Commit to one Edir's membership. Defaults the payable amount to the FULL dues
+   * total — every obligation the shared calculator summed: contribution arrears
+   * (all unpaid months), late penalty, reinstatement fee (if suspended/terminated),
+   * and the pooled balance (registration + event/asset charges).
+   */
+  const selectMembership = (m: Member) => {
+    setChoices([]);
+    setMember(m);
+    setError('');
+    setAmount(String(Number((m as any).dues?.total ?? m.totalOutstanding)));
+  };
+
+  const reset = () => { setMember(null); setChoices([]); setAmount(''); setError(''); setTxn(null); setSettled(false); setPaidAmount(null); setPrevOutstanding(null); setRefreshing(false); };
 
   const pay = async () => {
     if (!member) return;
@@ -131,6 +150,7 @@ function PayInner() {
     }
 
     let done = false;
+    const paidMemberId = member.id;
     const finishSuccess = async () => {
       if (done) return; done = true;
       payLog('client/sse', 'settlement detected → refreshing member figures');
@@ -138,7 +158,14 @@ function PayInner() {
       setRefreshing(true);
       try {
         const fresh = await fetchMemberForPayment(memberPhone, token || undefined);
-        if (fresh.status === 'success' && fresh.member) { setMember(fresh.member); payLog('client/sse', 'member refreshed', { newOutstanding: fresh.member.totalOutstanding }); }
+        if (fresh.status === 'success' && fresh.member) {
+          // Re-select the SAME Edir we just paid — a multi-Edir payer must not be
+          // silently switched to another membership on refresh.
+          const list = ((fresh as any).members as Member[] | undefined) ?? [fresh.member];
+          const same = list.find(m => m.id === paidMemberId) ?? fresh.member;
+          setMember(same);
+          payLog('client/sse', 'member refreshed', { edirName: same.edirName, newOutstanding: same.totalOutstanding });
+        }
       } catch (e) { payLog('client/sse', 'refresh failed', String(e)); }
       finally { setRefreshing(false); }
     };
@@ -233,8 +260,55 @@ function PayInner() {
       </Card>
 
       {fetching && !member && <div className="flex items-center justify-center py-10"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>}
+      {choices.length > 1 && <EdirChoicePanel choices={choices} onSelect={selectMembership} />}
       {member && <MemberPanel member={member} payerPhone={payerPhone} amount={amount} setAmount={setAmount} paying={paying} error={error} txn={txn} onPay={pay} onChange={reset} />}
     </Shell>
+  );
+}
+
+/**
+ * Edir picker — shown only when one phone resolves to memberships in several
+ * Edirs. Each row carries the figures the payer needs to tell them apart: the
+ * Edir, their membership code and standing there, and what is outstanding.
+ */
+function EdirChoicePanel({ choices, onSelect }: { choices: Member[]; onSelect: (m: Member) => void }) {
+  const { t } = useLang();
+  return (
+    <Card className="page-enter mt-4">
+      <CardContent className="space-y-3 p-4">
+        <div className="space-y-1">
+          <h2 className="flex items-center gap-1.5 text-sm font-semibold"><Building2 className="h-4 w-4 text-primary" /> {t('chooseEdirTitle')}</h2>
+          <p className="text-[11px] text-muted-foreground">{t('chooseEdirDesc')}</p>
+        </div>
+        <div className="space-y-2">
+          {choices.map(m => {
+            const due = Number((m as any).dues?.total ?? m.totalOutstanding);
+            return (
+              <button
+                key={m.id}
+                type="button"
+                onClick={() => onSelect(m)}
+                aria-label={`${t('chooseEdirCta')} — ${m.edirName}`}
+                className="flex w-full items-center gap-3 rounded-lg border bg-card p-3 text-left transition-colors hover:border-primary hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {m.edirLogoUrl
+                  ? <img src={m.edirLogoUrl} alt="" className="h-9 w-9 shrink-0 rounded-full object-cover" />
+                  : <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/10"><Building2 className="h-4 w-4 text-primary" /></span>}
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium">{m.edirName}</span>
+                  <span className="block truncate text-[11px] text-muted-foreground">{m.memberId} · {m.status}</span>
+                </span>
+                <span className="shrink-0 text-right">
+                  <span className="block text-[10px] uppercase tracking-wide text-muted-foreground">{t('outstanding')}</span>
+                  <span className={`block text-sm font-semibold tabular-nums ${due > 0 ? 'text-destructive' : 'text-success'}`}>{money(due, m.currency)}</span>
+                </span>
+                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+              </button>
+            );
+          })}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -484,7 +558,7 @@ function MemberPanel({ member, payerPhone, amount, setAmount, paying, error, txn
       )}
 
       {/* Link to dedicated history page */}
-      <Link href={`/pay/history?phone=${encodeURIComponent(m.phone || '')}`} className="block">
+      <Link href={`/pay/history?phone=${encodeURIComponent(m.phone || '')}&edirId=${encodeURIComponent(m.edirId || '')}`} className="block">
         <Card className="page-enter card-interactive">
           <CardContent className="flex items-center justify-between p-4 text-sm">
             <span className="flex items-center gap-2 font-medium"><History className="h-4 w-4 text-primary" /> {t('viewHistory')}</span>

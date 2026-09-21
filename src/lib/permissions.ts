@@ -256,6 +256,11 @@ export const pagePermissions: PagePermissionDef[] = [
     ],
   },
   {
+    id: 'system-settings', label: 'Platform Settings', path: '/dashboard/system/settings', icon: 'SlidersHorizontal', section: 'system',
+    accessPermissions: ['manage_platform_settings', 'super_admin'],
+    actions: [{ id: 'manage_platform_settings', label: 'Manage Platform Settings', description: 'Platform-wide policies, such as whether a person may belong to more than one Edir', isAccess: true }],
+  },
+  {
     id: 'system-associations', label: 'User Associations', path: '/dashboard/system/associations', icon: 'Network', section: 'system',
     accessPermissions: ['manage_associations', 'manage_edirs', 'super_admin'],
     actions: [{ id: 'manage_associations', label: 'Assign & Transfer Users', description: 'Associate, transfer, and remove users across Edirs (assign Edir Admins)', isAccess: true }],

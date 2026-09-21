@@ -8,6 +8,7 @@ import { dateWhere, type DateRangeParam } from '@/lib/date-range';
 import { approveDmsDocument, rejectDmsDocument } from './dms-documents';
 import { approveRelativeDocument, rejectRelativeDocument } from './relative-documents';
 import { reviewMemberDocument } from './members';
+import { resolveOwnMembership } from '@/lib/membership-policy';
 
 export type DocSource = 'DMS' | 'MEMBER' | 'RELATIVE' | 'REQUEST';
 
@@ -85,7 +86,8 @@ export async function listRepositoryDocuments(params: {
     // Scope: staff → their tenant Edir(s); a plain member → only their own record.
     let ownMemberId: string | null = null;
     if (!isStaff) {
-      const m = await prisma.member.findFirst({ where: { userId: actor.id }, select: { id: true } });
+      // Multi-Edir members resolve to their home Edir's membership.
+      const m = await resolveOwnMembership(actor.id, { homeEdirId: actor.edirId });
       if (!m) return { success: true as const, isStaff: false, canUpload: false, items: [], categories: [], categoryCounts: [], tags: [], stats: { total: 0, pending: 0, approved: 0, rejected: 0, archived: 0 } };
       ownMemberId = m.id;
     }

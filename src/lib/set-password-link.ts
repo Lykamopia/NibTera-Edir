@@ -27,7 +27,7 @@ export type LinkDelivery =
 /**
  * Create (or refresh) a set-password token for `email` and send the link.
  * `mode: 'setup'` sends the welcome/onboarding email (48h token);
- * `mode: 'reset'` sends the password-reset email (1h token).
+ * `mode: 'reset'` sends the password-reset email (3min token — TESTING).
  * Never throws — a failed send is reported so the caller can tell the admin.
  */
 export async function issueSetPasswordLink(opts: {
@@ -39,8 +39,9 @@ export async function issueSetPasswordLink(opts: {
   if (!email) return { sent: false, reason: 'NO_EMAIL' };
 
   const token = crypto.randomBytes(32).toString('hex');
-  const hours = opts.mode === 'setup' ? 48 : 1;
-  const expires = new Date(Date.now() + hours * 60 * 60 * 1000);
+  // TESTING: reset links are short-lived (3 min). Restore to 60 before release.
+  const minutes = opts.mode === 'setup' ? 48 * 60 : 3;
+  const expires = new Date(Date.now() + minutes * 60 * 1000);
   await prisma.passwordResetToken.upsert({
     where: { email },
     update: { token, expires, createdAt: new Date() },

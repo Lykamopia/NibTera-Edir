@@ -1,6 +1,7 @@
 import { format, formatDistanceToNow } from 'date-fns';
 import prisma from '@/lib/prisma';
 import { normalizeEthiopianPhone } from '@/lib/utils';
+import { Prisma } from '@prisma/client';
 import { extractBankReference } from '@/lib/nib-receipt';
 
 export interface PenaltyBreakdown {
@@ -71,26 +72,19 @@ export interface DetailedMember {
   }[];
 }
 
-/**
- * Resolve a member by phone with the figures the public payment flow needs:
- * outstanding balance, monthly fee, penalties, contribution status, due dates,
- * and recent payment history. Returns null when no member matches.
- */
-export async function fetchDetailedMemberByPhone(phone: string): Promise<DetailedMember | null> {
-  const normalized = normalizeEthiopianPhone(phone);
-  const member = await prisma.member.findFirst({
-    where: { phone: normalized },
-    include: {
-      paymentStatus: true,
-      edir: { select: { name: true, logoUrl: true, settings: true, status: true, accountNumber: true } },
-      installmentPlans: { include: { installments: { orderBy: { sequence: 'asc' } } } },
-      paymentLogs: { orderBy: { createdAt: 'desc' }, take: 25 },
-      eventParticipations: { where: { penalized: true }, include: { event: { select: { title: true, datetime: true, absencePenalty: true } } } },
-      assetIssuances: { where: { compensation: { gt: 0 } }, include: { asset: { select: { name: true } } } },
-    },
-  });
-  if (!member) return null;
+const detailedMemberInclude = Prisma.validator<Prisma.MemberInclude>()({
+  paymentStatus: true,
+  edir: { select: { name: true, logoUrl: true, settings: true, status: true, accountNumber: true } },
+  installmentPlans: { include: { installments: { orderBy: { sequence: 'asc' } } } },
+  paymentLogs: { orderBy: { createdAt: 'desc' }, take: 25 },
+  eventParticipations: { where: { penalized: true }, include: { event: { select: { title: true, datetime: true, absencePenalty: true } } } },
+  assetIssuances: { where: { compensation: { gt: 0 } }, include: { asset: { select: { name: true } } } },
+});
 
+type DetailedMemberRow = Prisma.MemberGetPayload<{ include: typeof detailedMemberInclude }>;
+
+/** Compute the payment-flow figures for an already-loaded member row. */
+function buildDetailedMember(member: DetailedMemberRow): DetailedMember {
   const settings = member.edir?.settings;
   const now = new Date();
   // Per-tenant payment availability — mirrors resolveEdirPaymentAccount so the UI
@@ -231,6 +225,43 @@ export async function fetchDetailedMemberByPhone(phone: string): Promise<Detaile
       };
     }),
   };
+}
+
+/**
+ * Every membership registered against a phone number, each with the figures the
+ * public payment flow needs: outstanding balance, monthly fee, penalties,
+ * contribution status, due dates and recent payment history.
+ *
+ * Returns more than one entry only when the platform membership policy allows a
+ * person to belong to several Edirs (see lib/membership-policy.ts) — the mini-app
+ * then asks the payer which Edir they are paying. Ordered oldest membership first
+ * so a single-membership payer always sees the same record as before.
+ */
+export async function fetchDetailedMembersByPhone(phone: string): Promise<DetailedMember[]> {
+  const normalized = normalizeEthiopianPhone(phone);
+  const rows = await prisma.member.findMany({
+    where: { phone: normalized },
+    include: detailedMemberInclude,
+    orderBy: { createdAt: 'asc' },
+  });
+  return rows.map(buildDetailedMember);
+}
+
+/**
+ * Resolve ONE membership for a phone number. Pass `edirId` to select a specific
+ * Edir's membership; without it the oldest membership wins, which is what every
+ * single-membership caller expects.
+ *
+ * Callers that settle money must pass `edirId` (or use the PaymentIntent's bound
+ * member) — picking implicitly is only safe for display and legacy self-heal.
+ */
+export async function fetchDetailedMemberByPhone(
+  phone: string,
+  opts: { edirId?: string | null } = {},
+): Promise<DetailedMember | null> {
+  const all = await fetchDetailedMembersByPhone(phone);
+  if (opts.edirId) return all.find(m => m.edirId === opts.edirId) ?? null;
+  return all[0] ?? null;
 }
 
 /**
