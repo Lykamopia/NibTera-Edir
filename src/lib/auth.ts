@@ -166,9 +166,26 @@ export const authOptions: NextAuthOptions = {
     const usesHttps = nextAuthUrl.toLowerCase().startsWith('https://');
     const namePrefix = usesHttps ? '__Secure-' : '';
     return {
+      // SameSite=Strict means the session cookie is never attached to a request
+      // originating from another site, so a cross-site forgery of a
+      // state-changing action arrives unauthenticated. This is the first line of
+      // defence; the per-request CSRF token in src/lib/csrf.ts is the second.
       sessionToken: {
         name: `${namePrefix}next-auth.session-token`,
         options: { httpOnly: true, sameSite: 'strict', path: '/', secure: usesHttps },
+      },
+      // NextAuth's own sign-in CSRF cookie. Every flow that uses it (credentials
+      // sign-in) is same-origin, so Strict costs nothing and blocks cross-site
+      // priming of the login form. '__Host-' pins it to this exact origin.
+      csrfToken: {
+        name: `${usesHttps ? '__Host-' : ''}next-auth.csrf-token`,
+        options: { httpOnly: true, sameSite: 'strict', path: '/', secure: usesHttps },
+      },
+      // Lax (not Strict) so a top-level navigation back from an external link
+      // still resolves the post-login destination.
+      callbackUrl: {
+        name: `${namePrefix}next-auth.callback-url`,
+        options: { sameSite: 'lax', path: '/', secure: usesHttps },
       },
     };
   })(),

@@ -15,6 +15,7 @@ import { normalizeNibEmail } from '@/lib/utils';
 import { sendPasswordChangedNotificationEmail } from '@/lib/email';
 import { issueSetPasswordLink } from '@/lib/set-password-link';
 import { passwordSchema } from '@/lib/password-policy';
+import { CSRF_ERROR_MESSAGE, clearCsrfToken, issueCsrfToken, validateCsrfToken } from '@/lib/csrf';
 
 /**
  * Returns the first application page this user is allowed to access,
@@ -190,16 +191,53 @@ export async function setPassword(token: string, newPassword: string) {
 }
 
 /**
+ * Mint a CSRF token for the current session. The value is returned in the action
+ * response (which a cross-site page cannot read) and simultaneously stored in an
+ * httpOnly, SameSite=Strict cookie, so only our own pages can present the
+ * matching pair to a protected action.
+ */
+export async function getCsrfToken(): Promise<string | null> {
+  const user = await getLoggedInUser();
+  if (!user) return null;
+  return issueCsrfToken(user.id);
+}
+
+/**
+ * Gate for the password-change endpoints: reject the request unless it carries a
+ * CSRF token that matches the cookie and is bound to this user. Failures are
+ * recorded as a security event; the caller only ever sees the generic message.
+ */
+async function enforceCsrf(csrfToken: unknown, user: User): Promise<{ success: false; error: string } | null> {
+  const result = await validateCsrfToken(csrfToken, user.id);
+  if (result.valid) return null;
+
+  await logSecurityEvent({
+    event: SecurityEvent.CSRF_VALIDATION_FAILURE,
+    severity: LogSeverity.CRITICAL,
+    actor: user,
+    details: `CSRF validation failed for a password-change request by '${user.name}' (ID: ${user.id}): ${result.reason}.`,
+    targetId: user.id,
+    targetType: 'User',
+  });
+
+  return { success: false, error: CSRF_ERROR_MESSAGE };
+}
+
+/**
  * Complete the mandatory first-login password change. The account stays in the
  * "First Login Required" state (mustChangePassword) until this succeeds; only
  * then is full access granted. No current password is required because the user
  * is already authenticated and just used their temporary password to sign in.
  */
-export async function completeFirstLoginPasswordChange(newPassword: string) {
+export async function completeFirstLoginPasswordChange(newPassword: string, csrfToken: string) {
   const user = await getLoggedInUser();
   if (!user) {
     return { success: false, error: 'Your session has ended. Please sign in again.' };
   }
+  // Reject forged / cross-site submissions before anything else is inspected.
+  const csrfFailure = await enforceCsrf(csrfToken, user);
+  if (csrfFailure) return csrfFailure;
+
   // Only valid while the account is actually in the first-login state.
   if (!(user as any).mustChangePassword) {
     return { success: false, error: 'No password change is required for this account.' };
@@ -230,15 +268,23 @@ export async function completeFirstLoginPasswordChange(newPassword: string) {
     targetType: 'User',
   });
 
+  // Burn the token so it can never be replayed against this session.
+  await clearCsrfToken();
+
   return { success: true };
 }
 
 // Change password for the currently authenticated user
-export async function changePassword(currentPassword: string, newPassword: string) {
+export async function changePassword(currentPassword: string, newPassword: string, csrfToken: string) {
     const user = await getLoggedInUser();
     if (!user) {
         throw new NotAuthenticatedError();
     }
+
+    // Reject forged / cross-site submissions before the current password is even
+    // verified, so the endpoint cannot double as a password-guessing oracle.
+    const csrfFailure = await enforceCsrf(csrfToken, user);
+    if (csrfFailure) return csrfFailure;
 
     // Fetch the hash directly (getLoggedInUser strips it from its response).
     const cred = await prisma.user.findUnique({ where: { id: user.id }, select: { hashedPassword: true } });
@@ -283,6 +329,10 @@ export async function changePassword(currentPassword: string, newPassword: strin
         targetId: user.id,
         targetType: 'User',
     });
+
+    // Burn the token so it can never be replayed (the tokenVersion bump above
+    // already revokes the session, but don't leave a live token behind).
+    await clearCsrfToken();
 
     if (user.email) {
         await sendPasswordChangedNotificationEmail({

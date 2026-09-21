@@ -11,6 +11,8 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Loader2, KeyRound, ShieldCheck, LogOut, Eye, EyeOff } from 'lucide-react';
 import { completeFirstLoginPasswordChange, getFirstAccessiblePage } from '@/app/actions/auth';
 import { getClientBaseUrl } from '@/lib/url';
+import { requestCsrfToken } from '@/lib/csrf-client';
+import { toUserError } from '@/lib/errors';
 
 export default function ForcePasswordChangeClient() {
   const router = useRouter();
@@ -25,7 +27,15 @@ export default function ForcePasswordChangeClient() {
     if (next.length < 8) { toast.error('Password must be at least 8 characters.'); return; }
     if (next !== confirm) { toast.error('Passwords do not match.'); return; }
     setSaving(true);
-    const res = await completeFirstLoginPasswordChange(next);
+    let res: { success: boolean; error?: string };
+    try {
+      // Mint a fresh CSRF token immediately before submitting; the action
+      // rejects the change unless it matches the SameSite=Strict cookie.
+      const csrfToken = await requestCsrfToken();
+      res = await completeFirstLoginPasswordChange(next, csrfToken);
+    } catch (e) {
+      setSaving(false); toast.error(toUserError(e).message); return;
+    }
     if (!res?.success) { setSaving(false); toast.error(res?.error || 'Failed to set password.'); return; }
     toast.success('Password updated. Welcome!');
     // Refresh the session token so the first-login gate clears, then enter the
