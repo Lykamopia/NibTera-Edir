@@ -46,6 +46,8 @@ export async function GET(req: NextRequest, { params }: { params: { path: string
       headers: {
         'Content-Type': contentType,
         'Cache-Control': 'no-cache, no-store, must-revalidate',
+        // Hold the browser to the declared image type — never sniff the bytes.
+        'X-Content-Type-Options': 'nosniff',
       },
     });
   } catch (error) {

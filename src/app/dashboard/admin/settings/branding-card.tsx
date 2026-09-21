@@ -59,7 +59,7 @@ export default function BrandingCard() {
             </div>
             <div className="space-y-2">
               <div className="text-sm font-medium">{name}</div>
-              <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) onUpload(f); }} />
+              <input ref={fileRef} type="file" accept=".jpg,.jpeg,.png,.gif,.webp" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) onUpload(f); }} />
               <div className="flex gap-2">
                 <Button size="sm" variant="outline" disabled={busy} onClick={() => fileRef.current?.click()}>{busy ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Upload className="mr-1.5 h-4 w-4" />} {logoUrl ? 'Replace logo' : 'Upload logo'}</Button>
                 {logoUrl && <Button size="sm" variant="ghost" className="text-destructive" disabled={busy} onClick={remove}><Trash2 className="mr-1.5 h-4 w-4" /> Remove</Button>}

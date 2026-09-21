@@ -470,7 +470,9 @@ function UploadDialog({ categories, onClose, onDone }: { categories: string[]; o
               </div>
             ) : (
               <label className="flex cursor-pointer items-center gap-2 rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground hover:border-primary/50 hover:bg-primary/5">
-                <input type="file" accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.xls,.xlsx" className="hidden" onChange={e => onFile(e.target.files?.[0])} />
+                {/* Must mirror the server allow list in src/lib/file-validation.ts
+                    ('documents': PDF + JPEG/PNG/GIF/WEBP) — anything else is rejected. */}
+                <input type="file" accept=".pdf,.png,.jpg,.jpeg,.gif,.webp" className="hidden" onChange={e => onFile(e.target.files?.[0])} />
                 {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />} {uploading ? 'Uploading…' : 'Attach a file'}
               </label>
             )}

@@ -64,7 +64,7 @@ function RelativeProofUpload({ relativeId, onDone }: { relativeId: string; onDon
       <Button size="sm" variant="outline" className="mt-2 h-7 gap-1 text-xs" disabled={busy} onClick={() => ref.current?.click()}>
         {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />} Upload proof
       </Button>
-      <input ref={ref} type="file" accept="image/*,application/pdf" className="hidden" onChange={e => { onFile(e.target.files?.[0]); if (ref.current) ref.current.value = ''; }} />
+      <input ref={ref} type="file" accept=".pdf,.jpg,.jpeg,.png,.gif,.webp" className="hidden" onChange={e => { onFile(e.target.files?.[0]); if (ref.current) ref.current.value = ''; }} />
     </>
   );
 }

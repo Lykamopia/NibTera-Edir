@@ -8,9 +8,15 @@ import { authOptions } from '@/lib/auth';
 import prisma from '@/lib/prisma';
 import { logSecurityEvent, SecurityEvent } from '@/lib/security-logger';
 import { LogSeverity } from '@/lib/types';
-import mime from 'mime-types';
 import { encryptBuffer } from '@/lib/encryption';
 import { randomUUID } from 'crypto';
+import {
+  API_UPLOAD_KINDS,
+  UPLOAD_POLICIES,
+  buildStoredFilename,
+  isApiUploadKind,
+  validateUpload,
+} from '@/lib/file-validation';
 
 // Set a body size limit for file uploads to 10MB
 export const config = {
@@ -21,34 +27,8 @@ export const config = {
     },
 };
 
-const BLOCKED_EXTENSIONS = [
-  '.exe', '.msi', '.bat', '.cmd', '.sh', '.js', '.jsx', '.ts', '.tsx',
-  '.vbs', '.ps1', '.jar', '.py', '.php', '.pl', '.rb', '.swf', '.html', '.htm'
-];
-
-const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
-const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB, matching config
-
-/**
- * Server-side content inspection: confirm the raw bytes actually carry an allowed
- * image signature (magic number). Defeats a renamed executable/script that merely
- * spoofs its extension and Content-Type.
- */
-function hasAllowedImageMagic(buf: Buffer): boolean {
-  if (buf.length < 12) return false;
-  const [b0, b1, b2, b3] = [buf[0], buf[1], buf[2], buf[3]];
-  if (b0 === 0xff && b1 === 0xd8 && b2 === 0xff) return true;                          // JPEG
-  if (b0 === 0x89 && b1 === 0x50 && b2 === 0x4e && b3 === 0x47) return true;            // PNG
-  if (b0 === 0x47 && b1 === 0x49 && b2 === 0x46 && b3 === 0x38) return true;            // GIF8
-  if (b0 === 0x52 && b1 === 0x49 && b2 === 0x46 && b3 === 0x46                          // RIFF…
-      && buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50) return true; // …WEBP
-  return false;
-}
-
-/** PDF magic number `%PDF` — allowed for document/agreement uploads only. */
-function hasPdfMagic(buf: Buffer): boolean {
-  return buf.length >= 5 && buf[0] === 0x25 && buf[1] === 0x50 && buf[2] === 0x44 && buf[3] === 0x46;
-}
+/** Largest cap across every API-reachable category — the pre-buffering guard. */
+const MAX_FILE_SIZE = Math.max(...API_UPLOAD_KINDS.map((k) => UPLOAD_POLICIES[k].maxBytes));
 
 // Main POST handler for file uploads
 export async function POST(req: NextRequest) {
@@ -86,12 +66,13 @@ export async function POST(req: NextRequest) {
 
   const data = await req.formData();
   const file: File | null = data.get('file') as unknown as File;
-  const type = data.get('type') as string;
+  const rawType = data.get('type');
 
   // Only allow profile, signature, member-document, rules-attachment, and logo uploads
-  if (type !== 'profile' && type !== 'signatures' && type !== 'documents' && type !== 'rules' && type !== 'logos') {
-    return NextResponse.json({ success: false, error: 'Invalid file type' }, { status: 400 });
+  if (!isApiUploadKind(rawType)) {
+    return NextResponse.json({ success: false, error: 'Invalid upload category' }, { status: 400 });
   }
+  const type = rawType;
 
   // RBAC: branding (logos) is a staff-only operation. profile/signatures are
   // self-service (own account) and `documents` may be uploaded by members for
@@ -116,50 +97,33 @@ export async function POST(req: NextRequest) {
   }
 
   // --- File Validation ---
+  // Reject on the declared size before buffering, so an oversized file is not
+  // read into memory just to be thrown away.
   if (file.size > MAX_FILE_SIZE) {
     return NextResponse.json({ success: false, error: 'File size exceeds the 10MB limit.' }, { status: 413 });
   }
 
-  const filename = file.name.toLowerCase();
-  const fileExtension = `.${filename.split('.').pop()}`;
-
-  if (BLOCKED_EXTENSIONS.includes(fileExtension)) {
-    return NextResponse.json({ success: false, error: `File type (${fileExtension}) is not allowed.` }, { status: 400 });
-  }
-  
-  // Document/agreement uploads may also be PDFs; everything else is image-only.
-  const allowsPdf = type === 'documents' || type === 'rules';
-  const allowedMime = allowsPdf ? [...ALLOWED_IMAGE_TYPES, 'application/pdf'] : ALLOWED_IMAGE_TYPES;
-  if (!allowedMime.includes(file.type)) {
-      return NextResponse.json({ success: false, error: allowsPdf ? 'Only image or PDF files are allowed.' : 'Only image files (JPEG, PNG, GIF, WEBP) are allowed.' }, { status: 400 });
-  }
-
-  // Verify MIME type server-side, as client-sent type can be spoofed.
-  const serverMimeType = mime.lookup(filename);
-  if (serverMimeType && serverMimeType !== file.type) {
-      if (!allowedMime.includes(serverMimeType)) {
-          return NextResponse.json({ success: false, error: `Invalid file type. Server detected: ${serverMimeType}.` }, { status: 400 });
-      }
-      if (BLOCKED_EXTENSIONS.includes(`.${mime.extension(serverMimeType) || ''}`)) {
-          return NextResponse.json({ success: false, error: 'Disallowed file type detected on server.' }, { status: 400 });
-      }
-  }
-  // --- End File Validation ---
-
   const bytes = await file.arrayBuffer();
   let buffer = Buffer.from(bytes);
 
-  // Server-side content inspection: the declared MIME/extension can be spoofed,
-  // so verify the actual bytes are a permitted image (or PDF for document uploads).
-  if (!(hasAllowedImageMagic(buffer) || (allowsPdf && hasPdfMagic(buffer)))) {
+  // Strict per-category allow list, decided on the file's actual magic bytes —
+  // the extension and the client-sent Content-Type only narrow what is accepted.
+  // See src/lib/file-validation.ts for the full rule set.
+  const validation = validateUpload(type, {
+    filename: file.name,
+    declaredMime: file.type,
+    buffer,
+  });
+  if (!validation.ok) {
     await logSecurityEvent({
-      event: SecurityEvent.PERMISSION_DENIED,
+      event: SecurityEvent.FILE_UPLOAD_REJECTED,
       severity: LogSeverity.WARN,
       actor: { id: sessionUser.id, name: sessionUser.name ?? null },
-      details: `Rejected upload '${file.name}' (type=${type}): byte signature is not an allowed image format.`,
+      details: `Rejected upload '${file.name}' (category=${type}, declared=${file.type || 'none'}, ${file.size} bytes): ${validation.reason}.`,
     });
-    return NextResponse.json({ success: false, error: 'File content does not match an allowed image format.' }, { status: 400 });
+    return NextResponse.json({ success: false, error: validation.error }, { status: validation.status });
   }
+  // --- End File Validation ---
 
   // Advanced encryption for signatures to protect from direct file access
   if (type === 'signatures') {
@@ -183,8 +147,9 @@ export async function POST(req: NextRequest) {
 
   // Sanitize the filename and prefix it with a cryptographically-random token
   // (not Date.now()) so names are collision-free and do not leak upload timing.
-  const sanitizedFilename = file.name.replace(/[^a-zA-Z0-9-._]/g, '_');
-  const uniqueFilename = `${randomUUID()}-${sanitizedFilename}`;
+  // The stored extension comes from the DETECTED content type, never from the
+  // client, so the file is always served under a Content-Type its bytes match.
+  const uniqueFilename = buildStoredFilename(randomUUID(), file.name, validation.type);
   const path = join(uploadDir, uniqueFilename);
   
   // Write the file to the server
@@ -202,16 +167,17 @@ export async function POST(req: NextRequest) {
     event: SecurityEvent.FILE_UPLOAD_SUCCESS,
     severity: LogSeverity.INFO,
     actor: { id: sessionUser.id, name: sessionUser.name ?? null },
-    details: `User uploaded file '${file.name}' (${file.size} bytes) of type '${type}'.`,
+    details: `User uploaded file '${file.name}' (${file.size} bytes, verified ${validation.type.id}) of type '${type}'.`,
     targetId: publicPath
   });
 
-  return NextResponse.json({ 
-    success: true, 
+  return NextResponse.json({
+    success: true,
     path: publicPath,
     name: file.name,
     size: file.size,
-    type: file.type
+    // Report the VERIFIED type, not the client's claim.
+    type: validation.type.mime
   });
 }
 

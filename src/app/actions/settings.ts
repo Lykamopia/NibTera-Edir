@@ -2,7 +2,9 @@
 
 import prisma from '@/lib/prisma';
 import { readdir, stat, mkdir, writeFile, unlink } from 'fs/promises';
-import { join, extname } from 'path';
+import { join } from 'path';
+import { randomUUID } from 'crypto';
+import { UPLOAD_POLICIES, buildStoredFilename, validateUpload } from '@/lib/file-validation';
 import { getLoggedInUser } from './auth';
 import { hasPermission } from './auth';
 import { LogSeverity } from '@/lib/types';
@@ -127,22 +129,29 @@ export async function uploadBackgroundImage(formData: FormData): Promise<{ succe
     }
 
     // --- Validation & Sanitization ---
-    // 1. Size check (e.g., 5MB)
-    const MAX_SIZE = 5 * 1024 * 1024;
-    if (file.size > MAX_SIZE) {
+    // Reject on the declared size before buffering the file into memory.
+    if (file.size > UPLOAD_POLICIES.bg.maxBytes) {
         return { success: false, error: 'File size exceeds 5MB limit' };
     }
 
-    // 2. Type check
-    const allowedExtensions = ['.png', '.jpg', '.jpeg', '.webp'];
-    const fileExtension = extname(file.name).toLowerCase();
-    if (!allowedExtensions.includes(fileExtension)) {
-        return { success: false, error: 'Invalid file type. Only PNG, JPG, JPEG, and WEBP are allowed.' };
+    const buffer = Buffer.from(await file.arrayBuffer());
+
+    // Strict allow list checked against the real magic bytes — an extension or
+    // a client-declared Content-Type alone proves nothing.
+    const validation = validateUpload('bg', { filename: file.name, declaredMime: file.type, buffer });
+    if (!validation.ok) {
+        await logSecurityEvent({
+            event: SecurityEvent.FILE_UPLOAD_REJECTED,
+            severity: LogSeverity.WARN,
+            actor: user,
+            details: `Rejected background-image upload '${file.name}' (declared=${file.type || 'none'}, ${file.size} bytes): ${validation.reason}.`,
+        });
+        return { success: false, error: validation.error };
     }
 
-    // 3. Filename sanitization
-    const sanitizedName = `ad_${Date.now()}_${file.name.replace(/[^a-z0-9.]/gi, '_').toLowerCase()}`;
-    
+    // Filename sanitization — the extension comes from the verified content.
+    const sanitizedName = buildStoredFilename(`ad_${randomUUID()}`, file.name, validation.type);
+
     try {
         const bgDir = join(process.cwd(), 'uploads', 'bg');
         
@@ -156,8 +165,9 @@ export async function uploadBackgroundImage(formData: FormData): Promise<{ succe
         }
 
         const absolutePath = join(bgDir, sanitizedName);
-        const buffer = Buffer.from(await file.arrayBuffer());
-        
+
+        // Write the exact bytes that were validated above — never re-read the
+        // stream, so what is inspected is what lands on disk.
         await writeFile(absolutePath, buffer);
         
         return { 

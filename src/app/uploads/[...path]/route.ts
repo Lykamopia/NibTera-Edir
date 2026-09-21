@@ -38,10 +38,14 @@ export async function GET(req: NextRequest, { params }: { params: { path: string
 
         try {
             const fileBuffer = await readFile(absolutePath);
+            // Safe because uploads are stored under a content-derived extension
+            // (see src/lib/file-validation.ts), so the extension cannot lie.
             const contentType = mime.lookup(absolutePath) || 'application/octet-stream';
             return new NextResponse(fileBuffer, {
                 status: 200,
-                headers: { 'Content-Type': contentType },
+                // nosniff: pin the browser to the declared type so a file whose
+                // trailing bytes look like markup can never be treated as HTML.
+                headers: { 'Content-Type': contentType, 'X-Content-Type-Options': 'nosniff' },
             });
         } catch (error: any) {
             if (error.code === 'ENOENT') return new NextResponse('File not found', { status: 404 });
@@ -204,15 +208,19 @@ export async function GET(req: NextRequest, { params }: { params: { path: string
 
         const headers = new Headers();
         headers.set('Content-Type', contentType);
-        
+        // Uploads are stored under a content-derived extension, so `contentType`
+        // reflects the verified bytes — nosniff holds the browser to it, which
+        // is what stops a permitted image with a markup-looking tail from ever
+        // being rendered as HTML on this origin.
+        headers.set('X-Content-Type-Options', 'nosniff');
+
         const disposition = 'inline';
         headers.set('Content-Disposition', `${disposition}; filename="${fileNameParts.join('')}"`);
-        
+
         if (fileType === 'signatures') {
             headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
             headers.set('Pragma', 'no-cache');
             headers.set('Expires', '0');
-            headers.set('X-Content-Type-Options', 'nosniff');
         }
 
         return new NextResponse(fileBuffer, {

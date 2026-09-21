@@ -582,7 +582,7 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
                       htmlFor="agreement-upload"
                       className="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-border p-8 text-center transition-colors hover:border-primary/50 hover:bg-primary/5"
                     >
-                      <input type="file" accept=".pdf,image/*" onChange={handleFileUpload} className="hidden" id="agreement-upload" disabled={agreementUploading} />
+                      <input type="file" accept=".pdf,.jpg,.jpeg,.png,.gif,.webp" onChange={handleFileUpload} className="hidden" id="agreement-upload" disabled={agreementUploading} />
                       {agreementUploading ? (
                         <>
                           <Loader2 className="mb-2 h-8 w-8 animate-spin text-muted-foreground" />
@@ -857,7 +857,7 @@ function EditEdirDialog({ edir, branches, onClose, onDone }: { edir: EdirItem; b
             <div className="space-y-1.5">
               <Label className="text-xs">Rules & Laws (Agreement Document)</Label>
               <label className="flex cursor-pointer items-center gap-2 rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground hover:border-primary/50 hover:bg-primary/5">
-                <input type="file" accept=".pdf,image/*" className="hidden" disabled={docUploading} onChange={async e => {
+                <input type="file" accept=".pdf,.jpg,.jpeg,.png,.gif,.webp" className="hidden" disabled={docUploading} onChange={async e => {
                   const f = e.target.files?.[0];
                   if (!f) return;
                   setDocUploading(true);

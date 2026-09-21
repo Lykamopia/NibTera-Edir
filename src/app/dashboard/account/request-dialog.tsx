@@ -162,7 +162,7 @@ export function RequestDialog({ type, onClose, onDone }: { type: string; onClose
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <Label className="text-xs">Supporting documents</Label>
-              <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={e => { const file = e.target.files?.[0]; if (file) onUpload(file); }} />
+              <input ref={fileRef} type="file" accept=".jpg,.jpeg,.png,.gif,.webp" className="hidden" onChange={e => { const file = e.target.files?.[0]; if (file) onUpload(file); }} />
               <Button type="button" size="sm" variant="outline" disabled={uploading} onClick={() => fileRef.current?.click()}>{uploading ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Upload className="mr-1 h-4 w-4" />} Attach</Button>
             </div>
             {attachments.length > 0 && (

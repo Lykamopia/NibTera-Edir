@@ -347,7 +347,7 @@ function DraftEditor({ draft, onChanged }: { draft: any; onChanged: () => void }
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <Label className="text-xs">Attachments</Label>
-              <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); }} />
+              <input ref={fileRef} type="file" accept=".jpg,.jpeg,.png,.gif,.webp" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); }} />
               <Button type="button" size="sm" variant="outline" onClick={() => fileRef.current?.click()}><Paperclip className="mr-1 h-4 w-4" /> Add attachment</Button>
             </div>
             {draft.attachments.length > 0 && (

@@ -466,7 +466,7 @@ function AddMemberDialog({ ctx, onCreated, onNeedsEmail }: {
                 ? <img src={form.photoUrl} alt="" className="h-16 w-16 rounded-2xl object-cover" />
                 : <span className="flex h-16 w-16 items-center justify-center rounded-2xl bg-muted text-muted-foreground">{(form.name || '?').slice(0, 2).toUpperCase()}</span>}
               <div>
-                <input ref={photoRef} type="file" accept="image/*" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) onPhoto(f); }} />
+                <input ref={photoRef} type="file" accept=".jpg,.jpeg,.png,.gif,.webp" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) onPhoto(f); }} />
                 <Button type="button" variant="outline" size="sm" disabled={uploadingPhoto} onClick={() => photoRef.current?.click()}>
                   {uploadingPhoto ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Upload className="mr-1 h-4 w-4" />} Profile Photo
                 </Button>

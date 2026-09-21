@@ -93,7 +93,7 @@ export default function RelativeDocuments({ relativeId, relativeName }: { relati
         {caps.canUpload && (
           <Button size="sm" variant="outline" className="h-8 gap-1.5" onClick={() => fileRef.current?.click()}><UploadCloud className="h-4 w-4" /> Upload</Button>
         )}
-        <input ref={fileRef} type="file" accept="image/*,application/pdf" className="hidden" onChange={e => { onPickFile(e.target.files?.[0]); if (fileRef.current) fileRef.current.value = ''; }} />
+        <input ref={fileRef} type="file" accept=".pdf,.jpg,.jpeg,.png,.gif,.webp" className="hidden" onChange={e => { onPickFile(e.target.files?.[0]); if (fileRef.current) fileRef.current.value = ''; }} />
       </div>
 
       {/* Drag & drop zone */}

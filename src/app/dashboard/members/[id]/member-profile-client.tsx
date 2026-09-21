@@ -663,7 +663,7 @@ function EditMemberDialog({ member, onClose, onDone }: { member: any; onClose: (
               ? <img src={form.photoUrl} alt="" className="h-16 w-16 rounded-2xl border object-cover" />
               : <span className="flex h-16 w-16 items-center justify-center rounded-2xl bg-muted text-lg font-bold text-muted-foreground">{(form.name || '?').slice(0, 2).toUpperCase()}</span>}
             <div>
-              <input ref={photoRef} type="file" accept="image/*" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) onPhoto(f); }} />
+              <input ref={photoRef} type="file" accept=".jpg,.jpeg,.png,.gif,.webp" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) onPhoto(f); }} />
               <Button type="button" variant="outline" size="sm" disabled={uploadingPhoto} onClick={() => photoRef.current?.click()}>
                 {uploadingPhoto ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Upload className="mr-1 h-4 w-4" />} Change photo
               </Button>
@@ -935,7 +935,7 @@ function MemberDocsTab({ profile, memberId, onChanged }: { profile: Profile; mem
                 <SelectContent>{DOC_CATEGORIES.map(c => <SelectItem key={c} value={c}>{c.replace(/_/g, ' ')}</SelectItem>)}</SelectContent>
               </Select>
             </div>
-            <input ref={fileRef} type="file" accept="image/*,application/pdf" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) onUpload(f); }} />
+            <input ref={fileRef} type="file" accept=".pdf,.jpg,.jpeg,.png,.gif,.webp" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) onUpload(f); }} />
             <Button variant="outline" disabled={busy} onClick={() => fileRef.current?.click()} className="border-dashed">
               {busy ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Upload className="mr-1.5 h-4 w-4" />} Upload document
             </Button>
