@@ -8,6 +8,7 @@ import '@/lib/approval-modules';
 import { writeAudit } from '@/lib/audit';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
+import { zId, zOptionalId, zUploadPath, zOptionalText } from '@/lib/validation';
 
 // Module-local only — a "use server" file may export *only* async functions, so
 // this constant must not be exported (Next throws "can only export async functions").
@@ -26,12 +27,12 @@ function fileTypeOf(name: string | null | undefined): 'image' | 'pdf' | 'file' {
 }
 
 const uploadSchema = z.object({
-  fileUrl: z.string().min(1, 'A file is required.'),
-  fileName: z.string().max(255).optional().nullable(),
-  documentName: z.string().max(160).optional().nullable(),
-  category: z.string().max(60).default('General'),
-  remarks: z.string().max(1000).optional().nullable(),
-  supersedesId: z.string().optional().nullable(), // set when uploading a new version
+  fileUrl: zUploadPath,
+  fileName: zOptionalText('File name', { max: 255 }),
+  documentName: zOptionalText('Document name', { max: 160 }),
+  category: z.enum([...RELATIVE_DOC_CATEGORIES, 'General']) /* 'General' = legacy default */.default('Other'),
+  remarks: zOptionalText('Remarks', { max: 1000, multiline: true }),
+  supersedesId: zOptionalId, // set when uploading a new version
 });
 
 async function loadRelative(relativeId: string) {
@@ -41,6 +42,7 @@ async function loadRelative(relativeId: string) {
 /** Maker action: upload a relative/dependent document (or a new version). Lands PENDING until a Checker approves. */
 export async function submitRelativeDocument(relativeId: string, input: z.infer<typeof uploadSchema>) {
   try {
+    relativeId = zId.parse(relativeId);
     const actor = await getActor();
     const rel = await loadRelative(relativeId);
     if (!rel) return { success: false as const, error: 'Relative not found.' };
@@ -95,14 +97,15 @@ export async function submitRelativeDocument(relativeId: string, input: z.infer<
 }
 
 const editSchema = z.object({
-  documentName: z.string().max(160).optional().nullable(),
-  category: z.string().max(60).optional().nullable(),
-  remarks: z.string().max(1000).optional().nullable(),
+  documentName: zOptionalText('Document name', { max: 160 }),
+  category: z.enum([...RELATIVE_DOC_CATEGORIES, 'General']) /* 'General' = legacy default */.optional().nullable(),
+  remarks: zOptionalText('Remarks', { max: 1000, multiline: true }),
 });
 
 /** Maker action: edit a document's metadata (category/name/remarks) — routed through approval. */
 export async function submitRelativeDocumentUpdate(documentId: string, input: z.infer<typeof editSchema>) {
   try {
+    documentId = zId.parse(documentId);
     const actor = await getActor();
     await assertPermission(actor, [...MAKER_PERMS]);
     const doc = await prisma.relativeDocument.findUnique({ where: { id: documentId }, include: { relative: { include: { member: { select: { edirId: true, name: true } } } } } });
@@ -133,6 +136,7 @@ export async function submitRelativeDocumentUpdate(documentId: string, input: z.
 /** Maker action: request deletion of a document — routed through approval. */
 export async function submitRelativeDocumentDelete(documentId: string) {
   try {
+    documentId = zId.parse(documentId);
     const actor = await getActor();
     await assertPermission(actor, [...MAKER_PERMS]);
     const doc = await prisma.relativeDocument.findUnique({ where: { id: documentId }, include: { relative: { include: { member: { select: { edirId: true, name: true } } } } } });
@@ -217,6 +221,7 @@ function serializeDoc(d: any, names: Map<string, string | null>) {
 
 /** Document lines (latest version + history) for a relative, plus the actor's capabilities. */
 export async function getRelativeDocuments(relativeId: string) {
+  relativeId = zId.parse(relativeId);
   const actor = await getActor();
   await assertPermission(actor, ['view_members', 'manage_members', 'manage_relatives', 'manage_documents', 'review_member_documents']);
   const rel = await loadRelative(relativeId);

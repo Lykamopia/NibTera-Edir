@@ -15,6 +15,8 @@ import {
   type MembershipPolicy,
 } from '@/lib/membership-policy';
 import { writeAudit } from '@/lib/audit';
+import { z } from 'zod';
+import { zText, zInt } from '@/lib/validation';
 import {
   readGeneralSettings, readEmailSettings,
   type AcknowledgementType, type ReferenceFormatSettings, type GeneralSettings, type EmailSettings,
@@ -160,6 +162,14 @@ export async function saveGeneralSettings(settings: {
     const actor = await getActor();
     await assertPermission(actor, [...PLATFORM_SETTINGS_PERMS]);
     const user = { id: actor.id, name: actor.name ?? actor.id };
+    // Stored verbatim as JSON — so only these keys/values are accepted.
+    settings = z.object({
+        acknowledgementType: z.enum(['BADGE', 'SIGNATURE']),
+        referenceFormat: z.object({ separator: z.enum(['-', '/']), numberLength: zInt('Reference number length', 1, 10) }),
+        acknowledgementMode: z.enum(['auto', 'manual']),
+        enableCriticalAlerts: z.boolean(),
+        showOnboardingTour: z.boolean().optional(),
+    }).parse(settings) as typeof settings;
     await prisma.setting.upsert({
         where: { key: 'general' },
         update: { value: settings },
@@ -184,6 +194,13 @@ export async function saveEmailSettings(settings: {
     const actor = await getActor();
     await assertPermission(actor, [...PLATFORM_SETTINGS_PERMS]);
     const user = { id: actor.id, name: actor.name ?? actor.id };
+    // Email template text is interpolated into outgoing HTML — plain text only.
+    settings = z.object({
+        notificationsEnabled: z.boolean(),
+        headerText: zText('Header text', { min: 1, max: 200 }),
+        bodyText: zText('Body text', { min: 1, max: 5000, multiline: true }),
+        footerText: zText('Footer text', { max: 500, multiline: true }),
+    }).parse(settings);
     await prisma.setting.upsert({
         where: { key: 'email' },
         update: { value: settings },
@@ -224,7 +241,7 @@ export async function saveMembershipSettings(settings: MembershipPolicy) {
     const actor = await getActor();
     await assertPermission(actor, ['manage_platform_settings', 'super_admin']);
 
-    const allowMultiEdir = !!settings?.allowMultiEdir;
+    const allowMultiEdir = z.object({ allowMultiEdir: z.boolean() }).parse(settings).allowMultiEdir;
     const previous = await getMembershipPolicy();
 
     await prisma.setting.upsert({

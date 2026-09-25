@@ -13,8 +13,20 @@ import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
 import { sanitizeHtml } from '@/lib/sanitize-html';
 import { dateWhere, type DateRangeParam } from '@/lib/date-range';
+import { toCsv } from '@/lib/csv';
+import { z } from 'zod';
+import { zId, zSearch, zDateRange, parseArgs } from '@/lib/validation';
 
 export type ApprovalTab = 'pending' | 'mine' | 'history';
+
+// Module-local (a 'use server' file may only export async functions).
+const tabSchema = z.enum(['pending', 'mine', 'history']);
+const filtersSchema = z.object({
+  module: z.preprocess(v => (v === '' ? null : v), z.string().max(64).regex(/^[A-Za-z_]+$/, 'Invalid filter.').nullable().optional()),
+  status: z.preprocess(v => (v === '' ? null : v), z.string().max(64).regex(/^[A-Za-z_]+$/, 'Invalid filter.').nullable().optional()),
+  query: zSearch,
+  range: zDateRange,
+});
 
 export interface ApprovalFilters {
   module?: string;
@@ -272,6 +284,7 @@ async function resolveApprovalContext(edirId: string, module: string, rawPayload
 }
 
 export async function getApprovals(tab: ApprovalTab, filters: ApprovalFilters = {}) {
+  [tab, filters] = parseArgs([tabSchema, filtersSchema], [tab, filters]) as [ApprovalTab, ApprovalFilters];
   const actor = await getActor();
   const where = buildApprovalWhere(actor, tab, filters);
   if (!where) return [];
@@ -314,6 +327,7 @@ export async function getApprovalStats() {
 
 /** CSV export of the current tab + filters. */
 export async function exportApprovalsCsv(tab: ApprovalTab, filters: ApprovalFilters = {}) {
+  [tab, filters] = parseArgs([tabSchema, filtersSchema], [tab, filters]) as [ApprovalTab, ApprovalFilters];
   const actor = await getActor();
   const where = buildApprovalWhere(actor, tab, filters);
   const rows = where
@@ -328,10 +342,11 @@ export async function exportApprovalsCsv(tab: ApprovalTab, filters: ApprovalFilt
     r.status,
     r.createdAt.toISOString(), r.updatedAt.toISOString(),
   ]);
-  return [header, ...body].map(line => line.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
+  return toCsv([header, ...body]);
 }
 
 export async function getApprovalDetail(id: string) {
+  id = zId.parse(id);
   const actor = await getActor();
   const request = await prisma.approvalRequest.findUnique({
     where: { id },

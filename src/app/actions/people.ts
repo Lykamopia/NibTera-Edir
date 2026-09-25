@@ -8,6 +8,11 @@ import { AccessDeniedError } from '@/lib/errors';
 import { ensureMembershipForUser } from '@/lib/membership-provisioning';
 import { dateWhere, type DateRangeParam } from '@/lib/date-range';
 import { pickPrimaryMembership } from '@/lib/membership-policy';
+import { toCsv } from '@/lib/csv';
+import { z } from 'zod';
+import { zOptionalId, zDateRange } from '@/lib/validation';
+
+const directoryParamsSchema = z.object({ edirId: z.preprocess(v => (v === 'all' ? null : v), zOptionalId), range: zDateRange });
 
 /**
  * Shared "directory" backend for the two separate management surfaces:
@@ -300,6 +305,7 @@ async function ensureEdirUserMemberships(edirId: string): Promise<void> {
 export async function getMembersDirectory(params: { edirId?: string; range?: DateRangeParam } = {}): Promise<{
   rows: PersonRow[]; context: DirectoryContext; stats: MembersStats;
 }> {
+  params = directoryParamsSchema.parse(params) as typeof params;
   const actor = await getActor();
   const caps = buildCaps(actor);
   if (!caps.canMembers) throw new AccessDeniedError('You do not have access to the Members directory.');
@@ -318,6 +324,7 @@ export async function getMembersDirectory(params: { edirId?: string; range?: Dat
 }
 
 export async function exportMembersDirectoryCsv(params: { edirId?: string; range?: DateRangeParam } = {}): Promise<string> {
+  params = directoryParamsSchema.parse(params) as typeof params;
   const actor = await getActor();
   const caps = buildCaps(actor);
   if (!caps.canMembers) throw new AccessDeniedError('You do not have access to the Members directory.');
@@ -329,7 +336,7 @@ export async function exportMembersDirectoryCsv(params: { edirId?: string; range
     r.joinDate ? new Date(r.joinDate).toLocaleDateString() : '', String(r.balance),
     r.hasLogin ? 'Yes' : 'No', r.lastLoginAt ? new Date(r.lastLoginAt).toLocaleDateString() : '',
   ]);
-  return [header, ...body].map(line => line.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
+  return toCsv([header, ...body]);
 }
 
 // ─── Users directory (Platform Users page) ───────────────────────────────────
@@ -357,6 +364,7 @@ function usersScopeWhere(actor: Awaited<ReturnType<typeof getActor>>, edirId?: s
 export async function getUsersDirectory(params: { edirId?: string; range?: DateRangeParam } = {}): Promise<{
   rows: PersonRow[]; context: DirectoryContext; stats: UsersStats;
 }> {
+  params = directoryParamsSchema.parse(params) as typeof params;
   const actor = await getActor();
   const caps = buildCaps(actor);
   if (!caps.canUsers && !caps.canAssociate) throw new AccessDeniedError('You do not have access to the Platform Users directory.');
@@ -376,6 +384,7 @@ export async function getUsersDirectory(params: { edirId?: string; range?: DateR
 }
 
 export async function exportUsersDirectoryCsv(params: { edirId?: string; range?: DateRangeParam } = {}): Promise<string> {
+  params = directoryParamsSchema.parse(params) as typeof params;
   const actor = await getActor();
   const caps = buildCaps(actor);
   if (!caps.canUsers && !caps.canAssociate) throw new AccessDeniedError('You do not have access to the Platform Users directory.');
@@ -386,5 +395,5 @@ export async function exportUsersDirectoryCsv(params: { edirId?: string; range?:
     r.roleName ?? '', r.accountStatus ?? '', r.locked ? 'Yes' : 'No',
     r.lastLoginAt ? new Date(r.lastLoginAt).toLocaleDateString() : '',
   ]);
-  return [header, ...body].map(line => line.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
+  return toCsv([header, ...body]);
 }

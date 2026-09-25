@@ -3,6 +3,7 @@
 import prisma from '@/lib/prisma';
 import { getActor, actorHasPermission, assertSameTenant } from '@/lib/tenant-scope';
 import { AccessDeniedError } from '@/lib/errors';
+import { zId } from '@/lib/validation';
 
 const num = (v: unknown) => Number(v ?? 0);
 
@@ -27,6 +28,7 @@ function isOversight(actor: Awaited<ReturnType<typeof getActor>>): boolean {
  * scope; tab visibility is returned as `caps` for role-based rendering.
  */
 export async function getEdirProfile(edirId: string) {
+  edirId = zId.parse(edirId);
   const actor = await getActor();
 
   const oversight = isOversight(actor);

@@ -6,6 +6,7 @@ import prisma from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
 import { writeAudit } from '@/lib/audit';
 import { failure } from '@/lib/action-result';
+import { zId, zOptionalId, zName, zCode, zOptionalText } from '@/lib/validation';
 
 const BRANCH_MANAGER_PERMISSIONS = [
   'view_dashboard', 'view_branches',
@@ -34,6 +35,7 @@ async function provisionBranchRoles(branchId: string) {
 
 export async function getBranches(districtId?: string | null) {
   try {
+    districtId = zOptionalId.parse(districtId);
     const actor = await getActor();
     // Edir registrars/managers also read branches to pick one when registering an Edir.
     await assertPermission(actor, ['view_branches', 'manage_branches', 'create_branch', 'edit_branch', 'manage_districts', 'register_edir', 'approve_edir_registration', 'manage_edirs', 'create_edir', 'super_admin']);
@@ -75,6 +77,7 @@ export async function getBranches(districtId?: string | null) {
 
 export async function saveBranch(input: { id?: string; name: string; code: string; districtId: string; description?: string }) {
   try {
+    input = z.object({ id: zId.optional(), name: zName('Branch name', 120), code: zCode('Branch code'), districtId: zId, description: zOptionalText('Description', { max: 500, multiline: true }) }).parse(input) as typeof input;
     const actor = await getActor();
     await assertPermission(actor, input.id ? ['edit_branch', 'manage_branches', 'manage_districts', 'super_admin'] : ['create_branch', 'manage_branches', 'manage_districts', 'super_admin']);
 
@@ -131,10 +134,10 @@ export async function saveBranch(input: { id?: string; name: string; code: strin
 }
 
 const importBranchRow = z.object({
-  name: z.string().trim().min(1, 'Name is required'),
-  code: z.string().trim().min(1, 'Code is required'),
-  district: z.string().trim().min(1, 'District (code or name) is required'),
-  description: z.string().trim().optional().nullable(),
+  name: zName('Name', 120),
+  code: zCode('Code'),
+  district: zName('District (code or name)', 120),
+  description: zOptionalText('Description', { max: 500, multiline: true }),
 });
 
 export interface ImportResult {
@@ -202,6 +205,7 @@ export async function importBranches(rows: unknown[]): Promise<ImportResult | { 
 
 export async function deleteBranch(id: string) {
   try {
+    id = zId.parse(id);
     const actor = await getActor();
     await assertPermission(actor, ['delete_branch', 'manage_branches', 'manage_districts', 'super_admin']);
 

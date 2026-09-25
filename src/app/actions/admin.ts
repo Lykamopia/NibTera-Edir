@@ -19,11 +19,13 @@ import { resubmitRequest, submitForApproval } from '@/lib/approval-engine';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
 import { dateWhere, type DateRangeParam } from '@/lib/date-range';
+import { toCsv } from '@/lib/csv';
+import { zId, zOptionalId, zName, zEmail, zEthiopianPhone, zOptionalEmail, zOptionalText, zOptionalPhone, zOptionalUploadPath, zCode, zInt, zSearch, zDateRange, parseArgs } from '@/lib/validation';
 
 // ─── Users ───────────────────────────────────────────────────────────────────
 
 export async function getUserLockoutStatus(identifier: string) {
-  if (!identifier) return { isLockedOut: false };
+  if (!identifier || typeof identifier !== 'string' || identifier.length > 254) return { isLockedOut: false };
   const id = identifier.trim();
   const user = await prisma.user.findFirst({
     where: id.includes('@') ? { email: id.toLowerCase() } : { phone: normalizeEthiopianPhone(id) },
@@ -96,11 +98,11 @@ async function inviteOneUser(
 }
 
 const inviteSchema = z.object({
-  name: z.string().min(2),
-  email: z.string().email(),
-  phone: z.string().min(9),
-  roleId: z.string().optional().nullable(),
-  edirId: z.string().optional().nullable(), // required for Super-Admins; ignored for Edir admins
+  name: zName(),
+  email: zEmail,
+  phone: zEthiopianPhone,
+  roleId: zOptionalId,
+  edirId: zOptionalId, // required for Super-Admins; ignored for Edir admins
 });
 
 /** Invite a user: validate unique email+phone, create INVITED user, 48h token, email set-password link. */
@@ -160,6 +162,10 @@ export interface BulkInviteResult {
  */
 export async function bulkInviteUsers(input: { edirId?: string | null; rows: BulkUserRow[] }) {
   try {
+    input = z.object({
+      edirId: zOptionalId,
+      rows: z.array(z.object({ name: z.unknown().optional(), email: z.unknown().optional(), phone: z.unknown().optional(), role: z.unknown().optional() }).passthrough()).max(500, 'Import is limited to 500 rows at a time.'),
+    }).parse(input) as typeof input;
     const actor = await getActor();
     await assertPermission(actor, 'manage_users');
     if (actor.isSuperAdmin && !input.edirId) return { success: false as const, error: 'Select an Edir for the imported users.' };
@@ -178,15 +184,18 @@ export async function bulkInviteUsers(input: { edirId?: string | null; rows: Bul
 
     type Norm = { idx: number; name: string; email: string; phone: string; roleId: string | null; error?: string };
     const normalized: Norm[] = rows.map((r, i) => {
-      const name = (r.name ?? '').trim();
-      const email = (r.email ?? '').toLowerCase().trim();
-      const rawPhone = (r.phone ?? '').trim();
-      const roleName = (r.role ?? '').trim();
+      const str = (v: unknown) => (typeof v === 'string' || typeof v === 'number' ? String(v) : '');
+      const name = str(r.name).trim();
+      const email = str(r.email).toLowerCase().trim();
+      const rawPhone = str(r.phone).trim();
+      const roleName = str(r.role).trim();
       let error: string | undefined;
       let roleId: string | null = null;
-      if (name.length < 2) error = 'Name is required.';
-      else if (!EMAIL_RE.test(email)) error = 'Invalid email.';
-      else if (!isValidEthiopianPhone(rawPhone)) error = 'Invalid phone number.';
+      const nameCheck = zName().safeParse(name);
+      if (!nameCheck.success) error = nameCheck.error.issues[0].message;
+      else if (email.length > 254 || !EMAIL_RE.test(email)) error = 'Invalid email.';
+      else if (rawPhone.length > 20 || !isValidEthiopianPhone(rawPhone)) error = 'Invalid phone number.';
+      else if (roleName.length > 80) error = 'Role name is too long.';
       else if (roleName) {
         const id = roleByName.get(roleName.toLowerCase());
         if (!id) error = `Unknown role "${roleName}".`;
@@ -263,6 +272,7 @@ async function assertCanAdministerUser(
 
 export async function setUserRole(userId: string, roleId: string | null) {
   try {
+    [userId, roleId] = parseArgs([zId, zOptionalId], [userId, roleId]) as [string, string | null];
     const actor = await getActor();
     await assertPermission(actor, 'manage_users');
     const user = await prisma.user.findUnique({ where: { id: userId } });
@@ -294,10 +304,10 @@ export async function setUserRole(userId: string, roleId: string | null) {
 }
 
 const userAccountSchema = z.object({
-  name: z.string().trim().min(2, 'Name is required.').max(120),
-  email: z.string().trim().email('A valid email is required.').max(254),
-  phone: z.string().trim().min(7, 'Phone is required.').max(20),
-  roleId: z.string().trim().optional().nullable(),
+  name: zName(),
+  email: zEmail,
+  phone: zEthiopianPhone,
+  roleId: zOptionalId,
   status: z.enum(['ACTIVE', 'INACTIVE', 'SUSPENDED']).optional(),
 });
 
@@ -309,6 +319,7 @@ const userAccountSchema = z.object({
  */
 export async function updateUserAccount(userId: string, input: z.infer<typeof userAccountSchema>) {
   try {
+    userId = zId.parse(userId);
     const actor = await getActor();
     await assertPermission(actor, 'manage_users');
     const data = userAccountSchema.parse(input);
@@ -387,6 +398,7 @@ export async function updateUserAccount(userId: string, input: z.infer<typeof us
 
 export async function setUserStatus(userId: string, status: 'ACTIVE' | 'INACTIVE' | 'SUSPENDED') {
   try {
+    [userId, status] = parseArgs([zId, z.enum(['ACTIVE', 'INACTIVE', 'SUSPENDED'])], [userId, status]) as [string, typeof status];
     const actor = await getActor();
     await assertPermission(actor, 'manage_users');
     const user = await prisma.user.findUnique({ where: { id: userId } });
@@ -405,6 +417,7 @@ export async function lockUser(userId: string) { return setUserLock(userId, true
 export async function unlockUser(userId: string) { return setUserLock(userId, false); }
 async function setUserLock(userId: string, lock: boolean) {
   try {
+    userId = zId.parse(userId);
     const actor = await getActor();
     await assertPermission(actor, lock ? 'lock_user' : 'unlock_user');
     const user = await prisma.user.findUnique({ where: { id: userId } });
@@ -438,6 +451,7 @@ async function setUserLock(userId: string, lock: boolean) {
  */
 export async function adminGenerateTempPassword(userId: string, opts?: { email?: string }) {
   try {
+    [userId, opts] = parseArgs([zId, z.object({ email: zOptionalEmail }).optional()], [userId, opts]) as [string, { email?: string } | undefined];
     const actor = await getActor();
     await assertPermission(actor, ['reset_password', 'manage_edirs', 'create_edir', 'register_edir', 'manage_edir_users']);
     const user = await prisma.user.findUnique({ where: { id: userId }, include: { role: { select: { scope: true } } } });
@@ -502,6 +516,7 @@ export async function adminGenerateTempPassword(userId: string, opts?: { email?:
  * account within their org unit.
  */
 export async function getPlatformUserProfile(userId: string) {
+  userId = zId.parse(userId);
   const actor = await getActor();
   await assertPermission(actor, ['view_users', 'manage_users', 'manage_associations', 'manage_edir_associations', 'manage_edir_users']);
   const user = await prisma.user.findUnique({
@@ -588,13 +603,14 @@ export async function getPlatformUserProfile(userId: string) {
 // ─── Roles ───────────────────────────────────────────────────────────────────
 
 const roleSchema = z.object({
-  id: z.string().optional(),
-  name: z.string().min(2),
-  permissions: z.array(z.string()).default([]),
+  id: zId.optional(),
+  name: zName('Role name', 80),
+  // Allowlisted again against the permission registry when saved.
+  permissions: z.array(z.string().max(64).regex(/^[a-z0-9_]+$/, 'Invalid permission.')).max(500).default([]),
   // Scope is set on create; 'EDIR' (a specific Edir or a cross-Edir template) or
   // 'PLATFORM' (a platform role). Edir Admins always create EDIR roles.
   scope: z.enum(['EDIR', 'PLATFORM']).default('EDIR'),
-  edirId: z.string().nullable().optional(), // EDIR scope: target Edir, or null = template for all Edirs
+  edirId: zOptionalId, // EDIR scope: target Edir, or null = template for all Edirs
 });
 
 export async function saveRole(input: z.infer<typeof roleSchema>) {
@@ -682,6 +698,7 @@ export async function saveRole(input: z.infer<typeof roleSchema>) {
 
 export async function deleteRole(id: string) {
   try {
+    id = zId.parse(id);
     const actor = await getActor();
     await assertPermission(actor, 'manage_roles');
     const role = await prisma.role.findUnique({ where: { id }, include: { _count: { select: { users: true } } } });
@@ -780,6 +797,19 @@ export interface SaveEdirInput {
 
 export async function saveEdir(input: SaveEdirInput) {
   try {
+    input = z.object({
+      id: zId.optional(),
+      name: zName('Edir name', 160),
+      description: zOptionalText('Description', { max: 2000, multiline: true }),
+      accountNumber: z.preprocess(v => (typeof v === 'string' && v.trim() === '' ? null : v), z.string().trim().regex(/^[0-9]{6,20}$/, 'Account number must be 6–20 digits.').nullable().optional()),
+      address: zOptionalText('Address', { max: 300 }),
+      branchId: zOptionalId,
+      contactPersonName: zOptionalText('Contact person', { max: 120 }),
+      contactAddress: zOptionalText('Contact address', { max: 300 }),
+      contactMobile: zOptionalPhone,
+      contactEmail: zOptionalEmail,
+      agreementDocUrl: zOptionalUploadPath,
+    }).parse(input) as SaveEdirInput;
     const actor = await getActor();
     // Granular: editing requires edit_edir, creating requires create_edir (manage_edirs/super_admin are the umbrella).
     await assertPermission(actor, input.id ? ['edit_edir', 'manage_edirs', 'super_admin'] : ['create_edir', 'manage_edirs', 'super_admin']);
@@ -874,6 +904,7 @@ export async function saveEdir(input: SaveEdirInput) {
 /** Revoke (deactivate) or restore an Edir without deleting it. */
 export async function revokeEdir(edirId: string, status: 'ACTIVE' | 'SUSPENDED' | 'CLOSED') {
   try {
+    [edirId, status] = parseArgs([zId, z.enum(['ACTIVE', 'SUSPENDED', 'CLOSED'])], [edirId, status]) as [string, typeof status];
     const actor = await getActor();
     await assertPermission(actor, ['revoke_edir', 'manage_edirs', 'super_admin']);
     const edir = await prisma.edir.findUnique({ where: { id: edirId }, select: { id: true, name: true, status: true } });
@@ -893,6 +924,7 @@ export async function revokeEdir(edirId: string, status: 'ACTIVE' | 'SUSPENDED' 
 /** Permanently delete an Edir — only when it has no operational data. */
 export async function deleteEdir(edirId: string) {
   try {
+    edirId = zId.parse(edirId);
     const actor = await getActor();
     await assertPermission(actor, ['delete_edir', 'manage_edirs', 'super_admin']);
     const edir = await prisma.edir.findUnique({ where: { id: edirId }, select: { id: true, name: true } });
@@ -942,6 +974,7 @@ export async function deleteEdir(edirId: string) {
 // ─── Logs (read) ─────────────────────────────────────────────────────────────
 
 export async function getSecurityLogs(page = 1, limit = 20) {
+  [page, limit] = parseArgs([zInt('Page', 1, 100_000), zInt('Limit', 1, 100)], [page, limit]) as [number, number];
   const actor = await getActor();
   await assertPermission(actor, ['view_audit_log', 'manage_audit_log']);
   const [items, total] = await Promise.all([
@@ -951,7 +984,16 @@ export async function getSecurityLogs(page = 1, limit = 20) {
   return { items, total, pages: Math.ceil(total / limit) };
 }
 
-function auditWhere(actor: Actor, params: { action?: string; query?: string; archived?: boolean; range?: DateRangeParam }): Prisma.AuditLogWhereInput {
+const auditFilterSchema = z.object({
+  page: zInt('Page', 1, 100_000).optional(),
+  action: z.preprocess(v => (v === '' ? null : v), z.string().trim().max(64).regex(/^[A-Z0-9_]+$/i, 'Invalid action filter.').nullable().optional()),
+  query: zSearch,
+  archived: z.boolean().optional(),
+  range: zDateRange,
+});
+
+function auditWhere(actor: Actor, rawParams: { action?: string; query?: string; archived?: boolean; range?: DateRangeParam }): Prisma.AuditLogWhereInput {
+  const params = auditFilterSchema.parse(rawParams);
   return {
     ...tenantWhere(actor),
     ...dateWhere('createdAt', params.range),
@@ -962,6 +1004,7 @@ function auditWhere(actor: Actor, params: { action?: string; query?: string; arc
 }
 
 export async function getAuditLogs(params: { page?: number; action?: string; query?: string; archived?: boolean; range?: DateRangeParam } = {}) {
+  params = auditFilterSchema.parse(params) as typeof params;
   const actor = await getActor();
   await assertPermission(actor, ['view_audit_log', 'manage_audit_log']);
   const page = Math.max(1, params.page ?? 1);
@@ -976,6 +1019,7 @@ export async function getAuditLogs(params: { page?: number; action?: string; que
 
 export async function archiveAuditLog(id: string) {
   try {
+    id = zId.parse(id);
     const { actor, edirId } = await requireActor('manage_audit_log');
     const log = await prisma.auditLog.findUnique({ where: { id } });
     if (!log) return { success: false as const, error: 'Audit entry not found.' };
@@ -998,5 +1042,5 @@ export async function exportAuditCsv(params: { action?: string; query?: string; 
     a.createdAt.toISOString(), a.action, a.user?.name ?? a.user?.email ?? 'System',
     a.targetType ?? '', a.targetId ?? '', a.details ?? '',
   ]);
-  return [header, ...rows].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
+  return toCsv([header, ...rows]);
 }

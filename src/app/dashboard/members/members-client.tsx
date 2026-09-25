@@ -392,7 +392,7 @@ function RowActions({ r, ctx, onView, onRemoveMember, onResetPassword, onStatusC
 // ─── Add Member ──────────────────────────────────────────────────────────────
 
 const EMPTY_MEMBER: MemberInput = {
-  name: '', occupation: '', photoUrl: '', dateOfBirth: '', gender: '', nationalId: '',
+  name: '', occupation: '', photoUrl: '', dateOfBirth: '', gender: null, nationalId: '',
   phone: '', email: '', address: '', city: '', subcity: '', woreda: '',
   emergencyContactName: '', emergencyContactPhone: '', role: 'Member', roleId: '', edirId: '',
   registrationInstallmentCount: 1, joinDate: '',

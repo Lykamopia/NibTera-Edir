@@ -11,6 +11,7 @@ import '@/lib/approval-modules';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
 import { dateWhere, type DateRangeParam } from '@/lib/date-range';
+import { zId, zOptionalId, zName, zText, zOptionalText, zMoney, zInt, zSearch, zDateRange, zFilter } from '@/lib/validation';
 
 /** Tenant-wide asset KPIs for the summary cards (filtered by registration date). */
 export async function getAssetSummary(range?: DateRangeParam) {
@@ -47,7 +48,7 @@ export async function getAssetCategories() {
   return prisma.assetCategory.findMany({ where: tenantWhere(actor), orderBy: { name: 'asc' } });
 }
 
-const categorySchema = z.object({ id: z.string().optional(), name: z.string().min(2, 'Name is required.') });
+const categorySchema = z.object({ id: zId.optional(), name: zName('Category name', 80) });
 
 export async function saveAssetCategory(input: z.infer<typeof categorySchema>) {
   try {
@@ -71,6 +72,7 @@ export async function saveAssetCategory(input: z.infer<typeof categorySchema>) {
 
 export async function deleteAssetCategory(id: string) {
   try {
+    id = zId.parse(id);
     const { actor, edirId } = await requireActor('manage_asset_categories');
     const existing = await prisma.assetCategory.findUnique({ where: { id } });
     if (!existing) return { success: false as const, error: 'Category not found.' };
@@ -87,6 +89,7 @@ export async function deleteAssetCategory(id: string) {
 // ─── Assets (inventory) ──────────────────────────────────────────────────────
 
 export async function getAssets(params: { status?: string; query?: string; categoryId?: string; range?: DateRangeParam } = {}) {
+  params = z.object({ status: z.preprocess(v => (v === '' ? null : v), z.string().max(32).regex(/^[a-z_]+$/i, 'Invalid status.').nullable().optional()), query: zSearch, categoryId: zOptionalId, range: zDateRange }).parse(params) as typeof params;
   const actor = await getActor();
   await assertPermission(actor, ['view_assets', 'manage_assets']);
   const where: Prisma.AssetWhereInput = {
@@ -107,15 +110,15 @@ export async function getAssets(params: { status?: string; query?: string; categ
 }
 
 const assetSchema = z.object({
-  id: z.string().optional(),
-  name: z.string().min(2, 'Name is required.'),
-  categoryId: z.string().optional().nullable(),
-  purchaseValue: z.coerce.number().min(0).default(0),
-  currentValue: z.coerce.number().min(0).optional(),
-  quantity: z.coerce.number().int().min(1).default(1),
-  condition: z.string().default('good'),
-  location: z.string().optional().nullable(),
-  compensationCost: z.coerce.number().min(0).default(0),
+  id: zId.optional(),
+  name: zName('Asset name', 120),
+  categoryId: zOptionalId,
+  purchaseValue: zMoney('Purchase value').default(0),
+  currentValue: zMoney('Current value').optional(),
+  quantity: zInt('Quantity', 1, 100_000).default(1),
+  condition: zText('Condition', { min: 1, max: 40 }).default('good'),
+  location: zOptionalText('Location', { max: 200 }),
+  compensationCost: zMoney('Compensation cost').default(0),
 });
 
 export async function saveAsset(input: z.infer<typeof assetSchema>) {
@@ -165,6 +168,7 @@ export async function saveAsset(input: z.infer<typeof assetSchema>) {
 
 export async function deleteAsset(id: string) {
   try {
+    id = zId.parse(id);
     const { actor, edirId } = await requireActor(['delete_asset', 'manage_assets']);
     const existing = await prisma.asset.findUnique({ where: { id }, include: { _count: { select: { issuances: true } } } });
     if (!existing) return { success: false as const, error: 'Asset not found.' };
@@ -184,6 +188,7 @@ export async function deleteAsset(id: string) {
 const OPEN_STATUSES: Prisma.ApprovalRequestWhereInput['status'] = { in: ['PENDING', 'RETURNED'] };
 
 export async function getIssuances(params: { status?: string; range?: DateRangeParam } = {}) {
+  params = z.object({ status: zFilter(['REQUESTED', 'APPROVED', 'ISSUED', 'RETURNED', 'COMPENSATION_PENDING', 'CLOSED']), range: zDateRange }).parse(params) as typeof params;
   const actor = await getActor();
   await assertPermission(actor, ['view_assets', 'manage_assets']);
   const where: Prisma.AssetIssuanceWhereInput = {
@@ -220,9 +225,9 @@ export async function getIssuances(params: { status?: string; range?: DateRangeP
 }
 
 const issueSchema = z.object({
-  assetId: z.string().min(1),
-  memberId: z.string().min(1, 'A member is required.'),
-  qty: z.coerce.number().int().min(1).default(1),
+  assetId: zId,
+  memberId: zId,
+  qty: zInt('Quantity', 1, 100_000).default(1),
 });
 
 /** Maker requests issuing an asset to a member (ASSET_ISSUANCE Maker–Checker). */
@@ -264,10 +269,10 @@ export async function requestIssuance(input: z.infer<typeof issueSchema>) {
 }
 
 const returnSchema = z.object({
-  issuanceId: z.string().min(1),
-  returnedQty: z.coerce.number().int().min(1),
-  condition: z.string().optional().nullable(),
-  compensation: z.coerce.number().min(0).default(0),
+  issuanceId: zId,
+  returnedQty: zInt('Returned quantity', 1, 100_000),
+  condition: z.enum(['good', 'damaged', 'lost']).optional().nullable(),
+  compensation: zMoney('Compensation').default(0),
 });
 
 /**

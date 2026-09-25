@@ -3,8 +3,10 @@
 import prisma from "@/lib/prisma";
 import { getLoggedInUser } from "@/app/actions/auth";
 import { dateWhere, type DateRangeParam } from "@/lib/date-range";
+import { zId, zInt, zDateRange, parseArgs } from "@/lib/validation";
 
 export async function getNotifications(limit = 30, range?: DateRangeParam) {
+  [limit, range] = parseArgs([zInt('Limit', 1, 100), zDateRange], [limit, range]) as [number, DateRangeParam | undefined];
   const user = await getLoggedInUser();
   if (!user) return [];
 
@@ -40,6 +42,7 @@ export async function getUnreadCount() {
 export async function markAsRead(id: string) {
   const user = await getLoggedInUser();
   if (!user) return;
+  if (!zId.safeParse(id).success) return;
 
   await prisma.notification.updateMany({
     where: { id, userId: user.id },

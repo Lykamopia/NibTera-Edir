@@ -22,9 +22,9 @@ const PERMISSIONS_POLICY = [
 const PUBLIC_PAGE_CSP = [
   "default-src 'self'",
   "script-src 'self' 'unsafe-inline'",
-  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-  "img-src 'self' data: https://images.unsplash.com https://cdn.brandfetch.io https://picsum.photos",
-  "font-src 'self' https://fonts.gstatic.com",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "font-src 'self'",
   "connect-src 'self'",
   "object-src 'none'",
   "base-uri 'self'",
@@ -62,9 +62,9 @@ const EMBED_FRAME_ANCESTORS = (process.env.FRAME_ANCESTORS || '').trim() || '*';
 const EMBED_PAGE_CSP = [
   "default-src 'self'",
   "script-src 'self' 'unsafe-inline'",
-  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
-  "font-src 'self' https://fonts.gstatic.com",
+  "font-src 'self'",
   "connect-src 'self'",
   "object-src 'none'",
   "base-uri 'self'",
@@ -118,20 +118,8 @@ const nextConfig: NextConfig = {
     imageSizes: [32, 64, 128, 256],
     contentDispositionType: 'attachment',
     contentSecurityPolicy: "default-src 'none'; script-src 'none'; sandbox;",
-    remotePatterns: [
-      {
-        protocol: 'https',
-        hostname: 'images.unsplash.com',
-        port: '',
-        pathname: '/**',
-      },
-      {
-        protocol: 'https',
-        hostname: 'cdn.brandfetch.io',
-        port: '',
-        pathname: '/id3xwknDM-/**',
-      }
-    ],
+    // No remote image hosts: every image is served from our own origin.
+    remotePatterns: [],
   },
 };
 

@@ -30,6 +30,7 @@ import { getPaymentLogs, getPaymentLogSummary, exportPaymentLogCsv, voidPayment,
 import { PAYMENT_LOG_STATUS_LABEL, PAYMENT_LOG_STATUS_TONE, paymentLogStatusLabel } from '@/lib/payment-log-status';
 import { PaymentReceiptModal } from '@/components/payment-receipt-modal';
 import { usePrompt } from '@/components/ui/confirm-provider';
+import { toCsv } from '@/lib/csv';
 
 const PAGE_SIZE = 25;
 type SortKey = NonNullable<PaymentLogSort['key']>;
@@ -132,7 +133,7 @@ export default function PaymentLogClient() {
       l.coverage ? `${l.coverage.from ?? ''}${l.coverage.to ? ` - ${l.coverage.to}` : ''}${l.coverage.months ? ` (${l.coverage.months} mo)` : ''}` : '',
       String(l.amount), l.displayStatus ?? paymentLogStatusLabel(l.status),
     ]);
-    downloadCsv([header, ...body].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n'), name);
+    downloadCsv(toCsv([header, ...body]), name);
   };
 
   const onExportAll = async () => {

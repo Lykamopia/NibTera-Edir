@@ -13,6 +13,24 @@ import { debugLog } from '@/lib/debug';
 import { payLog, maskToken } from '@/lib/pay-log';
 import { generateOfficialReceipt } from '@/lib/nib-receipt';
 import { normalizeEthiopianPhone } from '@/lib/utils';
+import { z } from 'zod';
+import { zId, zOptionalId, zMoney } from '@/lib/validation';
+
+const MAX_TOKEN_LENGTH = 8192;
+const isToken = (t: unknown): t is string => typeof t === 'string' && t.length > 0 && t.length <= MAX_TOKEN_LENGTH && !/[\s<>]/.test(t);
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Client-sent payment breakdown: stored on the payment record, so only these
+// numeric fields are kept (unknown keys — e.g. an attempt to inject receipt
+// fields like edirName / edirAccount / payerName — are stripped).
+const zAmount = z.coerce.number().finite().min(-1_000_000_000).max(1_000_000_000);
+const breakdownSchema = z.object({
+  source: z.literal('mini-app').optional(),
+  outstanding: zAmount.optional(), monthlyFee: zAmount.optional(),
+  installment: zAmount.optional(), arrears: zAmount.optional(), latePenalty: zAmount.optional(),
+  registrationFee: zAmount.optional(), reinstatementFee: zAmount.optional(), assetCompensation: zAmount.optional(),
+  eventPenalties: zAmount.optional(), interest: zAmount.optional(), serviceFees: zAmount.optional(), other: zAmount.optional(),
+}).default({});
 
 /** Resolve the active Super App token from header → cookie → query → mock. */
 async function resolveToken(queryToken?: string): Promise<string | null> {
@@ -76,6 +94,7 @@ function phoneTail(s?: string | null): string {
  * longer auto-loads member data; the user fetches it explicitly.
  */
 export async function validateNibToken(queryToken?: string) {
+  if (queryToken !== undefined && !isToken(queryToken)) queryToken = undefined;
   const requestId = `${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
   payLog('validateNibToken', `STEP 1/2 START (req ${requestId})`, { hasQueryToken: !!queryToken });
   try {
@@ -110,6 +129,8 @@ export async function validateNibToken(queryToken?: string) {
  * that only ever expect a single record.
  */
 export async function fetchMemberForPayment(phone: string, queryToken?: string) {
+  if (typeof phone !== 'string' || phone.length > 20 || !/^\+?[0-9 ()-]*$/.test(phone)) return { status: 'invalid' as const, message: 'Please enter a valid phone number.' };
+  if (queryToken !== undefined && !isToken(queryToken)) queryToken = undefined;
   payLog('fetchMember', 'START', { phone });
   try {
     const cleaned = (phone || '').trim();
@@ -148,6 +169,14 @@ export async function clearNibSession() {
  * abandoned payment from appearing as if it were already paid.
  */
 export async function getPaymentToken(amount: number, token: string, memberId: string, edirId: string, breakdown: any) {
+  const input = z.tuple([
+    zMoney('Amount').refine(v => v > 0, 'Amount must be greater than zero.'),
+    z.string().refine(isToken, 'Invalid session token.'),
+    zId, zOptionalId, breakdownSchema,
+  ]).safeParse([amount, token, memberId, edirId, breakdown]);
+  if (!input.success) return { status: 'error', message: input.error.issues[0]?.message || 'Invalid payment request.', transactionId: '' };
+  [amount, token, memberId, , breakdown] = input.data;
+  edirId = input.data[3] ?? '';
   const transactionId = crypto.randomUUID();
   const transactionTime = format(new Date(), 'yyyyMMddHHmmss');
 
@@ -335,11 +364,14 @@ export async function getPaymentToken(amount: number, token: string, memberId: s
 }
 
 export async function pollPaymentDatabaseState(phone: string, transactionId: string, previousOutstanding?: number, queryToken?: string) {
+  if (typeof transactionId !== 'string' || !UUID_RE.test(transactionId) || typeof phone !== 'string' || phone.length > 20) return { status: 'unauthorized' as const };
+  if (previousOutstanding !== undefined && !Number.isFinite(previousOutstanding)) previousOutstanding = undefined;
   if (!(await authenticateMiniApp(queryToken))) return { status: 'unauthorized' as const };
   return getPendingPaymentStatus(transactionId, phone, previousOutstanding);
 }
 
 export async function checkTransactionStatus(transactionId: string, queryToken?: string) {
+  if (typeof transactionId !== 'string' || !UUID_RE.test(transactionId)) return { status: 'pending' };
   const auth = await authenticateMiniApp(queryToken);
   if (!auth) return { status: 'unauthorized' };
   const log = await prisma.paymentLog.findUnique({
@@ -367,6 +399,7 @@ export async function checkTransactionStatus(transactionId: string, queryToken?:
  * same id the history list shows.
  */
 export async function getOfficialBankReceipt(transactionId: string, queryToken?: string) {
+  if (typeof transactionId !== 'string' || !UUID_RE.test(transactionId)) return { success: false as const, error: 'Payment not found.' };
   payLog('receipt', 'mini-app receipt requested', { transactionId });
   try {
     const token = await resolveToken(queryToken);

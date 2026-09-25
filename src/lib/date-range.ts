@@ -116,14 +116,28 @@ export function computeRange(preset: DatePreset, customFrom?: Date | null, custo
 /** Server side: turn a serializable param into concrete inclusive bounds.
  *  Relative presets are recomputed against the server's "now". */
 export function resolveBounds(param?: DateRangeParam | DateRangeValue | null): { from: Date | null; to: Date | null } {
-  if (!param || param.preset === 'all') return { from: null, to: null };
+  // This is the single server-side entry point for every date filter a client
+  // sends to a Server Action, so it validates defensively: an unknown preset or
+  // an unparseable / out-of-range custom date is ignored (no filter) rather than
+  // reaching Prisma as an Invalid Date.
+  if (!param || typeof param !== 'object' || param.preset === 'all') return { from: null, to: null };
+  if (!DATE_PRESETS.some(p => p.id === param.preset)) return { from: null, to: null };
   if (param.preset === 'custom') {
-    const from = param.from ? startOfDay(new Date(param.from)) : null;
-    const to = param.to ? endOfDay(new Date(param.to)) : null;
-    return { from, to };
+    const from = safeDate(param.from);
+    const to = safeDate(param.to);
+    return { from: from ? startOfDay(from) : null, to: to ? endOfDay(to) : null };
   }
   const r = computeRange(param.preset);
   return { from: r.from, to: r.to };
+}
+
+/** Parses a client-supplied date; null unless it is a real date between 1900 and 2100. */
+function safeDate(value: unknown): Date | null {
+  if (value == null || value === '') return null;
+  if (!(value instanceof Date) && (typeof value !== 'string' || value.length > 40)) return null;
+  const d = value instanceof Date ? value : new Date(value);
+  const y = d.getFullYear();
+  return Number.isNaN(d.getTime()) || y < 1900 || y > 2100 ? null : d;
 }
 
 /**

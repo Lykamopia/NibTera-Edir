@@ -9,6 +9,7 @@ import { submitForApproval } from '@/lib/approval-engine';
 import '@/lib/approval-modules';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
+import { zId, zOptionalId, zText, zOptionalText, zComment, parseArgs } from '@/lib/validation';
 
 // Governance rules that live on EdirSettings and may be changed via Maker–Checker.
 const RULE_FIELDS = {
@@ -62,8 +63,8 @@ export async function getRulesOverview() {
 
 const settingChangeSchema = z.object({
   field: z.enum(['monthlyFee', 'registrationFee', 'dueDay', 'gracePeriodDays', 'autoSuspendMonths', 'autoTerminateMonths']),
-  newValue: z.coerce.number().min(0),
-  comment: z.string().optional().nullable(),
+  newValue: z.coerce.number().finite().min(0).max(1_000_000_000),
+  comment: zComment('Comment'),
 });
 
 export async function proposeSettingChange(input: z.infer<typeof settingChangeSchema>) {
@@ -104,11 +105,11 @@ export async function proposeSettingChange(input: z.infer<typeof settingChangeSc
 // ─── Propose a bylaw change (RULE_CHANGE) ────────────────────────────────────
 
 const bylawSchema = z.object({
-  id: z.string().optional().nullable(),
-  section: z.string().optional().nullable(),
-  title: z.string().min(2, 'Title is required.'),
-  content: z.string().min(1, 'Content is required.'),
-  comment: z.string().optional().nullable(),
+  id: zOptionalId,
+  section: zOptionalText('Section', { max: 40 }),
+  title: zText('Title', { min: 2, max: 200 }),
+  content: zText('Content', { min: 1, max: 20_000, multiline: true }),
+  comment: zComment('Comment'),
 });
 
 export async function proposeBylawChange(input: z.infer<typeof bylawSchema>) {
@@ -150,6 +151,7 @@ export async function proposeBylawChange(input: z.infer<typeof bylawSchema>) {
 
 export async function proposeBylawDeletion(bylawId: string, comment?: string) {
   try {
+    [bylawId, comment] = parseArgs([zId, zComment('Comment')], [bylawId, comment]) as [string, string | undefined];
     const { actor, edirId } = await requireActor('manage_rules');
     const existing = await prisma.bylaw.findUnique({ where: { id: bylawId } });
     if (!existing) return { success: false as const, error: 'Bylaw not found.' };

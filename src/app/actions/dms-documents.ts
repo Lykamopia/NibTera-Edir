@@ -10,6 +10,7 @@ import { writeAudit } from '@/lib/audit';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
 import { dateWhere, type DateRangeParam } from '@/lib/date-range';
+import { zId, zText, zOptionalText, zUploadPath, zOptionalUploadPath, zComment, zRequiredComment, zSearch, zFilter, zDateRange, parseArgs } from '@/lib/validation';
 
 // Maker action → the maker permission that authorizes proposing it.
 const ACTION_PERMISSION: Record<string, any> = {
@@ -34,12 +35,12 @@ function fileTypeOf(name: string): string {
 }
 
 const createSchema = z.object({
-  title: z.string().trim().min(2, 'A title is required.'),
-  category: z.string().trim().min(1).default('General'),
-  tags: z.string().trim().optional().nullable(),
-  purpose: z.string().trim().optional().nullable(),
-  fileUrl: z.string().trim().min(1, 'A file is required.'),
-  fileName: z.string().trim().min(1),
+  title: zText('Title', { min: 2, max: 200 }),
+  category: zText('Category', { min: 1, max: 60 }).default('General'),
+  tags: zOptionalText('Tags', { max: 300 }),
+  purpose: zOptionalText('Purpose', { max: 1000, multiline: true }),
+  fileUrl: zUploadPath,
+  fileName: zText('File name', { min: 1, max: 255 }),
   visibility: z.enum(['staff', 'committee', 'all']).default('staff'),
 });
 
@@ -78,9 +79,19 @@ export async function createDmsDocument(input: z.infer<typeof createSchema>) {
 }
 
 const actionSchema = z.object({
-  documentId: z.string().min(1),
+  documentId: zId,
   action: z.enum(['edit', 'classify', 'share', 'revoke', 'archive', 'delete']),
-  changes: z.record(z.any()).optional(),
+  // Allowlisted fields only — the executor writes these straight onto the document.
+  changes: z.object({
+    title: zText('Title', { min: 2, max: 200 }).optional(),
+    purpose: zOptionalText('Purpose', { max: 1000, multiline: true }),
+    fileUrl: zOptionalUploadPath,
+    fileName: zOptionalText('File name', { max: 255 }),
+    fileType: z.enum(['image', 'pdf', 'file']).optional(),
+    category: zText('Category', { min: 1, max: 60 }).optional(),
+    tags: zOptionalText('Tags', { max: 300 }),
+    visibility: z.enum(['staff', 'committee', 'all']).optional(),
+  }).optional(),
 });
 
 /** Maker proposes a sensitive action on a document → routed through approval. */
@@ -122,6 +133,7 @@ export async function submitDocumentAction(input: z.infer<typeof actionSchema>) 
 /** Checker approves the document's open action → runs the executor (status flips). */
 export async function approveDmsDocument(documentId: string, comment?: string) {
   try {
+    [documentId, comment] = parseArgs([zId, zComment()], [documentId, comment]) as [string, string | undefined];
     const actor = await getActor();
     await assertPermission(actor, ['approve_document', 'super_admin']);
     const req = await prisma.approvalRequest.findFirst({
@@ -145,6 +157,7 @@ export async function approveDmsDocument(documentId: string, comment?: string) {
  *  change → drop the proposed action), so this just routes through the engine. */
 export async function rejectDmsDocument(documentId: string, reason: string) {
   try {
+    [documentId, reason] = parseArgs([zId, zRequiredComment('Rejection reason')], [documentId, reason]) as [string, string];
     const actor = await getActor();
     await assertPermission(actor, ['reject_document', 'approve_document', 'super_admin']);
     if (!reason?.trim()) return { success: false as const, error: 'A rejection reason is required.' };
@@ -166,6 +179,7 @@ export async function rejectDmsDocument(documentId: string, reason: string) {
 /** Scope-aware, role-aware list of repository documents with rich filters. */
 export async function listDmsDocuments(params: { query?: string; category?: string; status?: string; tag?: string; visibility?: string; range?: DateRangeParam } = {}) {
   try {
+    params = z.object({ query: zSearch, category: zOptionalText('Category', { max: 60 }), status: zFilter(['DRAFT', 'PENDING', 'APPROVED', 'REJECTED', 'ARCHIVED']), tag: zOptionalText('Tag', { max: 60 }), visibility: zFilter(['staff', 'committee', 'all']), range: zDateRange }).parse(params) as typeof params;
     const actor = await getActor();
     // Keep this in sync with the /dashboard/documents route gate in middleware.ts.
     await assertPermission(actor, ['view_documents', 'upload_document', 'approve_document', 'review_document', 'super_admin']);
@@ -240,6 +254,7 @@ export async function listDmsDocuments(params: { query?: string; category?: stri
 /** Full detail incl. the approval/workflow timeline for one document. */
 export async function getDmsDocumentDetail(documentId: string) {
   try {
+    documentId = zId.parse(documentId);
     const actor = await getActor();
     await assertPermission(actor, ['view_documents', 'upload_document', 'approve_document', 'review_document', 'super_admin']);
     const doc = await prisma.dmsDocument.findUnique({ where: { id: documentId } });

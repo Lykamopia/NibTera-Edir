@@ -17,6 +17,7 @@ import {
   getEvents, getEvent, getEventsSummary, saveEvent, cancelEvent, rescheduleEvent, getEventCapabilities,
   addParticipants, inviteAllActiveMembers, removeParticipant, setAttendance, setAttendanceBulk, finalizeAttendance,
 } from '@/app/actions/events';
+import { toCsv } from '@/lib/csv';
 
 type EventCaps = { canManage: boolean; canReschedule: boolean; canCancel: boolean; canFinalize: boolean };
 const NO_CAPS: EventCaps = { canManage: false, canReschedule: false, canCancel: false, canFinalize: false };
@@ -74,7 +75,7 @@ export default function EventsClient() {
   const exportCsv = () => {
     const header = ['Event', 'When', 'Location', 'Attendance', 'Penalty', 'Participants', 'Status'];
     const data = sorted.map(e => [e.title, new Date(e.datetime).toISOString(), e.location || '', e.attendanceRequired ? 'Required' : 'Optional', e.attendanceRequired ? e.absencePenalty : '', e.participantCount, e.status]);
-    const csv = [header, ...data].map(r => r.map(x => `"${String(x).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const csv = toCsv([header, ...data]);
     downloadCsv(csv, 'events.csv');
   };
 

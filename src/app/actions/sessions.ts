@@ -55,7 +55,7 @@ export async function listMySessions(): Promise<ActiveSessionView[]> {
  */
 export async function revokeMySession(sessionId: string): Promise<{ success: boolean; error?: string; signedOutSelf?: boolean }> {
   const user = await requireUser();
-  if (typeof sessionId !== 'string' || !sessionId) return { success: false, error: 'Session not found.' };
+  if (typeof sessionId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(sessionId)) return { success: false, error: 'Session not found.' };
 
   const revoked = await revokeSession(sessionId, 'user_revoked', user.id);
   if (!revoked) return { success: false, error: 'Session not found or already signed out.' };

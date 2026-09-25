@@ -21,6 +21,7 @@ import {
 import { useConfirm } from '@/components/ui/confirm-provider';
 import { PageHeader, StatCard, LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
 import { DateRangeFilter, ALL_TIME, toParam, type DateRangeValue } from '@/components/ui/date-range-filter';
+import { toCsv } from '@/lib/csv';
 
 const ISSUE_STATUS: Record<string, { label: string; cls: string }> = {
   REQUESTED: { label: 'Requested', cls: 'border-warning/20 bg-warning/10 text-warning' },
@@ -108,7 +109,7 @@ function InventoryTab({ dateRange }: { dateRange: DateRangeValue }) {
   const exportCsv = () => {
     const header = ['Asset', 'Category', 'Available', 'Total', 'Issued', 'Current Value', 'Location'];
     const data = sorted.map(a => [a.name, a.categoryName || '', a.available, a.quantity, a.issuedQuantity, a.currentValue, a.location || '']);
-    const csv = [header, ...data].map(r => r.map(x => `"${String(x).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const csv = toCsv([header, ...data]);
     downloadCsv(csv, 'assets.csv');
   };
 
@@ -370,7 +371,7 @@ function IssuancesTab({ dateRange }: { dateRange: DateRangeValue }) {
   const exportCsv = () => {
     const header = ['Asset', 'Member', 'Member ID', 'Status', 'Issued', 'Returned', 'Compensation'];
     const data = rows.map(i => [i.assetName, i.memberName || '', i.memberCode || '', i.status, i.issuedQty, i.returnedQty || 0, i.compensation || 0]);
-    const csv = [header, ...data].map(r => r.map(x => `"${String(x).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const csv = toCsv([header, ...data]);
     downloadCsv(csv, 'asset-issuances.csv');
   };
 
@@ -454,7 +455,7 @@ function ReturnDialog({ issuance, onClose, onDone }: { issuance: any; onClose: (
     const n = Number(returnedQty);
     if (!n || n < 1 || n > issuance.issuedQty) { toast.error(`Return between 1 and ${issuance.issuedQty}.`); return; }
     setSaving(true);
-    const res = await recordReturn({ issuanceId: issuance.id, returnedQty: n, condition, compensation: Number(compensation) || 0 });
+    const res = await recordReturn({ issuanceId: issuance.id, returnedQty: n, condition: condition as 'good' | 'damaged' | 'lost', compensation: Number(compensation) || 0 });
     setSaving(false);
     if (res?.success) { toast.success('Return submitted for approval — the asset is freed once a checker approves.'); onDone(); }
     else toast.error(res?.error || 'Failed to submit return.');
@@ -520,7 +521,7 @@ function ValuationTab() {
       r.name, r.categoryName, r.quantity, r.purchaseValue, r.currentValue, r.totalPurchase, r.totalCurrent, r.depreciation, `${r.depreciationPct}%`,
     ]);
     const totalsRow = ['TOTAL', '', '', '', '', t.purchase, t.current, t.depreciation, ''];
-    const csv = [header, ...rows, totalsRow].map(r => r.map((x: any) => `"${String(x).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const csv = toCsv([header, ...rows, totalsRow]);
     downloadCsv(csv, `valuation-report-${new Date().toISOString().slice(0, 10)}.csv`);
   };
   return (

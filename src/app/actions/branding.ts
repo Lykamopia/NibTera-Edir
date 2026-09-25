@@ -6,6 +6,7 @@ import { requireActor, getActor, resolveEdirId } from '@/lib/tenant-scope';
 import { writeAudit } from '@/lib/audit';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
+import { zOptionalUploadPath } from '@/lib/validation';
 import { submitForApproval } from '@/lib/approval-engine';
 import '@/lib/approval-modules';
 
@@ -18,7 +19,8 @@ export async function getEdirBranding() {
   return edir;
 }
 
-const logoSchema = z.object({ logoUrl: z.string().min(1).nullable() });
+// Only a file uploaded through /api/upload (or null to clear) — never an arbitrary URL.
+const logoSchema = z.object({ logoUrl: zOptionalUploadPath.transform(v => v ?? null) });
 
 /** Upload/replace or remove the Edir's own logo (manage_edir_settings).
  *  Like other Edir-settings changes, anyone below head office routes the change

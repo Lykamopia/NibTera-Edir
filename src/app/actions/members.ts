@@ -18,33 +18,49 @@ import { dateWhere, type DateRangeParam } from '@/lib/date-range';
 import { computeContributionArrears } from '@/lib/data';
 import { checkCanJoinEdir, getMembershipPolicy } from '@/lib/membership-policy';
 import { nextMemberId } from '@/lib/membership-provisioning';
+import { toCsv } from '@/lib/csv';
+import {
+  zId, zOptionalId, zName, zOptionalName, zText, zOptionalText, zOptionalEmail, zOptionalPhone, zPercent,
+  zOptionalPastDateString, zOptionalUploadPath, zUploadPath, zFileName, zComment, zSearch, zFilter, zDateRange, zInt, parseArgs,
+} from '@/lib/validation';
+
+// "male" / "FEMALE" → "Male" / "Female" so imports and legacy values normalize.
+const zGender = z.preprocess(
+  v => (typeof v === 'string' && v.trim() ? v.trim().charAt(0).toUpperCase() + v.trim().slice(1).toLowerCase() : null),
+  z.enum(['Male', 'Female', 'Other'], { errorMap: () => ({ message: 'Gender must be Male, Female or Other.' }) }).nullable().optional(),
+);
+const zNationalId = z.preprocess(
+  v => (typeof v === 'string' && v.trim() === '' ? null : v),
+  z.string().trim().max(50, 'National ID is too long.').regex(/^[A-Za-z0-9 /-]+$/, 'National ID may only contain letters, digits, spaces, / and -').nullable().optional(),
+);
 
 const memberSchema = z.object({
-  name: z.string().min(2, 'Name is required'),
-  occupation: z.string().optional().nullable(),
-  photoUrl: z.string().optional().nullable(),
-  dateOfBirth: z.string().optional().nullable(),
-  gender: z.string().optional().nullable(),
-  nationalId: z.string().optional().nullable(),
-  phone: z.string().optional().nullable(),
-  email: z.string().email().optional().or(z.literal('')).nullable(),
-  address: z.string().optional().nullable(),
-  city: z.string().optional().nullable(),
-  subcity: z.string().optional().nullable(),
-  woreda: z.string().optional().nullable(),
-  emergencyContactName: z.string().optional().nullable(),
-  emergencyContactPhone: z.string().optional().nullable(),
-  role: z.string().default('Member'),
-  roleId: z.string().optional().nullable(), // login (permission) role from the Roles page
-  edirId: z.string().optional().nullable(),  // required for Super-Admins; ignored for Edir admins
+  name: zName(),
+  occupation: zOptionalText('Occupation', { max: 120 }),
+  photoUrl: zOptionalUploadPath,
+  dateOfBirth: zOptionalPastDateString('Date of birth'),
+  gender: zGender,
+  nationalId: zNationalId,
+  phone: zOptionalPhone, // Ethiopian format enforced below when present
+  email: zOptionalEmail,
+  address: zOptionalText('Address', { max: 300 }),
+  city: zOptionalText('City', { max: 80 }),
+  subcity: zOptionalText('Sub-city', { max: 80 }),
+  woreda: zOptionalText('Woreda', { max: 80 }),
+  emergencyContactName: zOptionalName('Emergency contact name'),
+  emergencyContactPhone: zOptionalPhone,
+  role: zText('Member role', { min: 1, max: 60 }).default('Member'),
+  roleId: zOptionalId, // login (permission) role from the Roles page
+  edirId: zOptionalId,  // required for Super-Admins; ignored for Edir admins
   registrationInstallmentCount: z.coerce.number().int().min(1).max(60).default(1),
   // Official registration date (Member.joinDate) — defaults to "now" when omitted.
-  joinDate: z.string().optional().nullable(),
+  joinDate: zOptionalPastDateString('Registration date'),
 });
 
 export type MemberInput = z.infer<typeof memberSchema>;
 
 export async function getMembers(params: { query?: string; status?: string; page?: number; pageSize?: number; range?: DateRangeParam } = {}) {
+  params = z.object({ query: zSearch, status: zFilter(['ACTIVE', 'INACTIVE', 'SUSPENDED', 'TERMINATED']), page: zInt('Page', 1, 100_000).optional(), pageSize: zInt('Page size', 1, 1000).optional(), range: zDateRange }).parse(params) as typeof params;
   const actor = await getActor();
   await assertPermission(actor, ['view_members', 'manage_members']);
   const page = Math.max(1, params.page ?? 1);
@@ -96,6 +112,7 @@ function serializeMember(m: any) {
 }
 
 export async function getMember(id: string) {
+  id = zId.parse(id);
   const actor = await getActor();
   await assertPermission(actor, ['view_members', 'manage_members']);
   const member = await prisma.member.findUnique({
@@ -113,6 +130,7 @@ export async function getMember(id: string) {
  * rules the member inherits, and computed rule-compliance flags.
  */
 export async function getMemberProfile(id: string) {
+  id = zId.parse(id);
   const actor = await getActor();
   await assertPermission(actor, ['view_members', 'manage_members']);
   const member = await prisma.member.findUnique({
@@ -273,14 +291,14 @@ export async function getMemberProfile(id: string) {
 // ─── Relatives & documents ───────────────────────────────────────────────────
 
 const relativeSchema = z.object({
-  name: z.string().min(2, 'Name is required.'),
-  relationship: z.string().min(1, 'Relationship is required.'),
-  phone: z.string().optional().nullable(),
-  dateOfBirth: z.string().optional().nullable(),
+  name: zName(),
+  relationship: zText('Relationship', { min: 1, max: 60 }),
+  phone: zOptionalPhone,
+  dateOfBirth: zOptionalPastDateString('Date of birth'),
   isBeneficiary: z.boolean().default(true), // relatives are payout-eligible beneficiaries by default
-  benefitShare: z.coerce.number().int().min(0).max(100).optional().nullable(),
+  benefitShare: zInt('Benefit share', 0, 100).optional().nullable(),
   isDependent: z.boolean().default(false),
-  notes: z.string().optional().nullable(),
+  notes: zOptionalText('Notes', { max: 1000, multiline: true }),
 });
 
 function relativeData(data: z.infer<typeof relativeSchema>) {
@@ -298,6 +316,7 @@ function relativeData(data: z.infer<typeof relativeSchema>) {
 
 export async function addRelative(memberId: string, input: z.infer<typeof relativeSchema>) {
   try {
+    memberId = zId.parse(memberId);
     const actor = await getActor();
     await assertPermission(actor, ['manage_relatives', 'manage_members']);
     const member = await prisma.member.findUnique({ where: { id: memberId } });
@@ -317,6 +336,7 @@ export async function addRelative(memberId: string, input: z.infer<typeof relati
 
 export async function updateRelative(relativeId: string, input: z.infer<typeof relativeSchema>) {
   try {
+    relativeId = zId.parse(relativeId);
     const actor = await getActor();
     await assertPermission(actor, ['manage_relatives', 'manage_members']);
     const rel = await prisma.relative.findUnique({ where: { id: relativeId }, include: { member: true } });
@@ -335,6 +355,7 @@ export async function updateRelative(relativeId: string, input: z.infer<typeof r
 
 export async function removeRelative(relativeId: string) {
   try {
+    relativeId = zId.parse(relativeId);
     const actor = await getActor();
     await assertPermission(actor, ['manage_relatives', 'manage_members']);
     const rel = await prisma.relative.findUnique({ where: { id: relativeId }, include: { member: true } });
@@ -351,13 +372,14 @@ export async function removeRelative(relativeId: string) {
 }
 
 const documentSchema = z.object({
-  fileUrl: z.string().min(1, 'A file is required.'),
-  fileName: z.string().optional().nullable(),
+  fileUrl: zUploadPath,
+  fileName: zFileName,
 });
 
 /** Attach an uploaded document to a relative (lands in PENDING review state). */
 export async function addRelativeDocument(relativeId: string, input: z.infer<typeof documentSchema>) {
   try {
+    relativeId = zId.parse(relativeId);
     const actor = await getActor();
     await assertPermission(actor, ['manage_documents', 'manage_members']);
     const rel = await prisma.relative.findUnique({ where: { id: relativeId }, include: { member: true } });
@@ -379,6 +401,7 @@ export async function addRelativeDocument(relativeId: string, input: z.infer<typ
 /** Approve or reject a relative document (review_member_documents). */
 export async function reviewDocument(documentId: string, status: 'APPROVED' | 'REJECTED', notes?: string) {
   try {
+    [documentId, status, notes] = parseArgs([zId, z.enum(['APPROVED', 'REJECTED']), zComment('Notes')], [documentId, status, notes]) as [string, typeof status, string | undefined];
     const actor = await getActor();
     await assertPermission(actor, 'review_member_documents');
     if (status !== 'APPROVED' && status !== 'REJECTED') return { success: false as const, error: 'Invalid review decision.' };
@@ -418,12 +441,13 @@ const MEMBER_DOC_CATEGORIES = ['ID', 'CERTIFICATE', 'MEDICAL', 'PROOF_OF_RELATIO
 
 const memberDocSchema = z.object({
   category: z.enum(MEMBER_DOC_CATEGORIES),
-  fileUrl: z.string().min(1, 'A file is required.'),
-  fileName: z.string().optional().nullable(),
+  fileUrl: zUploadPath,
+  fileName: zFileName,
 });
 
 export async function addMemberDocument(memberId: string, input: z.infer<typeof memberDocSchema>) {
   try {
+    memberId = zId.parse(memberId);
     const actor = await getActor();
     await assertPermission(actor, ['manage_documents', 'manage_members']);
     const member = await prisma.member.findUnique({ where: { id: memberId } });
@@ -444,6 +468,7 @@ export async function addMemberDocument(memberId: string, input: z.infer<typeof 
 
 export async function deleteMemberDocument(documentId: string) {
   try {
+    documentId = zId.parse(documentId);
     const actor = await getActor();
     await assertPermission(actor, ['manage_documents', 'manage_members']);
     const doc = await prisma.memberDocument.findUnique({ where: { id: documentId }, include: { member: true } });
@@ -461,6 +486,7 @@ export async function deleteMemberDocument(documentId: string) {
 
 export async function reviewMemberDocument(documentId: string, status: 'APPROVED' | 'REJECTED', notes?: string) {
   try {
+    [documentId, status, notes] = parseArgs([zId, z.enum(['APPROVED', 'REJECTED']), zComment('Notes')], [documentId, status, notes]) as [string, typeof status, string | undefined];
     const actor = await getActor();
     await assertPermission(actor, 'review_member_documents');
     if (status !== 'APPROVED' && status !== 'REJECTED') return { success: false as const, error: 'Invalid review decision.' };
@@ -649,6 +675,7 @@ export async function createMember(input: MemberInput) {
 
 export async function updateMember(id: string, input: MemberInput) {
   try {
+    id = zId.parse(id);
     const actor = await getActor();
     await assertPermission(actor, ['edit_member', 'manage_members']);
     const existing = await prisma.member.findUnique({
@@ -739,6 +766,7 @@ export async function updateMember(id: string, input: MemberInput) {
  */
 export async function resetMemberPassword(memberId: string, opts?: { email?: string }) {
   try {
+    [memberId, opts] = parseArgs([zId, z.object({ email: zOptionalEmail }).optional()], [memberId, opts]) as [string, { email?: string } | undefined];
     // Scope to the member's own Edir (not the actor's) so a Super-Admin — who has
     // no Edir of their own — can reset credentials for any tenant's member.
     const actor = await getActor();
@@ -819,6 +847,7 @@ export async function resetMemberPassword(memberId: string, opts?: { email?: str
 
 export async function setMemberStatus(id: string, status: 'ACTIVE' | 'INACTIVE' | 'SUSPENDED' | 'TERMINATED') {
   try {
+    [id, status] = parseArgs([zId, z.enum(['ACTIVE', 'INACTIVE', 'SUSPENDED', 'TERMINATED'])], [id, status]) as [string, typeof status];
     const actor = await getActor();
     // Suspend / reinstate / terminate are separately grantable; manage_members is the umbrella.
     const perm = status === 'SUSPENDED'
@@ -896,6 +925,7 @@ export async function setMemberStatus(id: string, status: 'ACTIVE' | 'INACTIVE' 
 /** Member removal goes through Maker–Checker. */
 export async function requestMemberRemoval(id: string, reason?: string) {
   try {
+    [id, reason] = parseArgs([zId, zComment('Reason')], [id, reason]) as [string, string | undefined];
     const actor = await getActor();
     await assertPermission(actor, 'remove_members');
     const member = await prisma.member.findUnique({ where: { id } });
@@ -941,6 +971,26 @@ export interface BulkMemberRow {
   relatives?: string;
 }
 
+// Field rules for one CSV import row (mirrors memberSchema; all columns optional except name).
+const bulkMemberRowSchema = z.object({
+  name: zName(),
+  phone: zOptionalPhone,
+  email: zOptionalEmail,
+  gender: zGender,
+  dateOfBirth: zOptionalPastDateString('Date of birth'),
+  nationalId: zNationalId,
+  occupation: zOptionalText('Occupation', { max: 120 }),
+  address: zOptionalText('Address', { max: 300 }),
+  city: zOptionalText('City', { max: 80 }),
+  subcity: zOptionalText('Sub-city', { max: 80 }),
+  woreda: zOptionalText('Woreda', { max: 80 }),
+  emergencyContactName: zOptionalName('Emergency contact name'),
+  emergencyContactPhone: zOptionalPhone,
+  role: zOptionalText('Role', { max: 60 }),
+  registrationDate: zOptionalPastDateString('Registration date'),
+  relatives: zOptionalText('Relatives', { max: 2000 }),
+});
+
 function parseRelativesColumn(raw: string | undefined): { name: string; relationship: string; phone: string | null }[] {
   if (!raw?.trim()) return [];
   return raw
@@ -962,6 +1012,13 @@ function parseRelativesColumn(raw: string | undefined): { name: string; relation
  */
 export async function bulkImportMembers(input: { edirId?: string | null; rows: BulkMemberRow[] }) {
   try {
+    input = z.object({
+      edirId: zOptionalId,
+      // Every cell is coerced to a string, then each row is validated below with
+      // the same field rules as createMember.
+      rows: z.array(z.record(z.unknown())).max(500, 'Import is limited to 500 rows at a time.')
+        .transform(rows => rows.map(r => Object.fromEntries(Object.entries(r).map(([k, v]) => [k, v == null ? '' : String(v)])))),
+    }).parse(input) as typeof input;
     const actor = await getActor();
     await assertPermission(actor, ['create_member', 'manage_members']);
     if (actor.isSuperAdmin && !input.edirId) return { success: false as const, error: 'Select an Edir for the imported members.' };
@@ -996,7 +1053,9 @@ export async function bulkImportMembers(input: { edirId?: string | null; rows: B
       const dob = parseDate(r.dateOfBirth);
       const reg = parseDate(r.registrationDate);
       let error: string | undefined;
-      if (name.length < 2) error = 'Name is required.';
+      const rowCheck = bulkMemberRowSchema.safeParse(r);
+      if (!rowCheck.success) error = rowCheck.error.issues[0].message;
+      else if (name.length < 2) error = 'Name is required.';
       else if (rawPhone && !isValidEthiopianPhone(rawPhone)) error = 'Invalid phone number.';
       else if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) error = 'Invalid email.';
       else if (dob.bad) error = 'Invalid date of birth.';
@@ -1109,6 +1168,7 @@ export async function bulkImportMembers(input: { edirId?: string | null; rows: B
 }
 
 export async function exportMembersCsv(params: { query?: string; status?: string } = {}) {
+  params = z.object({ query: zSearch, status: zFilter(['ACTIVE', 'INACTIVE', 'SUSPENDED', 'TERMINATED']) }).parse(params) as typeof params;
   const actor = await getActor();
   await assertPermission(actor, ['view_members', 'manage_members']);
   const where: Prisma.MemberWhereInput = {
@@ -1121,6 +1181,6 @@ export async function exportMembersCsv(params: { query?: string; status?: string
     m.memberId, m.name, m.phone ?? '', m.email ?? '', m.status, m.role,
     m.joinDate.toISOString().slice(0, 10), String(Number(m.paymentStatus?.balance ?? 0)),
   ]);
-  const csv = [header, ...rows].map(r => r.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n');
+  const csv = toCsv([header, ...rows]);
   return csv;
 }

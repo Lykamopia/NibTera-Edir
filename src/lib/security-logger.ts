@@ -197,14 +197,17 @@ async function triggerCriticalAlert(log: LogDetails, context: { ipAddress: strin
     try {
         const emailSettings = await getEmailSettings();
         const subject = `[CRITICAL ALERT] Security Event: ${log.event}`;
+        // Details, names, IP and user-agent are attacker-influenced (e.g. a failed
+        // login's username or a forged User-Agent) — HTML-encode every value.
+        const esc = (v: unknown) => String(v ?? '').replace(/[&<>"'`]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;', '`': '&#96;' }[c] as string));
         const body = `
             <h2>Critical security event detected.</h2>
-            <p><strong>Event:</strong> ${log.event}</p>
+            <p><strong>Event:</strong> ${esc(log.event)}</p>
             <p><strong>Timestamp:</strong> ${new Date().toISOString()}</p>
-            <p><strong>Actor:</strong> ${log.actor?.name || 'System/Unknown'} (ID: ${log.actor?.id || 'N/A'})</p>
-            <p><strong>Details:</strong> ${log.details}</p>
-            <p><strong>IP Address:</strong> ${context.ipAddress || 'N/A'}</p>
-            <p><strong>User Agent:</strong> ${context.userAgent || 'N/A'}</p>
+            <p><strong>Actor:</strong> ${esc(log.actor?.name || 'System/Unknown')} (ID: ${esc(log.actor?.id || 'N/A')})</p>
+            <p><strong>Details:</strong> ${esc(log.details)}</p>
+            <p><strong>IP Address:</strong> ${esc(context.ipAddress || 'N/A')}</p>
+            <p><strong>User Agent:</strong> ${esc(context.userAgent || 'N/A')}</p>
         `;
         
         await sendEmail({

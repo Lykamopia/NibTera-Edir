@@ -7,6 +7,7 @@ import { getActor, actorHasPermission, assertPermission, resolveEdirId } from '@
 import { writeAudit } from '@/lib/audit';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
+import { zId, zIdList } from '@/lib/validation';
 
 /** Sensible defaults used when an Edir has not configured its own categories yet. */
 const DEFAULT_RELATIONSHIP_CATEGORIES = [
@@ -114,6 +115,7 @@ export async function submitCreateRelationshipCategory(input: z.infer<typeof cat
 /** Edit a category's settings (incl. activate/deactivate) — applied immediately. */
 export async function submitUpdateRelationshipCategory(id: string, input: z.infer<typeof categorySchema>) {
   try {
+    id = zId.parse(id);
     const actor = await getActor();
     await assertPermission(actor, ['manage_edir_settings']);
     const edirId = await resolveEdirId(actor);
@@ -146,6 +148,7 @@ export async function submitUpdateRelationshipCategory(id: string, input: z.infe
 /** Delete a category — applied immediately. Blocked only if in use by a relative. */
 export async function submitDeleteRelationshipCategory(id: string) {
   try {
+    id = zId.parse(id);
     const actor = await getActor();
     await assertPermission(actor, ['manage_edir_settings']);
     const edirId = await resolveEdirId(actor);
@@ -169,6 +172,7 @@ export async function submitDeleteRelationshipCategory(id: string) {
 /** Reorder categories (display order only — applied immediately with an audit entry). */
 export async function reorderRelationshipCategories(orderedIds: string[]) {
   try {
+    orderedIds = zIdList(500).parse(orderedIds);
     const actor = await getActor();
     await assertPermission(actor, ['manage_edir_settings']);
     const edirId = await resolveEdirId(actor);

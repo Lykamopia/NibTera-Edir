@@ -9,6 +9,8 @@ import { approveDmsDocument, rejectDmsDocument } from './dms-documents';
 import { approveRelativeDocument, rejectRelativeDocument } from './relative-documents';
 import { reviewMemberDocument } from './members';
 import { resolveOwnMembership } from '@/lib/membership-policy';
+import { z } from 'zod';
+import { zId, zComment, zOptionalText, zSearch, zFilter, zDateRange } from '@/lib/validation';
 
 export type DocSource = 'DMS' | 'MEMBER' | 'RELATIVE' | 'REQUEST';
 
@@ -76,6 +78,11 @@ export async function listRepositoryDocuments(params: {
   query?: string; source?: string; category?: string; status?: string; tag?: string; visibility?: string; range?: DateRangeParam;
 } = {}) {
   try {
+    params = z.object({
+      query: zSearch, source: zFilter(['DMS', 'MEMBER', 'RELATIVE', 'REQUEST']), category: zOptionalText('Category', { max: 60 }),
+      status: z.preprocess(v => (v === '' ? null : v), z.string().max(32).regex(/^[A-Za-z_]+$/, 'Invalid status.').nullable().optional()),
+      tag: zOptionalText('Tag', { max: 60 }), visibility: zFilter(['staff', 'committee', 'all']), range: zDateRange,
+    }).parse(params) as typeof params;
     const actor = await getActor();
     await assertPermission(actor, [...VIEW_PERMS]);
     const isStaff = actor.isSuperAdmin || actorHasPermission(actor, [...STAFF_PERMS]);
@@ -263,6 +270,7 @@ export async function listRepositoryDocuments(params: {
  */
 export async function reviewRepositoryDocument(input: { source: DocSource; id: string; decision: 'APPROVED' | 'REJECTED'; reason?: string }) {
   try {
+    input = z.object({ source: z.enum(['DMS', 'MEMBER', 'RELATIVE', 'REQUEST']), id: zId, decision: z.enum(['APPROVED', 'REJECTED']), reason: zComment('Reason') }).parse(input) as typeof input;
     const { source, id, decision, reason } = input;
     const approving = decision === 'APPROVED';
     let result: { success: boolean; error?: string };

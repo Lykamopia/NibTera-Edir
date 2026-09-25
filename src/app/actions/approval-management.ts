@@ -11,6 +11,8 @@ import {
 } from '@/lib/approval-tracking';
 import { approveRequest, rejectRequest, returnRequest, commentOnRequest } from '@/lib/approval-engine';
 import { failure } from '@/lib/action-result';
+import { z } from 'zod';
+import { zId } from '@/lib/validation';
 
 /**
  * Approve an approval request (Checker action)
@@ -62,6 +64,7 @@ export async function returnApprovalForRevision(requestId: string, revisionNotes
  */
 export async function getApprovalRequestDetail(requestId: string) {
   try {
+    requestId = zId.parse(requestId);
     const actor = await getActor();
     await assertPermission(actor, 'view_approvals');
 
@@ -100,6 +103,7 @@ export async function getApprovalRequestDetail(requestId: string) {
  */
 export async function getMyPendingApprovals(module?: string) {
   try {
+    module = z.string().max(64).regex(/^[A-Z_]+$/, 'Invalid module.').optional().parse(module || undefined);
     const actor = await getActor();
     await assertPermission(actor, 'view_approvals');
 

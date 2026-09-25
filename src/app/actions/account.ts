@@ -10,6 +10,7 @@ import { paymentLogStatusLabel } from '@/lib/payment-log-status';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
 import { pickPrimaryMembership } from '@/lib/membership-policy';
+import { zName, zOptionalText } from '@/lib/validation';
 
 function safeMeta(s: string | null): Record<string, any> {
   if (!s) return {};
@@ -273,8 +274,8 @@ function serializeNotif(n: any) {
 }
 
 const profileSchema = z.object({
-  name: z.string().min(2, 'Name is required.').max(120),
-  title: z.string().max(120).optional().nullable(),
+  name: zName(),
+  title: zOptionalText('Title', { max: 120 }),
 });
 
 /** Update the signed-in user's own name/title. */

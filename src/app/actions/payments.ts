@@ -11,16 +11,18 @@ import '@/lib/approval-modules';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
 import { dateWhere, type DateRangeParam } from '@/lib/date-range';
+import { zId, zMoney, zInt, zText, zOptionalUploadPath, zComment, zSearch, zFilter, zDateRange, zOptionalDateString, parseArgs } from '@/lib/validation';
 import { paymentLogStatusLabel } from '@/lib/payment-log-status';
 import { computePenalty, computeContributionArrears, computeMemberDues } from '@/lib/data';
 import { generateOfficialReceipt } from '@/lib/nib-receipt';
+import { toCsv } from '@/lib/csv';
 
 // ─── Edir settings ───────────────────────────────────────────────────────────
 
 const settingsSchema = z.object({
-  monthlyFee: z.coerce.number().min(0).default(0),
-  registrationFee: z.coerce.number().min(0).default(0),
-  currency: z.string().default('ETB'),
+  monthlyFee: zMoney('Monthly fee').default(0),
+  registrationFee: zMoney('Registration fee').default(0),
+  currency: z.string().trim().regex(/^[A-Z]{3}$/, 'Currency must be a 3-letter code (e.g. ETB).').default('ETB'),
   dueDay: z.coerce.number().int().min(1).max(28).default(1),
   gracePeriodDays: z.coerce.number().int().min(0).max(60).default(5),
   autoSuspendMonths: z.coerce.number().int().min(1).max(36).default(3),
@@ -61,6 +63,7 @@ export async function saveEdirSettings(input: z.infer<typeof settingsSchema>) {
 // ─── Outstanding figures (prefill for manual payment) ────────────────────────
 
 export async function getMemberOutstanding(memberId: string) {
+  memberId = zId.parse(memberId);
   const actor = await getActor();
   await assertPermission(actor, ['view_payments', 'record_payment']);
   const member = await prisma.member.findUnique({
@@ -171,6 +174,7 @@ export async function getMemberOutstanding(memberId: string) {
  * are correct across tenants for cross-tenant actors.
  */
 export async function getPaymentsMatrix(params: { query?: string; status?: string } = {}) {
+  params = z.object({ query: zSearch, status: zFilter(['ACTIVE', 'INACTIVE', 'SUSPENDED', 'TERMINATED']) }).parse(params) as typeof params;
   const actor = await getActor();
   await assertPermission(actor, ['view_payments', 'record_payment']);
 
@@ -315,6 +319,7 @@ const BREAKDOWN_KEYS = ['installment', 'arrears', 'latePenalty', 'registrationFe
 
 /** Full payment history + running figures for a single member (tenant-scoped). */
 export async function getMemberPaymentHistory(memberId: string) {
+  memberId = zId.parse(memberId);
   const actor = await getActor();
   await assertPermission(actor, ['view_payments', 'view_payment_log', 'record_payment']);
 
@@ -438,20 +443,21 @@ export async function getPaymentsSummary(range?: DateRangeParam) {
 // ─── Record manual payment (Maker–Checker) ───────────────────────────────────
 
 const breakdownSchema = z.object({
-  installment: z.coerce.number().min(0).default(0),
-  arrears: z.coerce.number().min(0).default(0),
-  latePenalty: z.coerce.number().min(0).default(0),
-  registrationFee: z.coerce.number().min(0).default(0),
-  reinstatementFee: z.coerce.number().min(0).default(0),
-  assetCompensation: z.coerce.number().min(0).default(0),
-  eventPenalties: z.coerce.number().min(0).default(0),
-  interest: z.coerce.number().min(0).default(0),
-  serviceFees: z.coerce.number().min(0).default(0),
-  other: z.coerce.number().min(0).default(0),
+  installment: zMoney('Installment').default(0),
+  arrears: zMoney('Arrears').default(0),
+  latePenalty: zMoney('Late Penalty').default(0),
+  registrationFee: zMoney('Registration Fee').default(0),
+  reinstatementFee: zMoney('Reinstatement Fee').default(0),
+  assetCompensation: zMoney('Asset Compensation').default(0),
+  eventPenalties: zMoney('Event Penalties').default(0),
+  interest: zMoney('Interest').default(0),
+  serviceFees: zMoney('Service Fees').default(0),
+  other: zMoney('Other').default(0),
 });
 
 export async function recordManualPayment(memberId: string, breakdownInput: z.infer<typeof breakdownSchema>, receiptUrl?: string | null) {
   try {
+    [memberId, receiptUrl] = parseArgs([zId, zOptionalUploadPath], [memberId, receiptUrl]) as [string, string | null | undefined];
     const actor = await getActor();
     await assertPermission(actor, 'record_payment');
     const member = await prisma.member.findUnique({ where: { id: memberId } });
@@ -543,6 +549,7 @@ export async function recordManualPayment(memberId: string, breakdownInput: z.in
  * reinstatement fee, and pooled charges, itemized by the shared calculator.
  */
 export async function getReinstatementQuote(memberId: string) {
+  memberId = zId.parse(memberId);
   const actor = await getActor();
   await assertPermission(actor, ['reinstate_member', 'manage_members']);
   const member = await prisma.member.findUnique({
@@ -583,6 +590,7 @@ export async function requestMemberReinstatement(
   receiptUrl?: string | null,
 ) {
   try {
+    [memberId, receiptUrl] = parseArgs([zId, zOptionalUploadPath], [memberId, receiptUrl]) as [string, string | null | undefined];
     const actor = await getActor();
     await assertPermission(actor, ['reinstate_member', 'manage_members']);
     const member = await prisma.member.findUnique({ where: { id: memberId } });
@@ -650,7 +658,21 @@ export interface PaymentLogFilters {
 
 export interface PaymentLogSort { key?: 'date' | 'amount' | 'member' | 'status' | 'method'; dir?: 'asc' | 'desc' }
 
+const zLabelFilter = z.preprocess(v => (v === '' ? null : v), z.string().trim().max(32).regex(/^[A-Za-z0-9 _-]+$/, 'Invalid filter.').nullable().optional());
+const paymentLogFilterSchema = z.object({
+  status: zFilter(['PENDING', 'SUCCESS', 'PARTIAL', 'FAILED', 'VOID']),
+  query: zSearch,
+  method: zLabelFilter,
+  verification: zLabelFilter,
+  edirId: z.preprocess(v => (v === '' ? null : v), z.union([z.literal('all'), zId]).nullable().optional()),
+  from: zOptionalDateString('From date'),
+  to: zOptionalDateString('To date'),
+  range: zDateRange,
+});
+
 function paymentLogWhere(actor: Awaited<ReturnType<typeof getActor>>, params: PaymentLogFilters): Prisma.PaymentLogWhereInput {
+  // Shared by the log list, summary and CSV export — validated once here.
+  params = paymentLogFilterSchema.parse(params) as PaymentLogFilters;
   // Prefer the standardized range; fall back to legacy from/to for older callers.
   const legacy: Prisma.DateTimeFilter = {};
   if (params.from) legacy.gte = new Date(params.from);
@@ -734,6 +756,7 @@ export async function getPaymentLogSummary(params: PaymentLogFilters = {}) {
 }
 
 export async function getPaymentLogs(params: PaymentLogFilters & { page?: number; sort?: PaymentLogSort } = {}) {
+  params = { ...params, ...z.object({ page: zInt('Page', 1, 100_000).optional(), sort: z.object({ key: z.enum(['date', 'amount', 'member', 'status', 'method']).optional(), dir: z.enum(['asc', 'desc']).optional() }).optional() }).parse({ page: params?.page, sort: params?.sort }) };
   const actor = await getActor();
   await assertPermission(actor, ['view_payment_log', 'view_payments']);
   const page = Math.max(1, params.page ?? 1);
@@ -857,7 +880,7 @@ export async function exportPaymentLogCsv(params: PaymentLogFilters = {}) {
       paymentLogStatusLabel(l.status),
     ];
   });
-  return [header, ...rows].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
+  return toCsv([header, ...rows]);
 }
 
 /**
@@ -876,6 +899,7 @@ export async function exportPaymentLogCsv(params: PaymentLogFilters = {}) {
  */
 export async function voidPayment(paymentLogId: string, reason?: string) {
   try {
+    [paymentLogId, reason] = parseArgs([zId, zComment('Reason')], [paymentLogId, reason]) as [string, string | undefined];
     const actor = await getActor();
     await assertPermission(actor, 'void_payment');
     const log = await prisma.paymentLog.findUnique({ where: { id: paymentLogId } });
@@ -922,6 +946,7 @@ export async function voidPayment(paymentLogId: string, reason?: string) {
  */
 export async function getOfficialBankReceipt(paymentLogId: string) {
   try {
+    paymentLogId = zId.parse(paymentLogId);
     const actor = await getActor();
     await assertPermission(actor, ['view_payment_log', 'view_payments']);
     const log = await prisma.paymentLog.findUnique({

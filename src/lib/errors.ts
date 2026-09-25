@@ -56,6 +56,12 @@ const SESSION_PATTERNS = [
   'jwt expired', 'invalid session', 'session expired', 'failed to find server action',
 ];
 
+/** "emergencyContactPhone" → "Emergency contact phone". */
+function humanizeField(field: string): string {
+  const words = field.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ').toLowerCase();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
 function getName(error: unknown): string {
   if (error && typeof error === 'object' && 'name' in error) return String((error as any).name ?? '');
   return '';
@@ -86,7 +92,17 @@ export function toUserError(error: unknown): UserError {
     return { code: 'VALIDATION', title: 'Check your input', message: msg || 'Required information is missing or invalid. Please review and try again.' };
   }
   if (name === 'ZodError') {
-    return { code: 'VALIDATION', title: 'Check your input', message: 'Required information is missing or invalid. Please complete the required fields and try again.' };
+    // Schema messages are author-written (see src/lib/validation.ts) and never
+    // contain internal details, so the first one is safe — and far more useful
+    // than a generic message now that fields have strict format/length rules.
+    const issue = (error as any)?.issues?.[0];
+    const field = Array.isArray(issue?.path) ? issue.path.filter((p: unknown) => typeof p === 'string').pop() : undefined;
+    const detail = typeof issue?.message === 'string' && issue.message.length <= 200
+      ? (issue.code === 'invalid_type' || /^(Required|Expected|Invalid input)/.test(issue.message)) && field
+        ? `${humanizeField(field)}: ${issue.message}`
+        : issue.message
+      : null;
+    return { code: 'VALIDATION', title: 'Check your input', message: detail || 'Required information is missing or invalid. Please complete the required fields and try again.' };
   }
   if (name.startsWith('PrismaClient') || lower.includes('unique constraint') || lower.includes('foreign key')) {
     if (lower.includes('unique constraint')) {

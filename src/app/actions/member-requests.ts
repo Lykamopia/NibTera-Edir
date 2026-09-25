@@ -11,6 +11,7 @@ import '@/lib/approval-modules';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
 import { dateWhere, type DateRangeParam } from '@/lib/date-range';
+import { zId, zOptionalId, zText, zOptionalText, zOptionalName, zOptionalPhone, zOptionalPastDateString, zOptionalDateString, zInt, zUploadPath, zFilter, zDateRange } from '@/lib/validation';
 import { resolveOwnMembership } from '@/lib/membership-policy';
 
 const TYPE_LABEL: Record<string, string> = {
@@ -44,11 +45,24 @@ async function getActorMember() {
 
 const submitSchema = z.object({
   type: z.enum(['RELATIVE', 'EMERGENCY', 'ASSET', 'GRIEVANCE', 'FEEDBACK']),
-  category: z.string().max(80).optional().nullable(),
-  subject: z.string().min(2, 'A subject is required.').max(160),
-  description: z.string().max(4000).optional().nullable(),
-  payload: z.record(z.any()).optional().nullable(),
-  attachments: z.array(z.string()).optional().default([]),
+  category: zOptionalText('Category', { max: 80 }),
+  subject: zText('Subject', { min: 2, max: 160 }),
+  description: zOptionalText('Description', { max: 4000, multiline: true }),
+  // Allowlisted per-type details (the only keys respondMemberRequest reads).
+  payload: z.object({
+    name: zOptionalName('Name'),
+    relationship: zOptionalText('Relationship', { max: 60 }),
+    phone: zOptionalPhone,
+    dateOfBirth: zOptionalPastDateString('Date of birth'),
+    affectedPerson: zOptionalName('Affected person'),
+    date: zOptionalDateString('Date'),
+    location: zOptionalText('Location', { max: 200 }),
+    assetName: zOptionalText('Asset name', { max: 120 }),
+    qty: zInt('Quantity', 1, 1000).optional(),
+    typeId: zOptionalId,
+    priority: z.enum(['low', 'normal', 'high', 'urgent']).optional(),
+  }).optional().nullable(),
+  attachments: z.array(zUploadPath).max(10, 'Attach at most 10 files.').optional().default([]),
 });
 
 /** Member submits a self-service request (relative, emergency, asset, grievance, feedback). */
@@ -152,6 +166,7 @@ function serialize(r: any) {
 // ─── Staff handling ──────────────────────────────────────────────────────────
 
 export async function getMemberRequests(params: { status?: string; type?: string; range?: DateRangeParam } = {}) {
+  params = z.object({ status: zFilter(['PENDING', 'IN_REVIEW', 'APPROVED', 'REJECTED', 'RESOLVED']), type: zFilter(['RELATIVE', 'EMERGENCY', 'ASSET', 'GRIEVANCE', 'FEEDBACK']), range: zDateRange }).parse(params) as typeof params;
   const actor = await getActor();
   await assertPermission(actor, 'handle_member_requests');
   const where: Prisma.MemberRequestWhereInput = {
@@ -169,11 +184,12 @@ export async function getMemberRequests(params: { status?: string; type?: string
 
 const respondSchema = z.object({
   decision: z.enum(['IN_REVIEW', 'APPROVED', 'REJECTED', 'RESOLVED']),
-  response: z.string().max(4000).optional().nullable(),
+  response: zOptionalText('Response', { max: 4000, multiline: true }),
 });
 
 export async function respondMemberRequest(id: string, input: z.infer<typeof respondSchema>) {
   try {
+    id = zId.parse(id);
     const { actor, edirId } = await requireActor('handle_member_requests');
     const data = respondSchema.parse(input);
     const request = await prisma.memberRequest.findUnique({ where: { id }, include: { member: true } });

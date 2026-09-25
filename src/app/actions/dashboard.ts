@@ -7,6 +7,7 @@ import { AccessDeniedError } from '@/lib/errors';
 import { pendingApprovalCountForActor } from '@/lib/approval-engine';
 import { dateWhere, type DateRangeParam } from '@/lib/date-range';
 import '@/lib/approval-modules';
+import { csvCell } from '@/lib/csv';
 
 export type DashboardData = {
   user: { id: string; name: string | null; roleName: string | null; isSuperAdmin: boolean };
@@ -391,7 +392,7 @@ export async function exportOrgDashboardCsv(range?: DateRangeParam) {
       : null;
   const rangeLabel = range && range.preset !== 'all' ? range.preset.replace(/_/g, ' ') : 'All time';
 
-  const esc = (c: unknown) => `"${String(c ?? '').replace(/"/g, '""')}"`;
+  const esc = csvCell;
   const line = (cells: unknown[]) => cells.map(esc).join(',');
   const rows: string[] = [];
   rows.push(line([`${scopeLabel} Dashboard Report`, unit?.name ?? scopeLabel]));
@@ -712,7 +713,7 @@ export async function exportEdirReportCsv(range?: DateRangeParam) {
     ? await prisma.edir.findUnique({ where: { id: (actor.edirId ?? actor.activeEdirId)! }, select: { name: true } })
     : null;
 
-  const esc = (c: unknown) => `"${String(c ?? '').replace(/"/g, '""')}"`;
+  const esc = csvCell;
   const line = (cells: unknown[]) => cells.map(esc).join(',');
   const rows: string[] = [];
   const section = (title: string, entries: [string, unknown][]) => {

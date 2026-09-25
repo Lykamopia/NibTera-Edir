@@ -8,12 +8,13 @@ import { submitForApproval } from '@/lib/approval-engine';
 import { buildEdirSettingsUpdate, DEFAULT_MEMBER_ROLES, type EdirSettingsData } from '@/lib/edir-settings';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
+import { zText, zOptionalText, zMoney, zComment } from '@/lib/validation';
 
 // ─── Penalty tiers ───────────────────────────────────────────────────────────
 
 const tierSchema = z.object({
-  id: z.string(),
-  label: z.string().optional().nullable(),
+  id: z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/, 'Invalid tier id.'),
+  label: zOptionalText('Tier label', { max: 60 }),
   fromDays: z.coerce.number().int().min(0),
   // `.nullable()` short-circuits on null BEFORE coercion — otherwise z.coerce.number()
   // turns a null (open-ended tier) into 0 and trips the "to before from" check.
@@ -24,16 +25,16 @@ const tierSchema = z.object({
 
 const configSchema = z.object({
   // Contributions
-  monthlyFee: z.coerce.number().min(0),
-  registrationFee: z.coerce.number().min(0),
-  currency: z.string().min(1).max(8),
+  monthlyFee: zMoney('Monthly fee'),
+  registrationFee: zMoney('Registration fee'),
+  currency: z.string().trim().regex(/^[A-Z]{3}$/, 'Currency must be a 3-letter code (e.g. ETB).'),
   dueDay: z.coerce.number().int().min(1).max(28),
   gracePeriodDays: z.coerce.number().int().min(0).max(90),
   // Days after a settling payment before the NEXT month's contribution becomes
   // payable (0 = members may pay ahead at any time).
   nextPaymentDelayDays: z.coerce.number().int().min(0).max(28).default(0),
   // Penalties
-  penaltyTiers: z.array(tierSchema).default([]),
+  penaltyTiers: z.array(tierSchema).max(20, 'At most 20 penalty tiers.').default([]),
   // Daily penalty accrual (optional)
   dailyPenaltyEnabled: z.boolean().default(false),
   dailyPenaltyType: z.enum(['FIXED', 'PERCENT']).default('FIXED'),
@@ -43,15 +44,15 @@ const configSchema = z.object({
   autoSuspendMonths: z.coerce.number().int().min(1).max(60),
   autoTerminateMonths: z.coerce.number().int().min(1).max(120),
   minMembershipMonths: z.coerce.number().int().min(0).max(120),
-  reinstatementFee: z.coerce.number().min(0),
+  reinstatementFee: zMoney('Reinstatement fee'),
   autoSuspendEnabled: z.boolean(),
   autoTerminateEnabled: z.boolean(),
   autoReminderEnabled: z.boolean(),
-  reminderDaysBefore: z.array(z.coerce.number().int().min(1)).default([1, 3, 7]),
+  reminderDaysBefore: z.array(z.coerce.number().int().min(1).max(60)).max(10, 'At most 10 reminder days.').default([1, 3, 7]),
   // Configurable member roles
-  memberRoles: z.array(z.string().min(1).max(60)).default([]),
+  memberRoles: z.array(zText('Member role', { min: 1, max: 60 })).max(50, 'At most 50 member roles.').default([]),
   // Optional reason captured for the change log
-  reason: z.string().optional().nullable(),
+  reason: zComment('Reason', 1000),
 });
 
 export type RuleConfigInput = z.infer<typeof configSchema>;

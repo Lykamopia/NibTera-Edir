@@ -34,7 +34,9 @@ export function sanitizeHtml(input: string | null | undefined): string {
     if (tag === 'a') {
       const hrefMatch = attrs.match(/\bhref\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/i);
       const href = (hrefMatch?.[2] ?? hrefMatch?.[3] ?? hrefMatch?.[4] ?? '').trim();
-      const safe = /^(https?:\/\/|mailto:|\/)/i.test(href) ? href.replace(/"/g, '&quot;') : '';
+      // In-app paths only when they can't be read as protocol-relative (// or /\);
+      // reject whitespace/quotes outright rather than trying to escape them.
+      const safe = /^(https?:\/\/|mailto:|\/(?![/\\]))/i.test(href) && !/[\s"'`<>]/.test(href) ? href : '';
       return safe ? `<a href="${safe}" target="_blank" rel="noopener noreferrer">` : '<a>';
     }
     return `<${tag}>`;

@@ -1,4 +1,8 @@
 import type {Metadata} from 'next';
+// Inter is self-hosted from the app's own origin (bundled into /_next/static by
+// Next) instead of loading Google Fonts at runtime: no third-party CSS/fonts to
+// trust, nothing that needs SRI, and the CSP needs no external font/style hosts.
+import '@fontsource-variable/inter/wght.css';
 import './globals.css';
 import { Toaster } from "@/components/ui/sonner"
 import { NotificationProvider } from '@/components/notification-provider';
@@ -24,11 +28,8 @@ export default async function RootLayout({
 
   return (
     <html lang="en" suppressHydrationWarning>
-      <head>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-      </head>
+      {/* No third-party <link>/<script>: fonts are self-hosted (see import above). */}
+      <head />
       <body className="font-body antialiased">
         <AuthProvider>
             <ThemeProvider

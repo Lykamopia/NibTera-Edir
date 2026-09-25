@@ -10,6 +10,7 @@ import '@/lib/approval-modules';
 import { sanitizeHtml, htmlToText } from '@/lib/sanitize-html';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
+import { zId, zText, zUploadPath, zSearch } from '@/lib/validation';
 
 const OPEN: Prisma.ApprovalRequestWhereInput['status'] = { in: ['PENDING', 'RETURNED'] };
 
@@ -87,6 +88,7 @@ export async function getRulesPage() {
 }
 
 export async function getRulesVersion(id: string) {
+  id = zId.parse(id);
   const actor = await getActor();
   await assertPermission(actor, ['view_rules', 'manage_rules']);
   const v = await prisma.rulesVersion.findUnique({ where: { id }, include: { author: true, approver: true, attachments: true } });
@@ -172,6 +174,7 @@ async function loadEditableDraft(actor: Awaited<ReturnType<typeof getActor>>, id
 
 export async function updateDraft(id: string, input: z.infer<typeof draftSchema>) {
   try {
+    id = zId.parse(id);
     const { actor, edirId } = await requireActor('manage_rules');
     const data = draftSchema.parse(input);
     const res = await loadEditableDraft(actor, id);
@@ -190,6 +193,7 @@ export async function updateDraft(id: string, input: z.infer<typeof draftSchema>
 
 export async function deleteDraft(id: string) {
   try {
+    id = zId.parse(id);
     const { actor, edirId } = await requireActor('manage_rules');
     const res = await loadEditableDraft(actor, id);
     if ('error' in res) return { success: false as const, error: res.error };
@@ -204,6 +208,7 @@ export async function deleteDraft(id: string) {
 
 export async function submitRulesVersion(id: string, summary?: string) {
   try {
+    id = zId.parse(id);
     const { actor, edirId } = await requireActor('manage_rules');
     summary = changeSummarySchema.parse(summary) ?? undefined;
     const res = await loadEditableDraft(actor, id);
@@ -230,10 +235,11 @@ export async function submitRulesVersion(id: string, summary?: string) {
 
 // ─── Attachments ─────────────────────────────────────────────────────────────
 
-const attachmentSchema = z.object({ name: z.string().min(1), url: z.string().min(1) });
+const attachmentSchema = z.object({ name: zText('File name', { min: 1, max: 255 }), url: zUploadPath });
 
 export async function addRulesAttachment(versionId: string, input: z.infer<typeof attachmentSchema>) {
   try {
+    versionId = zId.parse(versionId);
     const { actor, edirId } = await requireActor('manage_rules');
     const res = await loadEditableDraft(actor, versionId);
     if ('error' in res) return { success: false as const, error: res.error };
@@ -249,6 +255,7 @@ export async function addRulesAttachment(versionId: string, input: z.infer<typeo
 
 export async function removeRulesAttachment(attachmentId: string) {
   try {
+    attachmentId = zId.parse(attachmentId);
     const { actor, edirId } = await requireActor('manage_rules');
     const att = await prisma.rulesAttachment.findUnique({ where: { id: attachmentId }, include: { version: true } });
     if (!att) return { success: false as const, error: 'Attachment not found.' };
@@ -265,6 +272,7 @@ export async function removeRulesAttachment(attachmentId: string) {
 
 /** Lightweight search across version titles + plain-text content (audit/compliance). */
 export async function searchRules(query: string) {
+  query = zSearch.parse(query) ?? '';
   const actor = await getActor();
   await assertPermission(actor, ['view_rules', 'manage_rules']);
   const edirId = await resolveEdirId(actor);

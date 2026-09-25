@@ -6,6 +6,7 @@ import { getActor, ACTIVE_EDIR_COOKIE } from '@/lib/tenant-scope';
 import { AccessDeniedError } from '@/lib/errors';
 import { failure } from '@/lib/action-result';
 import { revalidatePath } from 'next/cache';
+import { zOptionalId } from '@/lib/validation';
 
 /**
  * Organizational context switcher. For Super-Admins, pins an active Edir.
@@ -97,6 +98,7 @@ export async function getEdirContext(): Promise<EdirContext> {
 /** Pin (or clear with null) the user's active Edir context. */
 export async function setActiveEdir(edirId: string | null) {
   try {
+    edirId = zOptionalId.parse(edirId) ?? null;
     const actor = await getActor();
 
     // EDIR-scoped users cannot switch context

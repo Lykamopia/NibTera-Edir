@@ -10,17 +10,22 @@ import { generateTempPassword } from '@/lib/secure-random';
 import { issueSetPasswordLink } from '@/lib/set-password-link';
 import { failure } from '@/lib/action-result';
 import { z } from 'zod';
+import { zId, zOptionalId, zName, zEmail, zEthiopianPhone } from '@/lib/validation';
+
+// Login identifier: a full email, or a NIB username that normalizeNibEmail completes.
+const zLoginEmail = z.string().trim().min(3, 'Email is required.').max(254, 'Email is too long.')
+  .regex(/^[A-Za-z0-9._%+-]+(@[A-Za-z0-9.-]+\.[A-Za-z]{2,})?$/, 'Enter a valid email or NIB username.');
 
 // Strict server-side input contracts (length-bounded, required fields explicit).
 const branchUserSchema = z.object({
-  email: z.string().trim().min(3, 'Email is required.').max(254, 'Email is too long.'),
-  phone: z.string().trim().min(7, 'Phone is required.').max(20, 'Phone is too long.'),
-  name: z.string().trim().min(2, 'Name is required.').max(120, 'Name is too long.'),
-  branchId: z.string().trim().min(1, 'Branch is required.'),
-  roleId: z.string().trim().min(1).optional(),
+  email: zLoginEmail,
+  phone: zEthiopianPhone,
+  name: zName(),
+  branchId: zId,
+  roleId: zId.optional(),
 });
 const districtUserSchema = branchUserSchema.omit({ branchId: true }).extend({
-  districtId: z.string().trim().min(1, 'District is required.'),
+  districtId: zId,
 });
 
 export async function createBranchUser(input: {
@@ -214,6 +219,7 @@ export async function createDistrictUser(input: {
 
 export async function listBranchUsers(branchId: string) {
   try {
+    branchId = zId.parse(branchId);
     const actor = await getActor();
 
     // Check permission
@@ -268,6 +274,7 @@ async function assertOrgUnitScope(
  *  With no placement given, falls back to the actor's own org unit. */
 export async function getOrgRoles(placement: { branchId?: string | null; districtId?: string | null } = {}) {
   try {
+    placement = z.object({ branchId: zOptionalId, districtId: zOptionalId }).parse(placement ?? {});
     const actor = await getActor();
     await assertPermission(actor, ['view_users', 'manage_users']);
     let branchId = placement.branchId?.trim() || null;
@@ -302,12 +309,12 @@ export async function getOrgRoles(placement: { branchId?: string | null; distric
 }
 
 const orgUserSchema = z.object({
-  name: z.string().trim().min(2, 'Name is required.').max(120, 'Name is too long.'),
-  email: z.string().trim().email('A valid email is required.').max(254),
-  phone: z.string().trim().min(7, 'Phone is required.').max(20),
-  roleId: z.string().trim().min(1, 'Select a role.'),
-  branchId: z.string().trim().optional().nullable(),
-  districtId: z.string().trim().optional().nullable(),
+  name: zName(),
+  email: zEmail,
+  phone: zEthiopianPhone,
+  roleId: zId,
+  branchId: zOptionalId,
+  districtId: zOptionalId,
 });
 
 /** Validate that a role fits a branch/district placement. */
@@ -401,15 +408,16 @@ export async function createOrgUser(input: z.infer<typeof orgUserSchema>) {
 }
 
 const orgUserUpdateSchema = z.object({
-  name: z.string().trim().min(2).max(120),
-  email: z.string().trim().email().max(254),
-  phone: z.string().trim().min(7).max(20),
-  roleId: z.string().trim().min(1, 'Select a role.'),
+  name: zName(),
+  email: zEmail,
+  phone: zEthiopianPhone,
+  roleId: zId,
 });
 
 /** Edit a platform user within the actor's org unit (name, contact, role). */
 export async function updateOrgUser(userId: string, input: z.infer<typeof orgUserUpdateSchema>) {
   try {
+    userId = zId.parse(userId);
     const actor = await getActor();
     await assertPermission(actor, 'manage_users');
     const parsed = orgUserUpdateSchema.safeParse(input);
@@ -458,6 +466,7 @@ export async function updateOrgUser(userId: string, input: z.infer<typeof orgUse
  */
 export async function deleteOrgUser(userId: string) {
   try {
+    userId = zId.parse(userId);
     const actor = await getActor();
     await assertPermission(actor, 'manage_users');
     const user = await prisma.user.findUnique({ where: { id: userId }, include: { role: { select: { scope: true } } } });
@@ -489,6 +498,7 @@ export async function deleteOrgUser(userId: string) {
 
 export async function listDistrictUsers(districtId: string) {
   try {
+    districtId = zId.parse(districtId);
     const actor = await getActor();
 
     // Only super-admin can list district users

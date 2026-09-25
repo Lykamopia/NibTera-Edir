@@ -24,6 +24,7 @@ import { PageHeader, StatCard, LoadingState, ErrorState, EmptyState } from '@/co
 import { ReceiptUpload, type ReceiptFile } from '@/components/ui/receipt-upload';
 import { FileText, X } from 'lucide-react';
 import { DateRangeFilter, ALL_TIME, toParam, type DateRangeValue } from '@/components/ui/date-range-filter';
+import { toCsv } from '@/lib/csv';
 
 const STATUS_VARIANT: Record<string, { label: string; cls: string }> = {
   REPORTED: { label: 'Reported', cls: 'border-info/20 bg-info/10 text-info' },
@@ -108,7 +109,7 @@ function ClaimsTab({ dateRange }: { dateRange: DateRangeValue }) {
   const exportCsv = () => {
     const header = ['Member', 'Member ID', 'Type', 'Affected', 'Status', 'Approved', 'Disbursed', 'Created'];
     const data = sorted.map(c => [c.memberName, c.memberId, c.typeName || '', c.affectedPerson || '', c.status, c.approvedAmount ?? '', c.disbursedAmount ?? '', new Date(c.createdAt).toISOString().slice(0, 10)]);
-    const csv = [header, ...data].map(r => r.map(x => `"${String(x).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const csv = toCsv([header, ...data]);
     downloadCsv(csv, 'emergency-claims.csv');
   };
 

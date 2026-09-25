@@ -13,6 +13,7 @@ import { generateTempPassword } from '@/lib/secure-random';
 import { issueSetPasswordLink } from '@/lib/set-password-link';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
+import { zId, zOptionalId, zName, zEmail, zEthiopianPhone, zOptionalEmail, zSearch, parseArgs } from '@/lib/validation';
 
 // Association management is a platform capability: full Super-Admins, or a
 // limited platform role granted `manage_associations` (e.g. an "assign Edir
@@ -48,6 +49,7 @@ export async function getAssociationEdirs() {
 
 /** Users for association, filterable by Edir / search / unassigned. */
 export async function getAssociationUsers(params: { edirId?: string; query?: string; unassigned?: boolean } = {}) {
+  params = z.object({ edirId: zOptionalId, query: zSearch, unassigned: z.boolean().optional() }).parse(params) as typeof params;
   await requireSuperAdmin();
   const q = params.query?.trim();
   const where: any = {
@@ -65,6 +67,7 @@ export async function getAssociationUsers(params: { edirId?: string; query?: str
 
 /** Current association detail for the Edit dialog (scope, placement, role, status). */
 export async function getUserAssociationDetail(userId: string) {
+  userId = zId.parse(userId);
   await requireSuperAdmin();
   const u = await prisma.user.findUnique({
     where: { id: userId },
@@ -82,6 +85,7 @@ export async function getUserAssociationDetail(userId: string) {
 
 /** All users that currently belong to a specific Edir. */
 export async function getEdirUsers(edirId: string) {
+  edirId = zId.parse(edirId);
   await requireSuperAdmin();
   const users = await prisma.user.findMany({
     where: { edirId },
@@ -93,6 +97,7 @@ export async function getEdirUsers(edirId: string) {
 
 /** Roles available within an Edir (for role assignment during association). */
 export async function getEdirRolesForAssociation(edirId: string) {
+  edirId = zId.parse(edirId);
   await requireSuperAdmin();
   const query = () => prisma.role.findMany({
     where: { scope: 'EDIR', OR: [{ edirId }, { edirId: null }] }, // tenant roles + global templates
@@ -136,6 +141,7 @@ export type OrgScope = 'HEAD_OFFICE' | 'DISTRICT' | 'BRANCH';
  *  • BRANCH      → platform roles + BRANCH roles for the chosen branch (+ global branch templates)
  */
 export async function getScopedRolesForAssociation(scope: OrgScope, scopeId?: string | null) {
+  [scope, scopeId] = parseArgs([z.enum(['HEAD_OFFICE', 'DISTRICT', 'BRANCH']), zOptionalId], [scope, scopeId]) as [OrgScope, string | null];
   const actor = await getActor();
   if (!actor.isSuperAdmin) throw new AccessDeniedError('Only Super Administrators can manage platform users.');
   
@@ -178,16 +184,16 @@ export async function getScopedRolesForAssociation(scope: OrgScope, scopeId?: st
 }
 
 const createPlatformAdminSchema = z.object({
-  name: z.string().min(2, 'Name is required.'),
-  email: z.string().email('A valid email is required.'),
-  phone: z.string().min(9, 'A phone number is required.'),
-  roleId: z.string().min(1, 'Select a role.'),
+  name: zName(),
+  email: zEmail,
+  phone: zEthiopianPhone,
+  roleId: zId,
   // Organizational placement (all optional):
   //  • neither           → Head Office user
   //  • districtId only    → District user
   //  • districtId+branchId → Branch user
-  districtId: z.string().optional().nullable(),
-  branchId: z.string().optional().nullable(),
+  districtId: zOptionalId,
+  branchId: zOptionalId,
 });
 
 /**
@@ -288,6 +294,7 @@ export async function getPlatformUsers() {
  *  can collect one via `opts.email` (saved and synced to a linked member row). */
 export async function resetAssociationUserPassword(userId: string, opts?: { email?: string }) {
   try {
+    [userId, opts] = parseArgs([zId, z.object({ email: zOptionalEmail }).optional()], [userId, opts]) as [string, { email?: string } | undefined];
     const actor = await requireSuperAdmin();
     const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true, name: true, phone: true, email: true, edirId: true, role: { select: { scope: true } } } });
     if (!user) return { success: false as const, error: 'User not found.' };
@@ -333,11 +340,11 @@ export async function resetAssociationUserPassword(userId: string, opts?: { emai
 }
 
 const createUserSchema = z.object({
-  name: z.string().min(2, 'Name is required.'),
-  email: z.string().email('A valid email is required.'),
-  phone: z.string().min(9, 'A phone number is required.'),
-  edirId: z.string().min(1, 'Select an Edir.'),
-  roleId: z.string().optional().nullable(),
+  name: zName(),
+  email: zEmail,
+  phone: zEthiopianPhone,
+  edirId: zId,
+  roleId: zOptionalId,
 });
 
 /**
@@ -393,9 +400,9 @@ export async function createPlatformUser(input: z.infer<typeof createUserSchema>
 }
 
 const associateSchema = z.object({
-  userIds: z.array(z.string()).min(1, 'Select at least one user.'),
-  edirId: z.string().min(1, 'Select an Edir.'),
-  roleId: z.string().optional().nullable(),
+  userIds: z.array(zId).min(1, 'Select at least one user.').max(500, 'Select at most 500 users.'),
+  edirId: zId,
+  roleId: zOptionalId,
   activate: z.boolean().default(true),
 });
 
@@ -449,12 +456,12 @@ export async function associateUsers(input: z.infer<typeof associateSchema>) {
 }
 
 const editAssociationSchema = z.object({
-  userId: z.string().min(1),
+  userId: zId,
   scope: z.enum(['HEAD_OFFICE', 'DISTRICT', 'BRANCH', 'EDIR']),
-  edirId: z.string().optional().nullable(),
-  districtId: z.string().optional().nullable(),
-  branchId: z.string().optional().nullable(),
-  roleId: z.string().optional().nullable(),
+  edirId: zOptionalId,
+  districtId: zOptionalId,
+  branchId: zOptionalId,
+  roleId: zOptionalId,
   status: z.enum(['ACTIVE', 'INACTIVE', 'SUSPENDED']),
 });
 
@@ -553,6 +560,7 @@ export async function updateUserAssociation(input: z.infer<typeof editAssociatio
 /** Remove a user from their Edir (unassign + deactivate). */
 export async function removeUserFromEdir(userId: string) {
   try {
+    userId = zId.parse(userId);
     const actor = await requireSuperAdmin();
     const user = await prisma.user.findUnique({ where: { id: userId }, include: { role: { select: { scope: true } }, edir: { select: { name: true } } } });
     if (!user) return { success: false as const, error: 'User not found.' };
@@ -570,6 +578,7 @@ export async function removeUserFromEdir(userId: string) {
 /** Activate / deactivate / suspend a user from the association console. */
 export async function setAssociationUserStatus(userId: string, status: 'ACTIVE' | 'INACTIVE' | 'SUSPENDED') {
   try {
+    [userId, status] = parseArgs([zId, z.enum(['ACTIVE', 'INACTIVE', 'SUSPENDED'])], [userId, status]) as [string, typeof status];
     const actor = await requireSuperAdmin();
     const user = await prisma.user.findUnique({ where: { id: userId }, include: { role: { select: { permissions: true } } } });
     if (!user) return { success: false as const, error: 'User not found.' };

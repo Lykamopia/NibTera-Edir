@@ -18,7 +18,7 @@ h1,h2,h3,h4{font-family:Arial,Helvetica,sans-serif;line-height:1.3} h1{font-size
 .meta{color:#666;font-size:12px;margin:8px 0 28px;border-bottom:1px solid #ddd;padding-bottom:12px}
 ul,ol{padding-left:24px} blockquote{border-left:3px solid #ccc;margin:0;padding-left:12px;color:#555}`;
 
-const SAFE_HREF = /^(https?:\/\/|mailto:|\/(?!\/))/i;
+const SAFE_HREF = /^(https?:\/\/|mailto:|\/(?![/\\]))/i;
 
 function copySafe(source: Node, target: Node, doc: Document): void {
   source.childNodes.forEach((child) => {

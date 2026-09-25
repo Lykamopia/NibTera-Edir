@@ -11,6 +11,7 @@ import '@/lib/approval-modules';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
 import { dateWhere, type DateRangeParam } from '@/lib/date-range';
+import { zId, zOptionalId, zName, zOptionalName, zText, zOptionalText, zMoney, zInt, zComment, zRequiredComment, zSearch, zFilter, zDateRange, zOptionalPastDateString, zUploadPath, parseArgs } from '@/lib/validation';
 
 /** Tenant-wide emergency KPIs for the summary cards. */
 export async function getEmergencySummary(range?: DateRangeParam) {
@@ -39,15 +40,15 @@ export async function getEmergencySummary(range?: DateRangeParam) {
 // ─── Emergency types (payout configuration) ──────────────────────────────────
 
 const typeSchema = z.object({
-  id: z.string().optional(),
-  name: z.string().min(2, 'Name is required.'),
-  description: z.string().optional().nullable(),
-  basePayout: z.coerce.number().min(0).default(0),
+  id: zId.optional(),
+  name: zName('Emergency type name', 80),
+  description: zOptionalText('Description', { max: 1000, multiline: true }),
+  basePayout: zMoney('Base payout').default(0),
   documentationRequired: z.boolean().default(false),
-  requiredDocuments: z.string().optional().nullable(),
+  requiredDocuments: zOptionalText('Required documents', { max: 500, multiline: true }),
   requiresApproval: z.boolean().default(true),
-  waitingPeriodDays: z.coerce.number().int().min(0).default(0),
-  eligibilityMonths: z.coerce.number().int().min(0).default(0),
+  waitingPeriodDays: zInt('Waiting period (days)', 0, 3650).default(0),
+  eligibilityMonths: zInt('Eligibility (months)', 0, 600).default(0),
   isActive: z.boolean().default(true),
 });
 
@@ -101,6 +102,7 @@ export async function saveEmergencyType(input: z.infer<typeof typeSchema>) {
 
 export async function deleteEmergencyType(id: string) {
   try {
+    id = zId.parse(id);
     const { actor, edirId } = await requireActor(['manage_emergencies', 'manage_edir_settings']);
     const existing = await prisma.emergencyType.findUnique({ where: { id }, include: { _count: { select: { claims: true } } } });
     if (!existing) return { success: false as const, error: 'Emergency type not found.' };
@@ -133,6 +135,7 @@ function assertGoodStanding(member: { status: string; name: string }) {
 const OPEN_STATUSES: Prisma.ApprovalRequestWhereInput['status'] = { in: ['PENDING', 'RETURNED'] };
 
 export async function getEmergencyClaims(params: { status?: string; query?: string; range?: DateRangeParam } = {}) {
+  params = z.object({ status: zFilter(['REPORTED', 'PENDING', 'ACTIVE', 'RESOLVED', 'REJECTED']), query: zSearch, range: zDateRange }).parse(params) as typeof params;
   const actor = await getActor();
   await assertPermission(actor, ['view_emergencies', 'manage_emergencies']);
   const where: Prisma.EmergencyClaimWhereInput = {
@@ -190,6 +193,7 @@ export async function getEmergencyClaims(params: { status?: string; query?: stri
 }
 
 export async function getEmergencyClaim(id: string) {
+  id = zId.parse(id);
   const actor = await getActor();
   await assertPermission(actor, ['view_emergencies', 'manage_emergencies']);
   const claim = await prisma.emergencyClaim.findUnique({
@@ -213,12 +217,12 @@ export async function getEmergencyClaim(id: string) {
 // ─── Report a claim ──────────────────────────────────────────────────────────
 
 const reportSchema = z.object({
-  memberId: z.string().min(1, 'A member is required.'),
-  typeId: z.string().optional().nullable(),
-  affectedPerson: z.string().optional().nullable(),
-  description: z.string().optional().nullable(),
-  date: z.string().optional().nullable(),
-  location: z.string().optional().nullable(),
+  memberId: zId,
+  typeId: zOptionalId,
+  affectedPerson: zOptionalName('Affected person'),
+  description: zOptionalText('Description', { max: 4000, multiline: true }),
+  date: zOptionalPastDateString('Date'),
+  location: zOptionalText('Location', { max: 200 }),
   priority: z.enum(['low', 'normal', 'high', 'urgent']).default('normal'),
 });
 
@@ -272,6 +276,7 @@ export async function reportClaim(input: z.infer<typeof reportSchema>) {
 
 export async function rejectReportedClaim(claimId: string, reason?: string) {
   try {
+    [claimId, reason] = parseArgs([zId, zComment('Reason')], [claimId, reason]) as [string, string | undefined];
     const { actor, edirId } = await requireActor(['reject_emergency', 'manage_emergencies']);
     const claim = await prisma.emergencyClaim.findUnique({ where: { id: claimId } });
     if (!claim) return { success: false as const, error: 'Claim not found.' };
@@ -292,6 +297,7 @@ export async function rejectReportedClaim(claimId: string, reason?: string) {
 
 export async function addClaimNote(claimId: string, note: string) {
   try {
+    [claimId, note] = parseArgs([zId, zRequiredComment('Note')], [claimId, note]) as [string, string];
     const { actor, edirId } = await requireActor('manage_emergencies');
     const claim = await prisma.emergencyClaim.findUnique({ where: { id: claimId } });
     if (!claim) return { success: false as const, error: 'Claim not found.' };
@@ -315,8 +321,8 @@ async function hasOpenRequest(module: 'EMERGENCY_CLAIM' | 'EMERGENCY_DISBURSEMEN
 }
 
 const submitClaimSchema = z.object({
-  claimId: z.string().min(1),
-  approvedAmount: z.coerce.number().min(0),
+  claimId: zId,
+  approvedAmount: zMoney('Approved amount'),
 });
 
 /** Maker submits a reported claim for checker approval (EMERGENCY_CLAIM). */
@@ -354,11 +360,11 @@ export async function submitClaimForApproval(input: z.infer<typeof submitClaimSc
   }
 }
 
-const receiptSchema = z.object({ path: z.string().min(1), name: z.string().min(1) });
+const receiptSchema = z.object({ path: zUploadPath, name: zText('File name', { min: 1, max: 255 }) });
 const disburseSchema = z.object({
-  claimId: z.string().min(1),
-  amount: z.coerce.number().min(0),
-  receipts: z.array(receiptSchema).optional(),
+  claimId: zId,
+  amount: zMoney('Amount'),
+  receipts: z.array(receiptSchema).max(20, 'Attach at most 20 receipts.').optional(),
 });
 
 /** Maker requests disbursement of an approved (ACTIVE) claim (EMERGENCY_DISBURSEMENT). */

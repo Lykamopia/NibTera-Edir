@@ -24,6 +24,7 @@ import { Pagination, usePagination } from '@/components/ui/pagination';
 import { ReceiptUpload, type ReceiptFile } from '@/components/ui/receipt-upload';
 import { PaymentReceiptModal } from '@/components/payment-receipt-modal';
 import { getMemberOutstanding, recordManualPayment, getPaymentsSummary, getMemberPaymentHistory, getPaymentsMatrix } from '@/app/actions/payments';
+import { toCsv } from '@/lib/csv';
 
 // Distinct, labeled charge lines so the operator knows exactly what each amount
 // pays for and can explain the payment to the member. These are the ONLY real
@@ -144,7 +145,7 @@ export default function PaymentsClient() {
       String(m.eventPenalties ?? 0), String(m.accountBalance ?? 0), String(due(m)), String(m.pendingAmount ?? 0),
       m.lastPayment ? new Date(m.lastPayment).toLocaleDateString() : '',
     ]);
-    const csv = [header, ...data].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const csv = toCsv([header, ...data]);
     downloadCsv(csv, name);
   };
   const exportAll = () => exportRows(rows, 'payments.csv');

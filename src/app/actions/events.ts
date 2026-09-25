@@ -9,6 +9,7 @@ import { createNotifications } from '@/lib/notification-helpers';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
 import { dateWhere, type DateRangeParam } from '@/lib/date-range';
+import { zId, zText, zOptionalText, zMoney, zIdList, zSearch, zFilter, zDateRange, zDateString, parseArgs } from '@/lib/validation';
 
 // ─── Events (read) ───────────────────────────────────────────────────────────
 
@@ -37,6 +38,7 @@ export async function getEventsSummary(range?: DateRangeParam) {
 }
 
 export async function getEvents(params: { status?: string; query?: string; range?: DateRangeParam } = {}) {
+  params = z.object({ status: zFilter(['SCHEDULED', 'COMPLETED', 'CANCELLED']), query: zSearch, range: zDateRange }).parse(params) as typeof params;
   const actor = await getActor();
   await assertPermission(actor, ['view_events', 'manage_events']);
   const where: Prisma.EventWhereInput = {
@@ -66,6 +68,7 @@ export async function getEvents(params: { status?: string; query?: string; range
 }
 
 export async function getEvent(id: string) {
+  id = zId.parse(id);
   const actor = await getActor();
   await assertPermission(actor, ['view_events', 'manage_events']);
   const event = await prisma.event.findUnique({
@@ -102,15 +105,15 @@ export async function getEvent(id: string) {
 // ─── Create / edit / cancel ──────────────────────────────────────────────────
 
 const eventSchema = z.object({
-  id: z.string().optional(),
-  title: z.string().min(2, 'Title is required.'),
-  datetime: z.string().min(1, 'A date and time is required.'),
-  location: z.string().optional().nullable(),
+  id: zId.optional(),
+  title: zText('Title', { min: 2, max: 200 }),
+  datetime: zDateString('Date and time'),
+  location: zOptionalText('Location', { max: 200 }),
   attendanceRequired: z.boolean().default(false),
-  absencePenalty: z.coerce.number().min(0).default(0),
+  absencePenalty: zMoney('Absence penalty').default(0),
   // Expected participants chosen during creation (members / roles / groups resolve
   // to member IDs on the client). Applied only when creating a new event.
-  participantMemberIds: z.array(z.string()).optional(),
+  participantMemberIds: zIdList(5000).optional(),
 });
 
 export async function saveEvent(input: z.infer<typeof eventSchema>) {
@@ -170,6 +173,7 @@ export async function saveEvent(input: z.infer<typeof eventSchema>) {
 
 export async function cancelEvent(id: string) {
   try {
+    id = zId.parse(id);
     const { actor, edirId } = await requireActor(['cancel_event', 'manage_events']);
     const event = await prisma.event.findUnique({ where: { id } });
     if (!event) return { success: false as const, error: 'Event not found.' };
@@ -188,6 +192,7 @@ export async function cancelEvent(id: string) {
 /** Reschedule a scheduled event to a new date/time (distinct from full edit). */
 export async function rescheduleEvent(id: string, datetime: string) {
   try {
+    [id, datetime] = parseArgs([zId, zDateString('Date and time')], [id, datetime]) as [string, string];
     const { actor, edirId } = await requireActor(['reschedule_event', 'manage_events']);
     const when = new Date(datetime);
     if (isNaN(+when)) return { success: false as const, error: 'Invalid date/time.' };
@@ -223,6 +228,7 @@ export async function getEventCapabilities() {
 
 export async function addParticipants(eventId: string, memberIds: string[]) {
   try {
+    [eventId, memberIds] = parseArgs([zId, zIdList(5000)], [eventId, memberIds]) as [string, string[]];
     const { actor, edirId } = await requireActor('manage_events');
     const event = await prisma.event.findUnique({ where: { id: eventId } });
     if (!event) return { success: false as const, error: 'Event not found.' };
@@ -247,6 +253,7 @@ export async function addParticipants(eventId: string, memberIds: string[]) {
 
 /** Convenience: invite every active member of the tenant. */
 export async function inviteAllActiveMembers(eventId: string) {
+  eventId = zId.parse(eventId);
   const actor = await getActor();
   const event = await prisma.event.findUnique({ where: { id: eventId } });
   if (!event) return { success: false as const, error: 'Event not found.' };
@@ -256,6 +263,7 @@ export async function inviteAllActiveMembers(eventId: string) {
 
 export async function removeParticipant(participantId: string) {
   try {
+    participantId = zId.parse(participantId);
     const { actor, edirId } = await requireActor('manage_events');
     const participant = await prisma.eventParticipant.findUnique({ where: { id: participantId }, include: { event: true } });
     if (!participant) return { success: false as const, error: 'Participant not found.' };
@@ -275,6 +283,7 @@ const attendanceStatuses = ['INVITED', 'ATTENDING', 'DECLINED', 'PRESENT', 'ABSE
 
 export async function setAttendance(participantId: string, status: (typeof attendanceStatuses)[number]) {
   try {
+    [participantId, status] = parseArgs([zId, z.enum(attendanceStatuses)], [participantId, status]) as [string, typeof status];
     const { actor, edirId } = await requireActor('manage_events');
     if (!attendanceStatuses.includes(status)) return { success: false as const, error: 'Invalid status.' };
     const participant = await prisma.eventParticipant.findUnique({ where: { id: participantId }, include: { event: true } });
@@ -296,6 +305,7 @@ export async function setAttendance(participantId: string, status: (typeof atten
  */
 export async function setAttendanceBulk(eventId: string, status: (typeof attendanceStatuses)[number], participantIds?: string[]) {
   try {
+    [eventId, status, participantIds] = parseArgs([zId, z.enum(attendanceStatuses), zIdList(5000).optional()], [eventId, status, participantIds]) as [string, typeof status, string[] | undefined];
     const { actor, edirId } = await requireActor('manage_events');
     if (!attendanceStatuses.includes(status)) return { success: false as const, error: 'Invalid status.' };
     const event = await prisma.event.findUnique({ where: { id: eventId } });
@@ -325,6 +335,7 @@ export async function setAttendanceBulk(eventId: string, status: (typeof attenda
  */
 export async function finalizeAttendance(eventId: string) {
   try {
+    eventId = zId.parse(eventId);
     const { actor, edirId } = await requireActor('finalize_attendance');
     const event = await prisma.event.findUnique({
       where: { id: eventId },

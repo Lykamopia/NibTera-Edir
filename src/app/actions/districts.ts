@@ -6,6 +6,7 @@ import prisma from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
 import { writeAudit } from '@/lib/audit';
 import { failure } from '@/lib/action-result';
+import { zId, zName, zCode, zOptionalText } from '@/lib/validation';
 
 const DISTRICT_MANAGER_PERMISSIONS = [
   'view_dashboard', 'view_districts', 'manage_branches', 'view_branches',
@@ -61,6 +62,7 @@ export async function getDistricts() {
 
 export async function saveDistrict(input: { id?: string; name: string; code: string; description?: string }) {
   try {
+    input = z.object({ id: zId.optional(), name: zName('District name', 120), code: zCode('District code'), description: zOptionalText('Description', { max: 500, multiline: true }) }).parse(input) as typeof input;
     const actor = await getActor();
     await assertPermission(actor, input.id ? ['edit_district', 'manage_districts', 'super_admin'] : ['create_district', 'manage_districts', 'super_admin']);
 
@@ -107,9 +109,9 @@ export async function saveDistrict(input: { id?: string; name: string; code: str
 }
 
 const importDistrictRow = z.object({
-  name: z.string().trim().min(1, 'Name is required'),
-  code: z.string().trim().min(1, 'Code is required'),
-  description: z.string().trim().optional().nullable(),
+  name: zName('Name', 120),
+  code: zCode('Code'),
+  description: zOptionalText('Description', { max: 500, multiline: true }),
 });
 
 export interface ImportResult {
@@ -164,6 +166,7 @@ export async function importDistricts(rows: unknown[]): Promise<ImportResult | {
 
 export async function deleteDistrict(id: string) {
   try {
+    id = zId.parse(id);
     const actor = await getActor();
     await assertPermission(actor, ['delete_district', 'manage_districts', 'super_admin']);
 

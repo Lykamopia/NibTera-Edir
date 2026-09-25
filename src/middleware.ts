@@ -66,10 +66,19 @@ function generateCsp(nonce: string, framable: boolean, sameOriginEmbeddable: boo
   const policies: Record<string, string[]> = {
     'default-src': ["'self'"],
     'script-src': ["'self'", `'nonce-${nonce}'`, "'strict-dynamic'", "'sha256-n46vPwSWuMC0W703pBofImv82Z26xo4LXymv0E9caPk='"],
-    'style-src': ["'self'", "https://fonts.googleapis.com", "'unsafe-inline'"],
-    'img-src': ["'self'", "data:", "https://images.unsplash.com", "https://picsum.photos", "https://cdn.brandfetch.io"],
+    // Every script, stylesheet and font is served from our own origin (fonts are
+    // self-hosted), so no third-party host is allowlisted anywhere — there is no
+    // externally hosted resource that would need Subresource Integrity.
+    // 'unsafe-inline' for styles only: Radix/Sonner/Recharts set style attributes.
+    'style-src': ["'self'", "'unsafe-inline'"],
+    // blob: = local previews of a file the user is about to upload.
+    'img-src': ["'self'", "data:", "blob:"],
     'connect-src': ["'self'"],
-    'font-src': ["'self'", "https://fonts.gstatic.com"],
+    'font-src': ["'self'"],
+    'frame-src': ["'self'"],
+    'worker-src': ["'self'"],
+    'manifest-src': ["'self'"],
+    'media-src': ["'self'"],
     'object-src': ["'none'"],
     'base-uri': ["'self'"],
     'form-action': ["'self'"],

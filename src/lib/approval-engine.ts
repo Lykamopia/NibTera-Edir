@@ -20,6 +20,7 @@ import { getActor, actorHasPermission, usersWithPermission, assertSameTenant, pa
 import { AccessDeniedError, NotFoundError } from '@/lib/errors';
 import { writeAudit } from '@/lib/audit';
 import { createNotification, createNotifications } from '@/lib/notification-helpers';
+import { zId, zComment, zRequiredComment } from '@/lib/validation';
 
 /** A downstream executor runs inside the approval transaction. */
 export type ModuleExecutor = (
@@ -237,6 +238,10 @@ async function assertCanCheck(actor: Actor, request: { module: ApprovalModule; m
  */
 export async function approveRequest(requestId: string, comment?: string): Promise<void> {
   const actor = await getActor();
+  // Every approval action (approvals page, documents, relatives, …) funnels through
+  // these engine entry points, so their inputs are validated once, here.
+  requestId = zId.parse(requestId);
+  comment = zComment().parse(comment) ?? undefined;
   const request = await loadRequest(requestId);
   await assertCanCheck(actor, request);
 
@@ -286,6 +291,8 @@ export async function approveRequest(requestId: string, comment?: string): Promi
 /** Reject a request (terminal). */
 export async function rejectRequest(requestId: string, comment?: string): Promise<void> {
   const actor = await getActor();
+  requestId = zId.parse(requestId);
+  comment = zComment('Reason').parse(comment) ?? undefined;
   const request = await loadRequest(requestId);
   await assertCanCheck(actor, request);
 
@@ -323,6 +330,8 @@ export async function rejectRequest(requestId: string, comment?: string): Promis
 /** Return a request to the maker for revision (resubmittable). */
 export async function returnRequest(requestId: string, comment?: string): Promise<void> {
   const actor = await getActor();
+  requestId = zId.parse(requestId);
+  comment = zComment('Revision notes').parse(comment) ?? undefined;
   const request = await loadRequest(requestId);
   await assertCanCheck(actor, request);
 
@@ -348,6 +357,8 @@ export async function returnRequest(requestId: string, comment?: string): Promis
 /** Add a comment to a request's timeline (maker or any eligible checker). */
 export async function commentOnRequest(requestId: string, comment: string): Promise<void> {
   const actor = await getActor();
+  requestId = zId.parse(requestId);
+  comment = zRequiredComment('Comment', 2000).parse(comment);
   const request = await loadRequest(requestId);
   if (!actor.isSuperAdmin && actor.edirId !== request.edirId) {
     throw new AccessDeniedError('This request belongs to a different Edir.');
@@ -358,6 +369,8 @@ export async function commentOnRequest(requestId: string, comment: string): Prom
 /** Resubmit a RETURNED request (maker only) — updates payload and re-enters Pending. */
 export async function resubmitRequest(requestId: string, payload?: any, summary?: string): Promise<void> {
   const actor = await getActor();
+  requestId = zId.parse(requestId);
+  summary = zComment('Summary').parse(summary) ?? undefined;
   const request = await loadRequest(requestId);
   if (request.makerId !== actor.id) throw new AccessDeniedError('Only the maker may resubmit this request.');
   if (request.status !== 'RETURNED') throw new AccessDeniedError('Only returned requests can be resubmitted.');

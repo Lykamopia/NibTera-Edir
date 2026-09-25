@@ -38,6 +38,16 @@ const transporter = nodemailer.createTransport({
 // account-setup link sent on user creation, which has no user-facing retry button).
 const RETRYABLE_ERROR_CODES = new Set(['ETIMEDOUT', 'ECONNRESET', 'ECONNECTION', 'ESOCKET']);
 
+/**
+ * HTML-encode a value for insertion into an email body/attribute. Every
+ * user-controlled value (names, subjects, emails, IP / user-agent strings,
+ * admin-edited template text) goes through this — email HTML is not rendered
+ * by React, so nothing escapes it automatically.
+ */
+function esc(value: unknown): string {
+  return String(value ?? '').replace(/[&<>"'`]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;', '`': '&#96;' }[c] as string));
+}
+
 async function sendMailWithRetry(mailOptions: Parameters<typeof transporter.sendMail>[0], retries = 2, delayMs = 2000) {
     for (let attempt = 0; ; attempt++) {
         try {
@@ -133,9 +143,9 @@ async function generateMemoEmailBody(
     const memoUrl = `${getBaseUrl()}/dashboard/inbox?id=${memo.id}`;
     
     const senderNameWithRole = sender.title
-        ? `${sender.name} <span style="font-size: 0.8em; font-style: italic; color: #666;">(${sender.title})</span>`
+        ? `${esc(sender.name)} <span style="font-size: 0.8em; font-style: italic; color: #666;">(${esc(sender.title)})</span>`
         : sender.role 
-            ? `${sender.name} <span style="font-size: 0.8em; font-style: italic; color: #666;">(${sender.role.name})</span>`
+            ? `${esc(sender.name)} <span style="font-size: 0.8em; font-style: italic; color: #666;">(${esc(sender.role.name)})</span>`
             : sender.name;
 
     let notificationType = '';
@@ -147,22 +157,22 @@ async function generateMemoEmailBody(
             notificationType = `You have been CC'd on a memo from <strong>${senderNameWithRole}</strong>.`;
             break;
         case 'acknowledged':
-            notificationType = `Your memo (Ref: ${memo.memo_reference_number}) has been <strong>acknowledged</strong> by <strong>${senderNameWithRole}</strong>.`;
+            notificationType = `Your memo (Ref: ${esc(memo.memo_reference_number)}) has been <strong>acknowledged</strong> by <strong>${senderNameWithRole}</strong>.`;
             break;
         case 'replied':
-            notificationType = `A <strong>reply</strong> has been sent to your memo (Ref: ${memo.memo_reference_number}) by <strong>${senderNameWithRole}</strong>.`;
+            notificationType = `A <strong>reply</strong> has been sent to your memo (Ref: ${esc(memo.memo_reference_number)}) by <strong>${senderNameWithRole}</strong>.`;
             break;
         case 'assigned':
-            notificationType = `Your memo (Ref: ${memo.memo_reference_number}) has been <strong>assigned/forwarded</strong> by <strong>${senderNameWithRole}</strong>.`;
+            notificationType = `Your memo (Ref: ${esc(memo.memo_reference_number)}) has been <strong>assigned/forwarded</strong> by <strong>${senderNameWithRole}</strong>.`;
             break;
     }
     
-    const processedBody = bodyText
+    const processedBody = esc(bodyText)
         .replace(/{{notificationType}}/g, notificationType)
         .replace(/{{senderName}}/g, senderNameWithRole)
-        .replace(/{{subject}}/g, memo.subject)
-        .replace(/{{reference}}/g, memo.memo_reference_number || '')
-        .replace(/{{memoUrl}}/g, memoUrl)
+        .replace(/{{subject}}/g, esc(memo.subject))
+        .replace(/{{reference}}/g, esc(memo.memo_reference_number || ''))
+        .replace(/{{memoUrl}}/g, esc(memoUrl))
         .replace(/\n/g, '<br>');
 
     return `
@@ -171,7 +181,7 @@ async function generateMemoEmailBody(
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>${headerText}</title>
+        <title>${esc(headerText)}</title>
         <style>
             body { margin: 0; padding: 0; width: 100% !important; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; background-color: #f4f4f4; font-family: Arial, sans-serif; color: #333; }
             .container { width: 100%; max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; border: 1px solid #ddd; }
@@ -195,13 +205,13 @@ async function generateMemoEmailBody(
                            <img src="${logoUrl}" alt="NibTera Edir Logo" style="width:60px;height:60px;display:block;margin:0 auto;">
                         </div>
                         <div class="content">
-                            <h2>${headerText}</h2>
+                            <h2>${esc(headerText)}</h2>
                             <p>${processedBody}</p>
                             
                             <div class="memo-details">
                                 <p><strong>From:</strong> ${senderNameWithRole}</p>
-                                <p><strong>Subject:</strong> ${memo.subject}</p>
-                                <p><strong>Reference:</strong> ${memo.memo_reference_number}</p>
+                                <p><strong>Subject:</strong> ${esc(memo.subject)}</p>
+                                <p><strong>Reference:</strong> ${esc(memo.memo_reference_number)}</p>
                             </div>
 
                             <div class="button-container">
@@ -212,7 +222,7 @@ async function generateMemoEmailBody(
                             <p>The NibTera Edir System</p>
                         </div>
                          <div class="footer">
-                            <p>${footerText}</p>
+                            <p>${esc(footerText)}</p>
                         </div>
                     </div>
                 </td>
@@ -232,7 +242,7 @@ function generateAuthEmailBody(title: string, content: string): string {
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>${title}</title>
+        <title>${esc(title)}</title>
         <style>
             body { margin: 0; padding: 0; width: 100% !important; background-color: #f4f4f4; font-family: Arial, sans-serif; color: #333; }
             .container { width: 100%; max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; border: 1px solid #ddd; }
@@ -257,11 +267,11 @@ function generateAuthEmailBody(title: string, content: string): string {
                            <img src="${logoUrl}" alt="NibTera Edir Logo" style="width:60px;height:60px;display:block;margin:0 auto;">
                         </div>
                         <div class="content">
-                            <h2>${title}</h2>
+                            <h2>${esc(title)}</h2>
                             ${content}
                         </div>
                          <div class="footer">
-                            <p>${footerText}</p>
+                            <p>${esc(footerText)}</p>
                         </div>
                     </div>
                 </td>
@@ -278,7 +288,7 @@ export async function sendVerificationEmail({ to, name, token }: VerificationEma
 
     const title = "Welcome to NibTera Edir! Please Verify Your Account";
     const content = `
-        <p>Hello ${name},</p>
+        <p>Hello ${esc(name)},</p>
         <p>An account has been created for you on the NibTera Edir platform. To get started, please set your password by clicking the link below.</p>
         <p>This link is valid for <strong>${expirationHours} hour</strong>.</p>
         <div class="button-container">
@@ -333,7 +343,7 @@ export async function sendPasswordResetEmail({ to, name, token }: PasswordResetE
 
     const title = "Your Password Reset Request";
     const content = `
-        <p>Hello ${name},</p>
+        <p>Hello ${esc(name)},</p>
         <p>We received a request to reset your password for the NibTera Edir platform. You can reset your password by clicking the link below.</p>
         <p>This link is valid for <strong>${expirationHours} hour</strong>.</p>
         <div class="button-container">
@@ -386,7 +396,7 @@ export async function sendEmailChangeVerificationEmail({ to, name, token, userId
 
     const title = "Confirm Your New Email Address";
     const content = `
-        <p>Hello ${name},</p>
+        <p>Hello ${esc(name)},</p>
         <p>You requested to change your email address for the NibTera Edir platform to this one. Please confirm this change by clicking the link below.</p>
         <p>This link is valid for <strong>${expirationHours} hour</strong>.</p>
         <div class="button-container">
@@ -434,8 +444,8 @@ export async function sendEmailChangeVerificationEmail({ to, name, token, userId
 export async function sendEmailChangeNotificationEmail({ to, name, newEmail }: EmailChangeNotificationOptions) {
     const title = "Email Change Request for Your NibTera Edir Account";
     const content = `
-        <p>Hello ${name},</p>
-        <p>This is a notification that a request has been made to change the email address associated with your NibTera Edir account to <strong>${newEmail}</strong>.</p>
+        <p>Hello ${esc(name)},</p>
+        <p>This is a notification that a request has been made to change the email address associated with your NibTera Edir account to <strong>${esc(newEmail)}</strong>.</p>
         <p>A verification email has been sent to the new address. Your email will not be changed until it is verified.</p>
         <p><strong>If you did not make this request, please change your password immediately and contact an administrator.</strong></p>
     `;
@@ -480,12 +490,12 @@ export async function sendEmailChangeNotificationEmail({ to, name, newEmail }: E
 export async function sendConcurrentLoginNotification({ to, name, ipAddress, userAgent }: ConcurrentLoginNotificationOptions) {
     const title = "New Login Detected for Your NibTera Edir Account";
     const content = `
-        <p>Hello ${name},</p>
+        <p>Hello ${esc(name)},</p>
         <p>This is a security notification that a new login attempt was made for your NibTera Edir account while you have an active session.</p>
         <p><strong>Login Details:</strong></p>
         <ul>
-            <li><strong>IP Address:</strong> ${ipAddress}</li>
-            <li><strong>User Agent:</strong> ${userAgent}</li>
+            <li><strong>IP Address:</strong> ${esc(ipAddress)}</li>
+            <li><strong>User Agent:</strong> ${esc(userAgent)}</li>
             <li><strong>Time:</strong> ${new Date().toLocaleString()}</li>
         </ul>
         <p>If this was you, you can safely ignore this email. Your previous session may have been invalidated depending on security policies.</p>
@@ -538,7 +548,7 @@ export async function sendPasswordChangedNotificationEmail({ to, name }: Passwor
     const loginUrl = `${getBaseUrl()}/login`;
     const title = 'Your NibTera Edir Password Has Been Changed';
     const content = `
-        <p>Hello ${name},</p>
+        <p>Hello ${esc(name)},</p>
         <p>This is a confirmation that the password for your NibTera Edir account has been successfully changed.</p>
         <p>If you made this change, no further action is required.</p>
         <p><strong>If you did not change your password, please contact your system administrator immediately and consider your account compromised.</strong></p>

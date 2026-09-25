@@ -4,9 +4,12 @@ import { getActor, assertPermission } from '@/lib/tenant-scope';
 import prisma from '@/lib/prisma';
 import { dateWhere, type DateRangeParam } from '@/lib/date-range';
 import { failure } from '@/lib/action-result';
+import { z } from 'zod';
+import { zId, zOptionalId, zDateRange, parseArgs } from '@/lib/validation';
 
 export async function getBranchStats(branchId: string, range?: DateRangeParam) {
   try {
+    [branchId, range] = parseArgs([zId, zDateRange], [branchId, range]) as [string, DateRangeParam | undefined];
     const actor = await getActor();
     const memDate = dateWhere('joinDate', range);
     const txDate = dateWhere('createdAt', range);
@@ -62,6 +65,7 @@ export async function getBranchStats(branchId: string, range?: DateRangeParam) {
 
 export async function getDistrictStats(districtId: string, range?: DateRangeParam) {
   try {
+    [districtId, range] = parseArgs([zId, zDateRange], [districtId, range]) as [string, DateRangeParam | undefined];
     const actor = await getActor();
     const memDate = dateWhere('joinDate', range);
     const txDate = dateWhere('createdAt', range);
@@ -134,6 +138,7 @@ export async function getDistrictStats(districtId: string, range?: DateRangePara
 
 export async function getRecentActivities(scope: 'BRANCH' | 'DISTRICT' | 'HEAD_OFFICE', scopeId?: string) {
   try {
+    [scope, scopeId] = parseArgs([z.enum(['BRANCH', 'DISTRICT', 'HEAD_OFFICE']), zOptionalId], [scope, scopeId]) as [typeof scope, string | undefined];
     const actor = await getActor();
 
     // Validate scope access

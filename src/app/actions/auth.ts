@@ -37,7 +37,8 @@ export async function getFirstAccessiblePage(preferredUrl?: string | null): Prom
 
   // Honour a valid preferred URL (e.g. NextAuth callbackUrl) when it maps to a
   // real, implemented page the user can access. Account is always allowed.
-  if (preferredUrl && preferredUrl.startsWith('/dashboard')) {
+  const SAFE_DASHBOARD_PATH = /^\/dashboard(\/[A-Za-z0-9_-]+)*\/?(\?[A-Za-z0-9_=&%.-]*)?$/;
+  if (typeof preferredUrl === 'string' && preferredUrl.length <= 300 && SAFE_DASHBOARD_PATH.test(preferredUrl)) {
     if (preferredUrl === '/dashboard/account') return preferredUrl;
     const matching = [...pagePermissions]
       .filter(p => IMPLEMENTED_PAGES.has(p.id) && preferredUrl.startsWith(p.path))
@@ -128,6 +129,10 @@ export async function revokeUserTokens(userId: string) {
 
 // Verify password reset token
 export async function verifyPasswordResetToken(token: string) {
+    // Tokens are 32 random bytes, hex-encoded (src/lib/set-password-link.ts).
+    if (typeof token !== 'string' || !/^[a-f0-9]{64}$/i.test(token)) {
+        return { valid: false, error: "Invalid or expired token" };
+    }
     const resetToken = await prisma.passwordResetToken.findUnique({
         where: { token }
     });
@@ -145,6 +150,7 @@ export async function verifyPasswordResetToken(token: string) {
 
 // Set password (handles both initial account setup and password resets)
 export async function setPassword(token: string, newPassword: string) {
+    if (typeof newPassword !== 'string' || newPassword.length > 256) return { success: false, error: 'Invalid password.' };
     const result = await verifyPasswordResetToken(token);
     if (!result.valid) {
         return { success: false, error: result.error };
@@ -228,6 +234,7 @@ export async function setPassword(token: string, newPassword: string) {
  * by getLoggedInUser, before anything below is inspected.
  */
 export async function completeFirstLoginPasswordChange(newPassword: string) {
+  if (typeof newPassword !== 'string' || newPassword.length > 256) return { success: false, error: 'Invalid password.' };
   const user = await getLoggedInUser();
   if (!user) {
     return { success: false, error: 'Your session has ended. Please sign in again.' };
@@ -277,6 +284,9 @@ export async function completeFirstLoginPasswordChange(newPassword: string) {
 // middleware and by getLoggedInUser before the current password is verified, so
 // the endpoint cannot double as a cross-site password-guessing oracle.
 export async function changePassword(currentPassword: string, newPassword: string) {
+    if (typeof currentPassword !== 'string' || typeof newPassword !== 'string' || currentPassword.length > 256 || newPassword.length > 256) {
+        return { success: false, error: 'Invalid password.' };
+    }
     const user = await getLoggedInUser();
     if (!user) {
         throw new NotAuthenticatedError();
@@ -344,6 +354,8 @@ export async function changePassword(currentPassword: string, newPassword: strin
 
 // Request a self-service password reset link
 export async function requestPasswordReset(email: string): Promise<{ success: true }> {
+    // Same response for malformed input as for unknown accounts (no enumeration).
+    if (typeof email !== 'string' || email.length > 254 || /[\s<>\u0000-\u001F]/.test(email.trim())) return { success: true };
     const normalizedEmail = normalizeNibEmail(email);
 
     try {
