@@ -97,6 +97,8 @@
     "websocket-driver": "^0.7.5",
     "websocket-extensions": "^0.1.4",
     "nanoid": "^3.3.17",
-    "protobufjs": "^7.6.5"
+    "protobufjs": "^7.6.5",
+    "js-yaml": "^4.3.0",
+    "sharp": "^0.35.4"
   }
 }

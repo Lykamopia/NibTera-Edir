@@ -22,6 +22,7 @@ import {
 } from '@/app/actions/rules-doc';
 import { useConfirm } from '@/components/ui/confirm-provider';
 import { cn } from '@/lib/utils';
+import { printRichDocument } from '@/lib/print-document';
 
 const STATUS: Record<string, { label: string; cls: string }> = {
   APPROVED: { label: 'Approved', cls: 'border-success/20 bg-success/10 text-success' },
@@ -31,14 +32,7 @@ const STATUS: Record<string, { label: string; cls: string }> = {
 const fmt = (d: any) => d ? new Date(d).toLocaleDateString(undefined, { dateStyle: 'medium' }) : '—';
 
 function printDoc(title: string, html: string, meta: string) {
-  const w = window.open('', '_blank', 'width=900,height=700');
-  if (!w) { toast.error('Allow pop-ups to print or export.'); return; }
-  w.document.write(`<!doctype html><html><head><title>${title}</title><meta charset="utf-8"/>
-  <style>body{font-family:Georgia,'Times New Roman',serif;max-width:780px;margin:48px auto;padding:0 24px;color:#111;line-height:1.6}
-  h1,h2,h3,h4{font-family:Arial,Helvetica,sans-serif;line-height:1.3} h1{font-size:24px} .meta{color:#666;font-size:12px;margin:8px 0 28px;border-bottom:1px solid #ddd;padding-bottom:12px}
-  ul,ol{padding-left:24px} blockquote{border-left:3px solid #ccc;margin:0;padding-left:12px;color:#555}</style></head>
-  <body><h1>${title}</h1><div class="meta">${meta}</div>${html}</body></html>`);
-  w.document.close(); w.focus(); setTimeout(() => w.print(), 250);
+  if (!printRichDocument(title, html, meta)) toast.error('Allow pop-ups to print or export.');
 }
 
 export default function RulesClient() {

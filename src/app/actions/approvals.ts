@@ -11,6 +11,7 @@ import {
 import '@/lib/approval-modules';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
+import { sanitizeHtml } from '@/lib/sanitize-html';
 import { dateWhere, type DateRangeParam } from '@/lib/date-range';
 
 export type ApprovalTab = 'pending' | 'mine' | 'history';
@@ -256,7 +257,8 @@ async function resolveApprovalContext(edirId: string, module: string, rawPayload
       if (!v) return;
       const fileType = (name: string) => { const e = (name.split('.').pop() || '').toLowerCase(); return ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(e) ? 'image' : e === 'pdf' ? 'pdf' : 'file'; };
       ctx.rulesVersion = {
-        title: v.title, versionNumber: v.versionNumber, content: v.content, changeSummary: v.changeSummary,
+        // Rendered via dangerouslySetInnerHTML in the approval view — re-sanitize.
+        title: v.title, versionNumber: v.versionNumber, content: sanitizeHtml(v.content), changeSummary: v.changeSummary,
         effectiveDate: v.effectiveDate ? v.effectiveDate.toISOString() : null,
         authorName: v.author?.name ?? v.author?.email ?? null,
         attachments: v.attachments.map(a => ({ name: a.name, fileUrl: a.url, fileType: fileType(a.name) })),

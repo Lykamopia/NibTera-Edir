@@ -27,7 +27,9 @@ async function openRequestMap(versionIds: string[]) {
 
 function serialize(v: any, reqStatus?: string) {
   return {
-    id: v.id, versionNumber: v.versionNumber, title: v.title, content: v.content,
+    // Content is sanitized on write; re-sanitize on read so legacy/seeded rows
+    // can never reach dangerouslySetInnerHTML unfiltered.
+    id: v.id, versionNumber: v.versionNumber, title: v.title, content: sanitizeHtml(v.content),
     changeSummary: v.changeSummary, effectiveDate: v.effectiveDate, status: v.status,
     authorName: v.author?.name ?? v.author?.email ?? null,
     approverName: v.approver?.name ?? v.approver?.email ?? null,
@@ -94,11 +96,26 @@ export async function getRulesVersion(id: string) {
   return serialize(v, reqMap.get(v.id));
 }
 
+// Plain-text fields (title, change summary) are rendered as text, never HTML.
+// Reject markup and control characters at the boundary so they can't be
+// smuggled into audit logs, notifications, emails or print output.
+const NO_MARKUP = /^[^<>]*$/;
+const NO_CONTROL_CHARS = /^[^\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]*$/;
+const plainText = (label: string, max: number) =>
+  z.string()
+    .trim()
+    .max(max, `${label} must be at most ${max} characters.`)
+    .regex(NO_MARKUP, `${label} must not contain < or > characters.`)
+    .regex(NO_CONTROL_CHARS, `${label} contains invalid characters.`);
+
+const changeSummarySchema = plainText('Change summary', 1000).optional().nullable();
+
 const draftSchema = z.object({
-  title: z.string().min(2, 'A title is required.'),
-  content: z.string().min(1, 'Rules content cannot be empty.'),
-  changeSummary: z.string().optional().nullable(),
-  effectiveDate: z.string().optional().nullable(),
+  title: plainText('Title', 200).pipe(z.string().min(2, 'A title is required.')),
+  content: z.string().min(1, 'Rules content cannot be empty.').max(500_000, 'Rules content is too large.'),
+  changeSummary: changeSummarySchema,
+  effectiveDate: z.string().trim().optional().nullable()
+    .refine((d) => !d || !Number.isNaN(Date.parse(d)), 'Effective date is invalid.'),
 });
 
 export async function createDraft(input: z.infer<typeof draftSchema>) {
@@ -188,6 +205,7 @@ export async function deleteDraft(id: string) {
 export async function submitRulesVersion(id: string, summary?: string) {
   try {
     const { actor, edirId } = await requireActor('manage_rules');
+    summary = changeSummarySchema.parse(summary) ?? undefined;
     const res = await loadEditableDraft(actor, id);
     if ('error' in res) return { success: false as const, error: res.error };
     const v = res.version;

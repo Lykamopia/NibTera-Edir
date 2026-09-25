@@ -9,7 +9,7 @@
  * compromised draft can never inject script into the member-facing view.
  */
 
-const ALLOWED_TAGS = new Set([
+export const ALLOWED_TAGS: ReadonlySet<string> = new Set([
   'p', 'br', 'hr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
   'ul', 'ol', 'li', 'strong', 'b', 'em', 'i', 'u', 's', 'sub', 'sup',
   'blockquote', 'a', 'span', 'div', 'pre', 'code',

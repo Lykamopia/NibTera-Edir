@@ -54,6 +54,23 @@ const BASELINE_SECURITY_HEADERS = [
   { key: 'X-Permitted-Cross-Domain-Policies', value: 'none' },
 ];
 
+// CSP for the embeddable Super App routes (/pay, /portal), which sit outside the
+// middleware's nonce CSP. Framing is limited to FRAME_ANCESTORS (same env as the
+// middleware; '*' only while unset). form-action is intentionally omitted so the
+// hand-off to the bank's payment gateway keeps working.
+const EMBED_FRAME_ANCESTORS = (process.env.FRAME_ANCESTORS || '').trim() || '*';
+const EMBED_PAGE_CSP = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline'",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "img-src 'self' data: blob:",
+  "font-src 'self' https://fonts.gstatic.com",
+  "connect-src 'self'",
+  "object-src 'none'",
+  "base-uri 'self'",
+  `frame-ancestors ${EMBED_FRAME_ANCESTORS}`,
+].join('; ');
+
 const nextConfig: NextConfig = {
   /* config options here */
   // Never expose framework details in response headers.
@@ -85,10 +102,22 @@ const nextConfig: NextConfig = {
       { source: '/set-password/:path*', headers: PUBLIC_PAGE_SECURITY_HEADERS },
       { source: '/verify-email', headers: PUBLIC_PAGE_SECURITY_HEADERS },
       { source: '/verify-email/:path*', headers: PUBLIC_PAGE_SECURITY_HEADERS },
+      { source: '/pay', headers: [{ key: 'Content-Security-Policy', value: EMBED_PAGE_CSP }] },
+      { source: '/pay/:path*', headers: [{ key: 'Content-Security-Policy', value: EMBED_PAGE_CSP }] },
+      { source: '/portal/:path*', headers: [{ key: 'Content-Security-Policy', value: EMBED_PAGE_CSP }] },
     ];
   },
   images: {
     unoptimized: true, // Allow local images to work without optimization issues
+    // Hardening in case the (sharp-backed) optimizer is ever re-enabled: no SVG
+    // rasterization, a single output format, bounded sizes, and optimized images
+    // served as sandboxed attachments so they can never execute as documents.
+    dangerouslyAllowSVG: false,
+    formats: ['image/webp'],
+    deviceSizes: [640, 828, 1080, 1920],
+    imageSizes: [32, 64, 128, 256],
+    contentDispositionType: 'attachment',
+    contentSecurityPolicy: "default-src 'none'; script-src 'none'; sandbox;",
     remotePatterns: [
       {
         protocol: 'https',

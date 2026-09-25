@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto';
 import { resolvePayResumePath } from '@/lib/nib-pay-session';
 import { NIB_CONFIG } from '@/lib/nib-config';
 import { debugLog } from '@/lib/debug';
+import { safeRedirectUrl } from '@/lib/trusted-host';
 
 export const dynamic = 'force-dynamic';
 
@@ -51,10 +52,11 @@ async function handleRequest(request: Request) {
     cookieStore.set('miniapp_token', token, cookieOpts);
     cookieStore.set('miniapp_phone', phoneNumber || '', cookieOpts);
 
-    const url = new URL(request.url);
+    // Destination is always on the configured app origin — never built from the
+    // request's Host / X-Forwarded-Host — and the path must be an allowlisted /pay path.
     const resumePath = resolvePayResumePath(cookieStore.get('nib_payment_handoff')?.value, cookieStore.get('last_searched_path')?.value);
-    let redirectUrl = resumePath ? `${url.protocol}//${url.host}${resumePath}` : `${url.protocol}//${url.host}/pay`;
-    if (!resumePath && phoneNumber) redirectUrl += `?phone=${encodeURIComponent(phoneNumber)}`;
+    const redirectUrl = safeRedirectUrl(resumePath, '/pay');
+    if (!resumePath && phoneNumber) redirectUrl.searchParams.set('phone', String(phoneNumber));
 
     return NextResponse.redirect(redirectUrl);
   } catch (error) {

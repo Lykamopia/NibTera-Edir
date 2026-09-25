@@ -1,5 +1,6 @@
-import { withAuth } from "next-auth/middleware";
-import { NextRequest, NextResponse } from "next/server";
+import { withAuth, type NextRequestWithAuth } from "next-auth/middleware";
+import { NextRequest, NextResponse, type NextFetchEvent } from "next/server";
+import { safeRedirectUrl, untrustedHostReason } from "@/lib/trusted-host";
 import {
   CSRF_COOKIE_NAME,
   CSRF_COOKIE_OPTIONS,
@@ -101,7 +102,7 @@ const baseSecurityHeaders: { key: string; value: string }[] = [
   { key: 'Permissions-Policy', value: PERMISSIONS_POLICY },
 ];
 
-export default withAuth(
+const authMiddleware = withAuth(
   async function middleware(req: NextRequest) {
     const token = (req as any).nextauth?.token;
     const { pathname } = req.nextUrl;
@@ -146,9 +147,8 @@ export default withAuth(
     // A member in the "First Login Required" state cannot reach any app feature
     // until they change their temporary password.
     if (token?.mustChangePassword && pathname.startsWith('/dashboard')) {
-      const url = req.nextUrl.clone();
-      url.pathname = '/force-password-change';
-      return withCsrfCookie(NextResponse.redirect(url));
+      // Built from the configured origin, never from the request's Host header.
+      return withCsrfCookie(NextResponse.redirect(safeRedirectUrl('/force-password-change')));
     }
 
     // ── Route-level permission enforcement (dashboard pages) ──────────────────
@@ -162,10 +162,7 @@ export default withAuth(
           // Redirect (not rewrite) so the access-denied screen renders reliably
           // for both full loads and client-side RSC navigations — a rewrite to a
           // different layout root can leak the original page through on soft nav.
-          const url = req.nextUrl.clone();
-          url.pathname = '/dashboard/access-denied';
-          url.search = '';
-          return withCsrfCookie(NextResponse.redirect(url));
+          return withCsrfCookie(NextResponse.redirect(safeRedirectUrl('/dashboard/access-denied')));
         }
       }
     }
@@ -197,8 +194,26 @@ export default withAuth(
   },
 );
 
+// Public paths (no NextAuth session): embedded Super App routes, bank/cron
+// webhooks and token-link auth pages. Same prefixes the matcher used to exclude.
+const PUBLIC_PATH = /^\/(?:api\/nib-callback|api\/cron|login|forgot-password|set-password|verify-email|portal|pay)/;
+
+export default function middleware(req: NextRequest, event: NextFetchEvent) {
+  // ── Host / X-Forwarded-Host allowlist ───────────────────────────────────────
+  // Reject requests addressed to a host we don't serve before anything can build
+  // an absolute URL (redirect, rewrite, callback) from a spoofed header.
+  const hostProblem = untrustedHostReason(req.headers);
+  if (hostProblem) {
+    console.warn(`[host] Rejected ${req.method} ${req.nextUrl.pathname}: ${hostProblem}`);
+    return new NextResponse('Invalid host', { status: 400 });
+  }
+  if (PUBLIC_PATH.test(req.nextUrl.pathname)) return NextResponse.next();
+  return authMiddleware(req as NextRequestWithAuth, event);
+}
+
 export const config = {
+  // Every dynamic request is host-checked; static build assets are skipped.
   matcher: [
-    "/((?!api/nib-callback|api/cron|_next/static|_next/image|favicon.ico|login|forgot-password|set-password|verify-email|portal|pay|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|mp3|SVG|PNG|JPG|JPEG|GIF|WEBP|ICO|MP3)).*)",
+    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|mp3|SVG|PNG|JPG|JPEG|GIF|WEBP|ICO|MP3)).*)",
   ],
 };

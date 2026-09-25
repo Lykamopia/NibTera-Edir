@@ -3,6 +3,7 @@ import { getToken } from 'next-auth/jwt';
 import { LogSeverity } from './types';
 import { logSecurityEvent, SecurityEvent } from './security-logger';
 import { SESSION_COOKIE_NAME } from './session-cookie';
+import { isTrustedHost } from './trusted-host';
 import {
   CSRF_ERROR_MESSAGE,
   CSRF_HEADER_NAME,
@@ -57,9 +58,11 @@ function checkRequestOrigin(headerList: Headers): CsrfValidationResult | null {
       return { valid: false, reason: 'unparseable Origin header' };
     }
     // Behind a reverse proxy the internal Host differs from the public host, so
-    // a match against the proxy-forwarded host is accepted too.
+    // a match against the proxy-forwarded host is accepted too — but only when
+    // that forwarded host is on the configured allowlist (src/lib/trusted-host.ts).
     const forwardedHost = (headerList.get('x-forwarded-host') || '').split(',')[0].trim();
-    const allowedHosts = [headerList.get('host'), forwardedHost].filter(Boolean).map((h) => h!.toLowerCase());
+    const allowedHosts = [headerList.get('host'), isTrustedHost(forwardedHost) ? forwardedHost : null]
+      .filter(Boolean).map((h) => h!.toLowerCase());
     if (allowedHosts.length > 0 && !allowedHosts.includes(originHost.toLowerCase())) {
       return { valid: false, reason: `Origin '${originHost}' does not match host '${allowedHosts.join("' / '")}'` };
     }

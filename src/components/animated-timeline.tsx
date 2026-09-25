@@ -64,7 +64,8 @@ const TimelineItem = ({ activity, isLast }: { activity: Activity; isLast: boolea
         
         {details && (
             <div className="mt-2 rounded-md border bg-muted/50 p-3 text-sm">
-                <div dangerouslySetInnerHTML={{ __html: details.replace(/\n/g, '<br/>') }} />
+                {/* Rendered as text (React-escaped); newlines kept via CSS, never as raw HTML. */}
+                <div className="whitespace-pre-line">{details}</div>
             </div>
         )}
         <div className="mt-1.5 flex items-center gap-4 text-xs text-muted-foreground">
