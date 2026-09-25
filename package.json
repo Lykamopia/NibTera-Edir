@@ -47,7 +47,7 @@
     "date-holidays": "^3.30.2",
     "dotenv": "^16.5.0",
     "embla-carousel-react": "^8.6.0",
-    "firebase": "^11.9.1",
+    "firebase": "^12.19.0",
     "framer-motion": "^11.18.2",
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.8",
@@ -95,6 +95,8 @@
     "uuid": "^11.1.1",
     "postcss": "^8.5.28",
     "websocket-driver": "^0.7.5",
-    "websocket-extensions": "^0.1.4"
+    "websocket-extensions": "^0.1.4",
+    "nanoid": "^3.3.17",
+    "protobufjs": "^7.6.5"
   }
 }
