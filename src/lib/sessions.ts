@@ -116,6 +116,29 @@ export async function validateSession(sessionId: unknown, userId: string, tokenV
   return { valid: true };
 }
 
+/**
+ * Read-only liveness check for long-lived connections (SSE streams): is the
+ * session still unrevoked, within its idle/absolute limits and at the user's
+ * current tokenVersion? Unlike `validateSession` it never records activity, so
+ * an open background stream cannot keep an idle session alive.
+ */
+export async function isSessionActive(sessionId: string, userId: string): Promise<boolean> {
+  const session = await prisma.userSession.findUnique({
+    where: { id: sessionId },
+    select: {
+      userId: true, tokenVersion: true, lastActiveAt: true, expiresAt: true, revokedAt: true,
+      user: { select: { tokenVersion: true } },
+    },
+  });
+  if (!session || session.userId !== userId || session.revokedAt) return false;
+  const now = Date.now();
+  return (
+    session.tokenVersion === session.user.tokenVersion &&
+    now < session.expiresAt.getTime() &&
+    now - session.lastActiveAt.getTime() < SESSION_IDLE_TIMEOUT_MS
+  );
+}
+
 /** Revoke one session. Returns true if it was live. */
 export async function revokeSession(sessionId: string, reason: SessionRevokeReason, userId?: string): Promise<boolean> {
   const { count } = await prisma.userSession.updateMany({

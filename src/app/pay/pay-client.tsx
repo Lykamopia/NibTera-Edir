@@ -170,7 +170,9 @@ function PayInner() {
       finally { setRefreshing(false); }
     };
 
-    const sseUrl = `/api/payment-events?transactionId=${res.transactionId}&phone=${encodeURIComponent(member.phone || '')}&previousOutstanding=${member.totalOutstanding}`;
+    const sseParams = new URLSearchParams({ transactionId: String(res.transactionId), phone: member.phone || '' });
+    if (member.totalOutstanding != null && Number.isFinite(Number(member.totalOutstanding))) sseParams.set('previousOutstanding', String(Number(member.totalOutstanding)));
+    const sseUrl = `/api/payment-events?${sseParams.toString()}`;
     payLog('client/pay', 'opening SSE', { sseUrl });
     const es = new EventSource(sseUrl);
     esRef.current = es;
