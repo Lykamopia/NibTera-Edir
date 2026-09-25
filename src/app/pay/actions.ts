@@ -68,7 +68,8 @@ export async function validateNibToken(queryToken?: string) {
     if (!v.ok) {
       debugLog(`[NIB] [${requestId}] validate failed`, v.status);
       payLog('validateNibToken', 'validation FAILED', { status: v.status });
-      return { status: 'error', message: `Validation failed with status ${v.status}` };
+      // The upstream status is logged above; the client only gets a generic message.
+      return { status: 'error', message: 'Failed to validate token with NIB servers.' };
     }
     payLog('validateNibToken', 'SUCCESS', { phone: v.phone ?? null });
     return { status: 'success', token, phone: v.phone ?? null };
@@ -278,7 +279,7 @@ export async function getPaymentToken(amount: number, token: string, memberId: s
     });
     const raw = await res.text();
     payLog('getPaymentToken', `NIB response status=${res.status}`, { ok: res.ok, body: raw.slice(0, 800) });
-    if (!res.ok) { await recordFailed(`NIB responded ${res.status}`); return { status: 'error', message: `Payment token request failed with status ${res.status}`, transactionId }; }
+    if (!res.ok) { await recordFailed(`NIB responded ${res.status}`); return { status: 'error', message: 'Failed to obtain payment token from NIB servers.', transactionId }; }
     let data: NibPaymentResponse;
     try { data = JSON.parse(raw); } catch (e) { payLog('getPaymentToken', 'failed to parse NIB JSON', String(e)); await recordFailed('invalid NIB response'); return { status: 'error', message: 'Invalid response from NIB payment server.', transactionId }; }
     payLog('getPaymentToken', 'SUCCESS — paymentToken received', { paymentToken: maskToken(data.token), transactionId });

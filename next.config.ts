@@ -42,10 +42,25 @@ const PUBLIC_PAGE_SECURITY_HEADERS = [
   { key: 'Permissions-Policy', value: PERMISSIONS_POLICY },
 ];
 
+// Baseline headers for EVERY response — including routes outside the
+// middleware matcher (/pay, /portal, /api/nib-callback, /api/cron, /_next
+// assets). Deliberately framing-neutral: the embeddable /pay and /portal pages
+// keep working inside the Super App. Pages the middleware covers get the same
+// values again plus their per-request CSP.
+const BASELINE_SECURITY_HEADERS = [
+  { key: 'Strict-Transport-Security', value: 'max-age=63072000; includeSubDomains; preload' },
+  { key: 'X-Content-Type-Options', value: 'nosniff' },
+  { key: 'Referrer-Policy', value: 'strict-origin' },
+  { key: 'X-Permitted-Cross-Domain-Policies', value: 'none' },
+];
+
 const nextConfig: NextConfig = {
   /* config options here */
   // Never expose framework details in response headers.
   poweredByHeader: false,
+  // Never ship browser source maps in production: they would disclose the
+  // original source, file layout and dependency versions.
+  productionBrowserSourceMaps: false,
   typescript: {
     ignoreBuildErrors: true,
   },
@@ -61,8 +76,9 @@ const nextConfig: NextConfig = {
     },
   },
   async headers() {
-    // Applied only to the public auth pages that the middleware does not cover.
     return [
+      { source: '/:path*', headers: BASELINE_SECURITY_HEADERS },
+      // Full set (with a static CSP) for the public auth pages the middleware does not cover.
       { source: '/login', headers: PUBLIC_PAGE_SECURITY_HEADERS },
       { source: '/forgot-password', headers: PUBLIC_PAGE_SECURITY_HEADERS },
       { source: '/set-password', headers: PUBLIC_PAGE_SECURITY_HEADERS },

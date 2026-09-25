@@ -16,7 +16,9 @@ export const dynamic = 'force-dynamic';
 async function handle(request: NextRequest) {
   const secret = process.env.CRON_SECRET;
   if (!secret) {
-    return NextResponse.json({ ok: false, error: 'CRON_SECRET is not configured.' }, { status: 503 });
+    // Don't tell an unauthenticated caller how the server is configured.
+    console.error('[cron/daily-tasks] CRON_SECRET is not configured; endpoint disabled.');
+    return NextResponse.json({ ok: false, error: 'Service unavailable.' }, { status: 503 });
   }
   const auth = request.headers.get('authorization') || '';
   const bearer = auth.startsWith('Bearer ') ? auth.slice(7).trim() : null;
