@@ -18,6 +18,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { getUserLockoutStatus } from '@/app/actions/admin';
 import { normalizeNibEmail } from '@/lib/utils';
 import { getFirstAccessiblePage } from '@/app/actions/auth';
+import { primeCsrfToken } from '@/lib/csrf-client';
 import { motion, AnimatePresence } from 'framer-motion';
 import { getBackgroundImages } from '@/app/actions/settings';
 
@@ -153,6 +154,9 @@ export default function LoginClientPage() {
         description: result.error,
       });
     } else if (result?.ok) {
+      // /login is outside the middleware, so fetch a CSRF token bound to the
+      // new session before calling an authenticated server action.
+      await primeCsrfToken();
       const destination = await getFirstAccessiblePage(callbackUrl);
       window.location.replace(destination);
     }

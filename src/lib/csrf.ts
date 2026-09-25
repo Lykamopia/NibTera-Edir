@@ -1,80 +1,46 @@
-import crypto from 'crypto';
 import { cookies, headers } from 'next/headers';
+import { getToken } from 'next-auth/jwt';
+import { LogSeverity } from './types';
+import { logSecurityEvent, SecurityEvent } from './security-logger';
+import { SESSION_COOKIE_NAME } from './session-cookie';
+import {
+  CSRF_ERROR_MESSAGE,
+  CSRF_HEADER_NAME,
+  type CsrfValidationResult,
+  verifyCsrfToken,
+} from './csrf-token';
 
 /**
- * CSRF protection for state-changing server actions (currently the
- * password-change endpoints).
+ * Server-side CSRF enforcement for authenticated state-changing requests.
  *
- * Model: **signed, session-bound double-submit cookie**.
+ * The primary gate is the middleware (src/middleware.ts), which rejects any
+ * non-GET request on a matched route without a valid token. This module is the
+ * second, independent gate that runs inside the request handler itself:
  *
- *  1. `issueCsrfToken(subject)` mints `<nonce>.<expiry>.<hmac>`, stores it in an
- *     httpOnly + SameSite=Strict cookie AND returns the raw value to the caller.
- *     The raw token reaches the browser only through the server-action response
- *     body — a cross-site attacker can neither read that body (CORS) nor read
- *     the cookie (httpOnly), so the pair cannot be obtained off-site.
- *  2. The client echoes the token back as an explicit argument to the
- *     state-changing action.
- *  3. `validateCsrfToken(submitted, subject)` requires the cookie and the
- *     submitted value to be present, byte-identical, correctly signed with the
- *     server secret, unexpired, and bound to the *current* user — so a token
- *     minted for another session is useless.
+ *  - `enforceServerActionCsrf` is called by the central session resolvers
+ *    (`getLoggedInUser`, `getActor`), so *every* authenticated server action is
+ *    checked — including one posted to a path the middleware matcher excludes
+ *    (a server action can be invoked by POSTing its id to any route).
+ *  - `enforceRouteCsrf` does the same for authenticated API route handlers.
  *
- * The HMAC binds the token to the signed-in user id, so the cookie cannot be
- * transplanted between sessions, and the `Origin`/`Sec-Fetch-Site` check below
- * rejects obvious cross-site callers before the token is even considered.
+ * Token format, binding and rotation are described in src/lib/csrf-token.ts.
  */
 
-const nextAuthUrl = (process.env.NEXTAUTH_URL || '').trim();
-const usesHttps = nextAuthUrl.toLowerCase().startsWith('https://');
+export { CSRF_ERROR_MESSAGE };
 
-/**
- * `__Host-` requires Secure + Path=/ + no Domain, which pins the cookie to this
- * exact origin (a sibling/compromised subdomain cannot overwrite it). Over plain
- * HTTP (local dev) the prefix is not allowed, so the bare name is used.
- */
-export const CSRF_COOKIE_NAME = usesHttps ? '__Host-csrf-token' : 'csrf-token';
-
-/** Matches the absolute session cap in `authOptions` (8h). */
-const CSRF_TOKEN_TTL_MS = 8 * 60 * 60 * 1000;
-
-/** Single user-facing message — never leaks *why* validation failed. */
-export const CSRF_ERROR_MESSAGE =
-  'Your security token is missing or no longer valid. Please refresh the page and try again.';
-
-export type CsrfValidationResult = { valid: true } | { valid: false; reason: string };
-
-function csrfSecret(): string {
-  const secret = process.env.CSRF_SECRET || process.env.NEXTAUTH_SECRET;
-  if (!secret) {
-    throw new Error('CSRF secret is not configured. Set CSRF_SECRET or NEXTAUTH_SECRET.');
+export class CsrfValidationError extends Error {
+  constructor() {
+    super(CSRF_ERROR_MESSAGE);
+    this.name = 'CsrfValidationError';
   }
-  return secret;
-}
-
-function sign(payload: string): string {
-  return crypto.createHmac('sha256', csrfSecret()).update(payload).digest('base64url');
-}
-
-/** Constant-time string compare that never throws on length mismatch. */
-function safeEqual(a: string, b: string): boolean {
-  const left = Buffer.from(a, 'utf8');
-  const right = Buffer.from(b, 'utf8');
-  if (left.length !== right.length) {
-    // Still burn a comparison so the failure isn't distinguishable by timing.
-    crypto.timingSafeEqual(left, left);
-    return false;
-  }
-  return crypto.timingSafeEqual(left, right);
 }
 
 /**
- * Additional (cheap) layer in front of the token: reject requests the browser
- * itself labels cross-site, or whose `Origin` doesn't match the served host.
- * A missing `Origin` is not fatal on its own — the token remains the control.
+ * Cheap layer in front of the token: reject requests the browser itself labels
+ * cross-site, or whose `Origin` doesn't match the served host. A missing
+ * `Origin` is not fatal on its own — the token remains the control.
  */
-async function checkRequestOrigin(): Promise<CsrfValidationResult> {
-  const headerList = await headers();
-
+function checkRequestOrigin(headerList: Headers): CsrfValidationResult | null {
   // 'none' = user-initiated (address bar/bookmark); 'same-origin' = our own page.
   // 'same-site' (sibling subdomain) and 'cross-site' are both rejected.
   const fetchSite = headerList.get('sec-fetch-site');
@@ -90,86 +56,60 @@ async function checkRequestOrigin(): Promise<CsrfValidationResult> {
     } catch {
       return { valid: false, reason: 'unparseable Origin header' };
     }
-    const host = headerList.get('x-forwarded-host') || headerList.get('host');
-    if (host && originHost.toLowerCase() !== host.toLowerCase()) {
-      return { valid: false, reason: `Origin '${originHost}' does not match host '${host}'` };
+    // Behind a reverse proxy the internal Host differs from the public host, so
+    // a match against the proxy-forwarded host is accepted too.
+    const forwardedHost = (headerList.get('x-forwarded-host') || '').split(',')[0].trim();
+    const allowedHosts = [headerList.get('host'), forwardedHost].filter(Boolean).map((h) => h!.toLowerCase());
+    if (allowedHosts.length > 0 && !allowedHosts.includes(originHost.toLowerCase())) {
+      return { valid: false, reason: `Origin '${originHost}' does not match host '${allowedHosts.join("' / '")}'` };
     }
   }
+  return null;
+}
 
-  return { valid: true };
+/** The session's CSRF binding, read from the encrypted NextAuth JWT (never exposed to the client). */
+async function currentCsrfSid(): Promise<unknown> {
+  const token = await getToken({
+    req: { cookies: await cookies(), headers: {} } as any,
+    secret: process.env.NEXTAUTH_SECRET,
+    cookieName: SESSION_COOKIE_NAME,
+  });
+  return token?.csrfSid;
+}
+
+async function validateCurrentRequest(headerList: Headers): Promise<CsrfValidationResult> {
+  return checkRequestOrigin(headerList)
+    ?? verifyCsrfToken(headerList.get(CSRF_HEADER_NAME), await currentCsrfSid());
+}
+
+async function reject(actor: { id: string; name?: string | null }, what: string, reason: string): Promise<never> {
+  await logSecurityEvent({
+    event: SecurityEvent.CSRF_VALIDATION_FAILURE,
+    severity: LogSeverity.CRITICAL,
+    actor: { id: actor.id, name: actor.name ?? actor.id },
+    details: `CSRF validation failed for ${what} by '${actor.name ?? actor.id}' (ID: ${actor.id}): ${reason}.`,
+    targetId: actor.id,
+    targetType: 'User',
+  });
+  throw new CsrfValidationError();
 }
 
 /**
- * Mint a fresh CSRF token for `subject` (the signed-in user id), store it in the
- * hardened cookie and return the raw value for the client to echo back.
+ * If the current request is a server-action invocation (they are always POSTs
+ * and carry a `Next-Action` header), require a valid CSRF token bound to the
+ * caller's session. A no-op during normal page rendering.
  */
-export async function issueCsrfToken(subject: string): Promise<string> {
-  const nonce = crypto.randomBytes(32).toString('base64url');
-  const expiresAt = Date.now() + CSRF_TOKEN_TTL_MS;
-  const token = `${nonce}.${expiresAt}.${sign(`${nonce}.${expiresAt}.${subject}`)}`;
+export async function enforceServerActionCsrf(actor: { id: string; name?: string | null }): Promise<void> {
+  const headerList = await headers();
+  const actionId = headerList.get('next-action');
+  if (!actionId) return;
 
-  (await cookies()).set(CSRF_COOKIE_NAME, token, {
-    httpOnly: true,       // the raw value travels in the action response, never via document.cookie
-    sameSite: 'strict',   // a cross-site request carries no CSRF cookie at all
-    secure: usesHttps,
-    path: '/',
-    maxAge: Math.floor(CSRF_TOKEN_TTL_MS / 1000),
-  });
-
-  return token;
+  const result = await validateCurrentRequest(headerList);
+  if (!result.valid) await reject(actor, `server action ${actionId}`, result.reason);
 }
 
-/**
- * Validate a submitted CSRF token against the cookie and `subject`. Returns a
- * reason suitable for the security log — never surface it to the client.
- */
-export async function validateCsrfToken(submitted: unknown, subject: string): Promise<CsrfValidationResult> {
-  const originCheck = await checkRequestOrigin();
-  if (!originCheck.valid) return originCheck;
-
-  if (typeof submitted !== 'string' || submitted.length === 0) {
-    return { valid: false, reason: 'no CSRF token supplied with the request' };
-  }
-
-  const cookieToken = (await cookies()).get(CSRF_COOKIE_NAME)?.value;
-  if (!cookieToken) {
-    return { valid: false, reason: 'CSRF cookie missing from the request' };
-  }
-
-  if (!safeEqual(submitted, cookieToken)) {
-    return { valid: false, reason: 'submitted CSRF token does not match the CSRF cookie' };
-  }
-
-  const parts = submitted.split('.');
-  if (parts.length !== 3) {
-    return { valid: false, reason: 'malformed CSRF token' };
-  }
-  const [nonce, expiry, signature] = parts;
-
-  const expiresAt = Number(expiry);
-  if (!Number.isFinite(expiresAt)) {
-    return { valid: false, reason: 'malformed CSRF token expiry' };
-  }
-
-  if (!safeEqual(signature, sign(`${nonce}.${expiry}.${subject}`))) {
-    // Bad signature, or a token minted for a different user/session.
-    return { valid: false, reason: 'invalid CSRF token signature or session binding' };
-  }
-
-  if (Date.now() > expiresAt) {
-    return { valid: false, reason: 'CSRF token expired' };
-  }
-
-  return { valid: true };
-}
-
-/** Drop the CSRF cookie (e.g. right after a successful password change). */
-export async function clearCsrfToken(): Promise<void> {
-  (await cookies()).set(CSRF_COOKIE_NAME, '', {
-    httpOnly: true,
-    sameSite: 'strict',
-    secure: usesHttps,
-    path: '/',
-    maxAge: 0,
-  });
+/** Require a valid, session-bound CSRF token on an authenticated state-changing API route request. */
+export async function enforceRouteCsrf(req: Request, actor: { id: string; name?: string | null }): Promise<void> {
+  const result = await validateCurrentRequest(req.headers);
+  if (!result.valid) await reject(actor, `${req.method} ${new URL(req.url).pathname}`, result.reason);
 }

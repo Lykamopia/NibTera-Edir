@@ -19,7 +19,6 @@ import { PageHeader, LoadingState, ErrorState, EmptyState, StatCard } from '@/co
 import { NotificationSettings } from '@/components/notification-settings';
 import { PaymentReceiptModal } from '@/components/payment-receipt-modal';
 import { changePassword } from '@/app/actions/auth';
-import { requestCsrfToken } from '@/lib/csrf-client';
 import { getMyPortal } from '@/app/actions/account';
 import { getMyRequests } from '@/app/actions/member-requests';
 import { submitRelativeDocument } from '@/app/actions/relative-documents';
@@ -449,10 +448,8 @@ function ChangePassword() {
     if (next !== confirm) { toast.error('Passwords do not match.'); return; }
     setSaving(true);
     try {
-      // Mint a fresh CSRF token immediately before submitting; the action
-      // rejects the change unless it matches the SameSite=Strict cookie.
-      const csrfToken = await requestCsrfToken();
-      const res = await changePassword(current, next, csrfToken);
+      // CSRF token is attached automatically to the action request (csrf-client).
+      const res = await changePassword(current, next);
       if (res?.success) { toast.success('Password changed.'); setCurrent(''); setNext(''); setConfirm(''); }
       else toast.error(res?.error || 'Failed to change password.');
     } catch (e) { toast.error(toUserError(e).message); }

@@ -9,6 +9,7 @@ import prisma from '@/lib/prisma';
 import { logSecurityEvent, SecurityEvent } from '@/lib/security-logger';
 import { LogSeverity } from '@/lib/types';
 import { encryptBuffer } from '@/lib/encryption';
+import { CsrfValidationError, enforceRouteCsrf } from '@/lib/csrf';
 import { randomUUID } from 'crypto';
 import {
   API_UPLOAD_KINDS,
@@ -27,6 +28,19 @@ export const config = {
     },
 };
 
+/** 403 response when the request lacks a valid session-bound CSRF token, else null. */
+async function csrfRejection(req: NextRequest, user: { id: string; name?: string | null }): Promise<NextResponse | null> {
+  try {
+    await enforceRouteCsrf(req, user);
+    return null;
+  } catch (e) {
+    if (e instanceof CsrfValidationError) {
+      return NextResponse.json({ success: false, error: e.message }, { status: 403 });
+    }
+    throw e;
+  }
+}
+
 /** Largest cap across every API-reachable category — the pre-buffering guard. */
 const MAX_FILE_SIZE = Math.max(...API_UPLOAD_KINDS.map((k) => UPLOAD_POLICIES[k].maxBytes));
 
@@ -38,24 +52,11 @@ export async function POST(req: NextRequest) {
   }
   const sessionUser = session.user as { id: string; name?: string | null };
 
-  // CSRF defence-in-depth: the session cookie is already SameSite=strict, but
-  // additionally verify a browser-supplied Origin matches the request Host so a
-  // cross-site page cannot drive an authenticated upload.
-  const origin = req.headers.get('origin');
-  if (origin) {
-    try {
-      const originHost = new URL(origin).host;
-      // Behind a reverse proxy the internal Host header differs from the public
-      // host, so accept a match against the proxy-forwarded host too.
-      const forwardedHost = (req.headers.get('x-forwarded-host') || '').split(',')[0].trim();
-      const allowedHosts = [req.headers.get('host'), forwardedHost].filter(Boolean);
-      if (!allowedHosts.includes(originHost)) {
-        return NextResponse.json({ success: false, error: 'Cross-origin request blocked.' }, { status: 403 });
-      }
-    } catch {
-      return NextResponse.json({ success: false, error: 'Invalid origin.' }, { status: 400 });
-    }
-  }
+  // CSRF: require the session-bound token (and a same-origin Origin) so a
+  // cross-site page cannot drive an authenticated upload. The middleware checks
+  // this too; this is the in-handler second gate.
+  const csrfFailure = await csrfRejection(req, sessionUser);
+  if (csrfFailure) return csrfFailure;
 
   // Reject oversized payloads up-front (before buffering into memory) to mitigate
   // memory-exhaustion DoS. Allow ~1MB of multipart overhead above the file cap.
@@ -188,7 +189,10 @@ export async function DELETE(req: NextRequest) {
   if (!session?.user?.id) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
   }
-  
+
+  const csrfFailure = await csrfRejection(req, session.user as { id: string; name?: string | null });
+  if (csrfFailure) return csrfFailure;
+
   const data = await req.json();
   const relativePath = data.path as string;
 

@@ -1,5 +1,16 @@
 import { withAuth } from "next-auth/middleware";
 import { NextRequest, NextResponse } from "next/server";
+import {
+  CSRF_COOKIE_NAME,
+  CSRF_COOKIE_OPTIONS,
+  CSRF_ERROR_MESSAGE,
+  CSRF_HEADER_NAME,
+  CSRF_REJECTED_HEADER,
+  csrfTokenNeedsRefresh,
+  isStateChangingMethod,
+  mintCsrfToken,
+  verifyCsrfToken,
+} from "@/lib/csrf-token";
 
 // Routes that are publicly framable (embedded in the NIB Super App). For these
 // we relax the framing protections; everything else stays DENY.
@@ -91,9 +102,41 @@ const baseSecurityHeaders: { key: string; value: string }[] = [
 ];
 
 export default withAuth(
-  function middleware(req: NextRequest) {
+  async function middleware(req: NextRequest) {
     const token = (req as any).nextauth?.token;
     const { pathname } = req.nextUrl;
+
+    // ── CSRF: session-bound token on every state-changing request ─────────────
+    // Every request reaching this point is authenticated (withAuth). Any method
+    // other than GET/HEAD/OPTIONS — server actions, API mutations — must carry
+    // the session's CSRF token in the x-csrf-token header (see
+    // src/lib/csrf-token.ts). NextAuth's own endpoints are exempt: they are
+    // protected by NextAuth's built-in CSRF token.
+    const csrfSid = token?.csrfSid;
+    const csrfApplies = !pathname.startsWith('/api/auth/');
+    let csrfCookieToSet: string | null = null;
+    if (csrfApplies && typeof csrfSid === 'string') {
+      // Keep our pages supplied with a valid token for the current session:
+      // re-issue when missing, near expiry, or bound to a previous session.
+      const current = await verifyCsrfToken(req.cookies.get(CSRF_COOKIE_NAME)?.value, csrfSid);
+      if (csrfTokenNeedsRefresh(current)) csrfCookieToSet = await mintCsrfToken(csrfSid);
+    }
+    const withCsrfCookie = (res: NextResponse): NextResponse => {
+      if (csrfCookieToSet) res.cookies.set(CSRF_COOKIE_NAME, csrfCookieToSet, CSRF_COOKIE_OPTIONS);
+      return res;
+    };
+    if (csrfApplies && isStateChangingMethod(req.method)) {
+      const result = await verifyCsrfToken(req.headers.get(CSRF_HEADER_NAME), csrfSid);
+      if (!result.valid) {
+        console.warn(`[csrf] Rejected ${req.method} ${pathname} for user ${token?.id ?? 'unknown'}: ${result.reason}`);
+        const rejection = NextResponse.json({ error: CSRF_ERROR_MESSAGE }, { status: 403 });
+        // Tells our own client the request was refused before reaching any
+        // handler, so one retry with the (refreshed) cookie token is safe.
+        rejection.headers.set(CSRF_REJECTED_HEADER, '1');
+        if (typeof csrfSid === 'string' && !csrfCookieToSet) csrfCookieToSet = await mintCsrfToken(csrfSid);
+        return withCsrfCookie(rejection);
+      }
+    }
     const framable = FRAMABLE_PREFIXES.some((p) => pathname.startsWith(p));
     // Uploaded files are same-origin resources previewed inside the dashboard
     // (e.g. PDF <iframe>). They must be framable by our own pages — not DENY.
@@ -105,7 +148,7 @@ export default withAuth(
     if (token?.mustChangePassword && pathname.startsWith('/dashboard')) {
       const url = req.nextUrl.clone();
       url.pathname = '/force-password-change';
-      return NextResponse.redirect(url);
+      return withCsrfCookie(NextResponse.redirect(url));
     }
 
     // ── Route-level permission enforcement (dashboard pages) ──────────────────
@@ -122,7 +165,7 @@ export default withAuth(
           const url = req.nextUrl.clone();
           url.pathname = '/dashboard/access-denied';
           url.search = '';
-          return NextResponse.redirect(url);
+          return withCsrfCookie(NextResponse.redirect(url));
         }
       }
     }
@@ -143,7 +186,7 @@ export default withAuth(
     // Do not advertise the server/framework stack in responses.
     response.headers.delete('X-Powered-By');
     response.headers.delete('Server');
-    return response;
+    return withCsrfCookie(response);
   },
   {
     callbacks: { authorized: ({ token }) => !!token?.id },

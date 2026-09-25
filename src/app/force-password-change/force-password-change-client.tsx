@@ -11,7 +11,6 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Loader2, KeyRound, ShieldCheck, LogOut, Eye, EyeOff } from 'lucide-react';
 import { completeFirstLoginPasswordChange, getFirstAccessiblePage } from '@/app/actions/auth';
 import { getClientBaseUrl } from '@/lib/url';
-import { requestCsrfToken } from '@/lib/csrf-client';
 import { toUserError } from '@/lib/errors';
 
 export default function ForcePasswordChangeClient() {
@@ -29,10 +28,8 @@ export default function ForcePasswordChangeClient() {
     setSaving(true);
     let res: { success: boolean; error?: string };
     try {
-      // Mint a fresh CSRF token immediately before submitting; the action
-      // rejects the change unless it matches the SameSite=Strict cookie.
-      const csrfToken = await requestCsrfToken();
-      res = await completeFirstLoginPasswordChange(next, csrfToken);
+      // CSRF token is attached automatically to the action request (csrf-client).
+      res = await completeFirstLoginPasswordChange(next);
     } catch (e) {
       setSaving(false); toast.error(toUserError(e).message); return;
     }

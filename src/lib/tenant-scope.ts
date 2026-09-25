@@ -13,6 +13,7 @@
 import { getServerSession } from 'next-auth/next';
 import { cookies } from 'next/headers';
 import { authOptions } from '@/lib/auth';
+import { enforceServerActionCsrf } from '@/lib/csrf';
 import prisma from '@/lib/prisma';
 import { AccessDeniedError, NotAuthenticatedError } from '@/lib/errors';
 import type { Permission } from '@/lib/types';
@@ -59,6 +60,10 @@ function deriveOrgScope(edirId: string | null, branchId: string | null, district
 export async function getActor(): Promise<Actor> {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) throw new NotAuthenticatedError();
+
+  // Reject a server action without a valid session-bound CSRF token before any
+  // tenant-scoped work happens (no-op during page rendering).
+  await enforceServerActionCsrf(session.user as { id: string; name?: string | null });
 
   const user = await prisma.user.findUnique({
     where: { id: session.user.id },

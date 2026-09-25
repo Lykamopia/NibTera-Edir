@@ -9,6 +9,8 @@ import { LogSeverity } from './types';
 import { logSecurityEvent, SecurityEvent } from './security-logger';
 import { sendConcurrentLoginNotification } from './email';
 import { normalizeNibEmail, normalizeEthiopianPhone } from './utils';
+import { newCsrfSessionId } from './csrf-token';
+import { SESSION_COOKIE_NAME } from './session-cookie';
 
 const MAX_FAILED_ATTEMPTS = parseInt(process.env.MAX_FAILED_LOGIN_ATTEMPTS || '5', 10);
 const LOCKOUT_DURATION_MINUTES = parseInt(process.env.LOCKOUT_DURATION_MINUTES || '15', 10);
@@ -171,7 +173,7 @@ export const authOptions: NextAuthOptions = {
       // state-changing action arrives unauthenticated. This is the first line of
       // defence; the per-request CSRF token in src/lib/csrf.ts is the second.
       sessionToken: {
-        name: `${namePrefix}next-auth.session-token`,
+        name: SESSION_COOKIE_NAME,
         options: { httpOnly: true, sameSite: 'strict', path: '/', secure: usesHttps },
       },
       // NextAuth's own sign-in CSRF cookie. Every flow that uses it (credentials
@@ -211,6 +213,15 @@ export const authOptions: NextAuthOptions = {
 
       if (trigger === "update" && session?.onboardingCompleted === true) {
         token.onboardingCompleted = true;
+      }
+
+      // CSRF session binding (see src/lib/csrf-token.ts). A fresh secret is
+      // minted on every sign-in and rotated whenever the session is updated
+      // (e.g. after the first-login password change), which invalidates every
+      // CSRF token issued before the change. Sessions created before this
+      // binding existed get one on their next refresh.
+      if (user || trigger === "update" || (token.id && !token.csrfSid)) {
+        token.csrfSid = newCsrfSessionId();
       }
 
       if (user) { // Initial sign-in
