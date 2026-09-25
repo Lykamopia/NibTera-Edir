@@ -15,6 +15,7 @@ import { normalizeNibEmail } from '@/lib/utils';
 import { sendPasswordChangedNotificationEmail } from '@/lib/email';
 import { issueSetPasswordLink } from '@/lib/set-password-link';
 import { validatePassword } from '@/lib/password-policy';
+import { getCurrentSessionId, revokeAllUserSessions } from '@/lib/sessions';
 import { enforceServerActionCsrf } from '@/lib/csrf';
 
 /**
@@ -110,12 +111,9 @@ export async function revokeUserTokens(userId: string) {
         throw new Error("Unauthorized to revoke tokens.");
     }
 
-    await prisma.user.update({
-        where: { id: userId },
-        data: { tokenVersion: { increment: 1 } }
-    });
+    const count = await revokeAllUserSessions(userId, user.id === userId ? 'user_revoked' : 'admin_revoked');
 
-    await logSecurityEvent({ event: SecurityEvent.LOGOUT, severity: LogSeverity.INFO, actor: user, details: `All sessions for user ID ${userId} were revoked by ${user?.name}.`, targetId: userId, targetType: 'User' });
+    await logSecurityEvent({ event: SecurityEvent.SESSIONS_REVOKED, severity: LogSeverity.WARN, actor: user, details: `All sessions (${count}) for user ID ${userId} were revoked by ${user?.name}.`, targetId: userId, targetType: 'User' });
 
     return { success: true };
 }
@@ -179,10 +177,14 @@ export async function setPassword(token: string, newPassword: string) {
             // and activate an invited account so they can sign in. (Don't reactivate
             // a SUSPENDED/INACTIVE account via a reset.)
             mustChangePassword: false,
-            tokenVersion: { increment: 1 },
+            passwordChangedAt: new Date(),
             ...(user.status === 'INVITED' ? { status: 'ACTIVE' as const } : {}),
         },
     });
+
+    // A password reset means the old password may be known to someone else:
+    // end every existing session on every device (and bump tokenVersion).
+    await revokeAllUserSessions(user.id, 'password_reset');
 
     await prisma.passwordResetToken.delete({ where: { token } });
 
@@ -245,6 +247,10 @@ export async function completeFirstLoginPasswordChange(newPassword: string) {
     data: { hashedPassword, mustChangePassword: false, onboardingCompleted: true, passwordChangedAt: new Date() },
   });
 
+  // The temporary password may have been seen by others: end every session
+  // except the one that just proved it knows the new password.
+  await revokeAllUserSessions(user.id, 'password_change', { exceptSessionId: await getCurrentSessionId() });
+
   await logSecurityEvent({
     event: SecurityEvent.PASSWORD_CHANGE_SUCCESS,
     severity: LogSeverity.INFO,
@@ -301,14 +307,19 @@ export async function changePassword(currentPassword: string, newPassword: strin
 
     await prisma.user.update({
         where: { id: user.id },
-        data: { hashedPassword, tokenVersion: { increment: 1 } },
+        data: { hashedPassword, passwordChangedAt: new Date() },
     });
+
+    // End every other session (a changed password usually means the old one
+    // may be compromised). The current session — which just re-proved the
+    // current password — stays signed in.
+    const endedSessions = await revokeAllUserSessions(user.id, 'password_change', { exceptSessionId: await getCurrentSessionId() });
 
     await logSecurityEvent({
         event: SecurityEvent.PASSWORD_CHANGE_SUCCESS,
         severity: LogSeverity.INFO,
         actor: user,
-        details: `User '${user.name}' (ID: ${user.id}) changed their own password.`,
+        details: `User '${user.name}' (ID: ${user.id}) changed their own password; ${endedSessions} other session(s) were signed out.`,
         targetId: user.id,
         targetType: 'User',
     });

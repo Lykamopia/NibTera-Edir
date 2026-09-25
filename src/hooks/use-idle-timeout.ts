@@ -4,7 +4,9 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { signOut } from 'next-auth/react';
 
-const DEFAULT_TIMEOUT = 60 * 60 * 1000; // 60 minutes
+// Matches the server-side idle timeout (SESSION_IDLE_TIMEOUT_MS in src/lib/sessions.ts),
+// which is authoritative; this only signs the browser out at the same moment.
+const DEFAULT_TIMEOUT = 30 * 60 * 1000; // 30 minutes
 const CHANNEL_NAME = 'session-timeout-channel';
 
 interface IdleTimerProps {

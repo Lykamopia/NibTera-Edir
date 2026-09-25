@@ -24,6 +24,7 @@ import { getMyPortal } from '@/app/actions/account';
 import { getMyRequests } from '@/app/actions/member-requests';
 import { submitRelativeDocument } from '@/app/actions/relative-documents';
 import { RequestDialog, ActionTile, uploadDoc } from './request-dialog';
+import { ActiveSessions } from './active-sessions';
 import { toUserError } from '@/lib/errors';
 
 type Portal = NonNullable<Awaited<ReturnType<typeof getMyPortal>>>;
@@ -391,6 +392,7 @@ export default function AccountClient() {
 
         {/* Security (for all users) */}
         <TabsContent value="security" className="mt-4 space-y-4">
+          <ActiveSessions />
           <div className="grid gap-4 lg:grid-cols-2">
             <ChangePassword />
             <div className="space-y-4">

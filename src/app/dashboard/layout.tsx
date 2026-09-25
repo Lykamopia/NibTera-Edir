@@ -1,5 +1,6 @@
 
 import React, { Suspense } from "react"
+import { redirect } from "next/navigation";
 import { getLoggedInUser } from "@/app/actions/auth";
 import { getGeneralSettings } from "@/app/actions/settings";
 import { DashboardLayoutClient } from "./dashboard-layout-client";
@@ -14,6 +15,9 @@ export default async function DashboardLayout({
   children: React.ReactNode
 }) {
     const user = await getLoggedInUser();
+    // The cookie may still decode while its server-side session has been
+    // revoked, idled out or expired — send the user to sign in again.
+    if (!user) redirect('/login?error=SessionExpired');
     const generalSettings = await getGeneralSettings();
 
   return (

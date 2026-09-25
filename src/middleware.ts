@@ -189,7 +189,10 @@ export default withAuth(
     return withCsrfCookie(response);
   },
   {
-    callbacks: { authorized: ({ token }) => !!token?.id },
+    // A token must reference a server-side session (sid). Whether that session
+    // is still alive (not revoked/idle/expired) is checked against the database
+    // on every server-side session read — see src/lib/sessions.ts.
+    callbacks: { authorized: ({ token }) => !!token?.id && typeof token?.sid === 'string' },
     pages: { signIn: '/login' },
   },
 );

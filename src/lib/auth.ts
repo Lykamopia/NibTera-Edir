@@ -11,6 +11,7 @@ import { sendConcurrentLoginNotification } from './email';
 import { normalizeNibEmail, normalizeEthiopianPhone } from './utils';
 import { newCsrfSessionId } from './csrf-token';
 import { SESSION_COOKIE_NAME } from './session-cookie';
+import { SESSION_IDLE_TIMEOUT_MS, createUserSession, revokeSession, validateSession } from './sessions';
 
 const MAX_FAILED_ATTEMPTS = parseInt(process.env.MAX_FAILED_LOGIN_ATTEMPTS || '5', 10);
 const LOCKOUT_DURATION_MINUTES = parseInt(process.env.LOCKOUT_DURATION_MINUTES || '15', 10);
@@ -128,7 +129,7 @@ export const authOptions: NextAuthOptions = {
           const isDifferentDevice = user.lastIp && user.lastUserAgent && (user.lastIp !== ipAddress || user.lastUserAgent !== userAgent);
           const wasRecentlyActive = user.updatedAt && (Date.now() - new Date(user.updatedAt).getTime() < 60 * 60 * 1000);
 
-          if (user.tokenVersion > 0 && isDifferentDevice && wasRecentlyActive) {
+          if (user.lastLoginAt && isDifferentDevice && wasRecentlyActive) {
             await logSecurityEvent({
               event: SecurityEvent.CONCURRENT_LOGIN_ATTEMPT,
               severity: LogSeverity.WARN,
@@ -191,12 +192,29 @@ export const authOptions: NextAuthOptions = {
       },
     };
   })(),
-  // maxAge = idle timeout: the JWT expires 30 min after the last roll, so an
-  // inactive session is invalidated. updateAge rolls the token on activity, so
-  // active users stay signed in. An 8-hour absolute cap is enforced separately in
-  // the jwt callback via token.absoluteExpiry.
-  session: { strategy: "jwt", maxAge: 30 * 60, updateAge: 5 * 60 },
+  // Timeouts are enforced server-side on the UserSession row (src/lib/sessions.ts):
+  // 30 min idle, 8 h absolute. The JWT's own maxAge mirrors the idle timeout so
+  // an abandoned cookie also dies on its own; updateAge rolls it on activity.
+  session: { strategy: "jwt", maxAge: SESSION_IDLE_TIMEOUT_MS / 1000, updateAge: 5 * 60 },
   pages: { signIn: "/login" },
+  events: {
+    // Logout invalidates the server-side session, not just the browser cookie:
+    // a copy of the token taken before sign-out is dead from this moment on.
+    async signOut({ token }) {
+      if (typeof token?.sid !== 'string') return;
+      const revoked = await revokeSession(token.sid, 'logout');
+      if (revoked && token.id) {
+        await logSecurityEvent({
+          event: SecurityEvent.LOGOUT,
+          severity: LogSeverity.INFO,
+          actor: { id: token.id as string, name: token.name ?? null },
+          details: `User ${token.name ?? token.id} signed out (session ${token.sid}).`,
+          targetId: token.id as string,
+          targetType: 'User',
+        });
+      }
+    },
+  },
   secret: process.env.NEXTAUTH_SECRET,
   callbacks: {
     async jwt({ token, user, trigger, session }) {
@@ -227,11 +245,22 @@ export const authOptions: NextAuthOptions = {
       if (user) { // Initial sign-in
         const dbUser = await prisma.user.findUnique({ where: { id: user.id }, include: { role: true } });
         if (dbUser) {
+          // Signing in no longer revokes the user's other devices (tokenVersion
+          // is left alone): each sign-in gets its own server-side session, which
+          // the user can review and revoke individually from their account page.
           await prisma.user.update({
             where: { id: dbUser.id },
-            data: { tokenVersion: { increment: 1 }, lastIp: ipAddress, lastUserAgent: userAgent, lastLoginAt: new Date() },
+            data: { lastIp: ipAddress, lastUserAgent: userAgent, lastLoginAt: new Date() },
           });
-          token.tokenVersion = dbUser.tokenVersion + 1;
+          const serverSession = await createUserSession({
+            userId: dbUser.id,
+            tokenVersion: dbUser.tokenVersion,
+            ipAddress,
+            userAgent,
+          });
+          token.sid = serverSession.id;
+          token.absoluteExpiry = serverSession.expiresAt.getTime();
+          token.tokenVersion = dbUser.tokenVersion;
           token.onboardingCompleted = dbUser.onboardingCompleted;
           token.mustChangePassword = dbUser.mustChangePassword;
           token.edirId = dbUser.edirId;
@@ -245,8 +274,6 @@ export const authOptions: NextAuthOptions = {
         token.id = user.id;
         token.ip = ipAddress;
         token.userAgent = userAgent;
-        // Stamp the absolute (activity-independent) expiry at sign-in.
-        token.absoluteExpiry = Date.now() + 8 * 60 * 60 * 1000;
         if ((user as any).isConcurrentLogin) {
           token.showConcurrentAlert = true;
           token.concurrentDetails = (user as any).concurrentDetails;
@@ -260,6 +287,8 @@ export const authOptions: NextAuthOptions = {
           actor: { id: token.id as string, name: token.name },
           details: `Session IP mismatch for ${token.name}. Token IP: ${token.ip}, Request IP: ${ipAddress}.`,
         });
+        // Kill the session server-side too, so the token is dead everywhere.
+        if (typeof token.sid === 'string') await revokeSession(token.sid, 'ip_mismatch');
         return {};
       }
 
@@ -270,6 +299,7 @@ export const authOptions: NextAuthOptions = {
           actor: { id: token.id as string, name: token.name },
           details: `User-Agent changed for ${token.name}.`,
         });
+        if (typeof token.sid === 'string') await revokeSession(token.sid, 'user_agent_mismatch');
         return {};
       }
 
@@ -279,7 +309,15 @@ export const authOptions: NextAuthOptions = {
           where: { id: token.id as string },
           select: { tokenVersion: true, onboardingCompleted: true, mustChangePassword: true, edirId: true, branchId: true, districtId: true, role: { select: { permissions: true, scope: true } } },
         });
-        if (!dbUser || dbUser.tokenVersion !== token.tokenVersion) return {};
+        if (!dbUser || dbUser.tokenVersion !== token.tokenVersion) {
+          if (typeof token.sid === 'string') await revokeSession(token.sid, 'invalidated');
+          return {};
+        }
+        // The server-side session record is authoritative: revoked, idle,
+        // expired or unknown (e.g. a token issued before sessions were tracked)
+        // → the token is dead, whatever its own expiry says.
+        const check = await validateSession(token.sid, token.id as string, dbUser.tokenVersion);
+        if (!check.valid) return {};
         token.onboardingCompleted = dbUser.onboardingCompleted;
         token.mustChangePassword = dbUser.mustChangePassword;
         token.edirId = dbUser.edirId;
@@ -296,6 +334,10 @@ export const authOptions: NextAuthOptions = {
       return token;
     },
     async session({ session, token }) {
+      // The jwt callback returns {} for a revoked/idle/expired session. Report
+      // that as "no session" (an empty object is treated as signed-out by both
+      // getServerSession and useSession) instead of a user with empty fields.
+      if (!token?.id) return {} as any;
       if (token) {
         session.user.id = token.id as string;
         session.user.name = token.name;

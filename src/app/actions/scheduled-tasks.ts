@@ -3,6 +3,7 @@
 import prisma from "@/lib/prisma"
 import { createNotification, createNotifications } from "@/lib/notification-helpers"
 import { computeContributionArrears } from "@/lib/data"
+import { purgeDeadSessions } from "@/lib/sessions"
 
 /** Months behind on CONTRIBUTIONS (months due since join vs months paid). Never
  *  derive this from paymentStatus.balance — that balance holds fees/penalties, not
@@ -40,6 +41,10 @@ export async function runDailyTasks() {
   for (const edir of edirs) {
     await processEdirTasks(edir, today)
   }
+
+  // Drop session records that have been revoked/expired for 30+ days.
+  const purged = await purgeDeadSessions()
+  console.log(`Purged ${purged} dead session record(s)`)
 
   console.log("Completed daily scheduled tasks at", new Date().toISOString())
   return { success: true }

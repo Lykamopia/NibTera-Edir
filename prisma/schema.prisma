@@ -137,6 +137,7 @@ model User {
   rulesAuthored             RulesVersion[]        @relation("RulesAuthor")
   rulesApproved             RulesVersion[]        @relation("RulesApprover")
   memberRequestsReviewed    MemberRequest[]       @relation("MemberRequestReviewer")
+  sessions                  UserSession[]
 
   @@index([roleId])
   @@index([edirId])
@@ -939,6 +940,30 @@ model AuditLog {
   @@index([userId])
   @@index([action])
   @@index([createdAt])
+}
+
+// Server-side record of every signed-in session (one per sign-in / device).
+// The session JWT carries `id` as `sid`; every server-side session read checks
+// this row, so a session can be revoked centrally (logout, "sign out other
+// devices", password reset, admin action) and expires on idle/absolute limits.
+// See src/lib/sessions.ts.
+model UserSession {
+  id            String    @id @default(cuid())
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // user.tokenVersion when the session was created: a later bump (role change,
+  // suspension, …) invalidates every older session in one step.
+  tokenVersion  Int
+  ipAddress     String?
+  userAgent     String?
+  createdAt     DateTime  @default(now())
+  lastActiveAt  DateTime  @default(now())
+  expiresAt     DateTime  // absolute lifetime cap
+  revokedAt     DateTime?
+  revokedReason String?
+
+  @@index([userId, revokedAt])
+  @@index([expiresAt])
 }
 
 model PasswordResetToken {

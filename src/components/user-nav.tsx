@@ -16,14 +16,14 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import type { User } from "@/lib/types";
-import { revokeUserTokens } from "@/app/actions/auth";
 import { getClientBaseUrl } from "@/lib/url";
 
 export function UserNav({ user }: { user: User }) {
   if (!user) return null;
 
   const handleSignOut = async () => {
-    try { await revokeUserTokens(user.id); } catch {}
+    // NextAuth's signOut event revokes this session server-side (other devices
+    // stay signed in — they can be ended from Account → Active sessions).
     // Sign out without NextAuth's own redirect (it rejects cross-origin callback
     // URLs and falls back to NEXTAUTH_URL), then navigate to the correct host.
     try { await signOut({ redirect: false }); } catch {}
