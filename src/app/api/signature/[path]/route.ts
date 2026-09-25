@@ -5,7 +5,9 @@ import { join, sep } from 'path';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import prisma from '@/lib/prisma';
-import { decryptBuffer } from '@/lib/encryption';
+import { decryptBuffer, DecryptionError } from '@/lib/encryption';
+import { logSecurityEvent, SecurityEvent } from '@/lib/security-logger';
+import { LogSeverity } from '@/lib/types';
 
 export async function GET(req: NextRequest, { params }: { params: { path: string } }) {
   const session = await getServerSession(authOptions);
@@ -51,6 +53,16 @@ export async function GET(req: NextRequest, { params }: { params: { path: string
       },
     });
   } catch (error) {
+    if (error instanceof DecryptionError) {
+      // Tag verification failed (tampered/corrupt file or wrong key): refuse, and alert.
+      await logSecurityEvent({
+        event: SecurityEvent.FILE_INTEGRITY_FAILURE,
+        severity: LogSeverity.CRITICAL,
+        actor: { id: user.id, name: user.name ?? user.email ?? user.id },
+        details: `Signature file '${params.path}' failed authentication and was not served: ${error.message}`,
+      });
+      return new NextResponse('This file could not be verified.', { status: 422 });
+    }
     console.error('Error serving signature:', error);
     return new NextResponse('Not Found', { status: 404 });
   }

@@ -121,6 +121,8 @@ export enum SecurityEvent {
   FILE_UPLOAD_REJECTED = 'FILE_UPLOAD_REJECTED',
   FILE_DOWNLOAD_SUCCESS = 'FILE_DOWNLOAD_SUCCESS',
   FILE_PREVIEW_SUCCESS = 'FILE_PREVIEW_SUCCESS',
+  /** An encrypted file failed authentication (tampered/corrupt/wrong key). */
+  FILE_INTEGRITY_FAILURE = 'FILE_INTEGRITY_FAILURE',
 }
 
 type LogDetails = {

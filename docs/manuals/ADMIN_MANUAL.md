@@ -732,7 +732,8 @@ Key configuration values (set per environment; never commit secrets to source):
 |----------|---------|
 | `DATABASE_URL` | PostgreSQL connection string. |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Seed the initial Super Admin (password otherwise generated once at seed time). |
-| `SIGNATURE_ENCRYPTION_KEY` | **Required.** Encrypts payment signatures (no fallback — the app requires it). |
+| `SIGNATURE_ENCRYPTION_KEY` | **Required.** Secret for at-rest encryption of signature files (AES-256-GCM, key derived with HKDF-SHA-256). Changing it makes existing files unreadable. |
+| `ENCRYPTION_ALLOW_LEGACY_CBC` | Default `true`. Allows reading signature files written by older releases (unauthenticated AES-CBC). Set to `false` after running the migration below. |
 | `FRAME_ANCESTORS` | Space-separated list of trusted origins allowed to embed the public pay/portal pages. |
 | `NIB_VALIDATE_TOKEN_URL` | NIB endpoint to validate a Super App session token. |
 | `NIB_PAYMENT_URL` | NIB endpoint to obtain a payment token. |
@@ -745,6 +746,13 @@ Key configuration values (set per environment; never commit secrets to source):
 
 ⚠ `SIGNATURE_ENCRYPTION_KEY` is **mandatory** — the application will not operate
 without it. Configure it before deployment.
+
+**Upgrading from a release that used AES-CBC:** with the production
+`SIGNATURE_ENCRYPTION_KEY` in `.env`, run
+`npx tsx scripts/migrate-signature-encryption.ts` (dry run), then again with
+`--apply`. When it reports 0 failures, set `ENCRYPTION_ALLOW_LEGACY_CBC=false` and
+restart. From then on any signature file that fails its authentication tag is
+refused (HTTP 422) and a CRITICAL `FILE_INTEGRITY_FAILURE` security event is logged.
 
 ---
 

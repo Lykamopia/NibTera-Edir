@@ -8,7 +8,8 @@ import prisma from '@/lib/prisma';
 import type { LoggedInUser } from '@/lib/types';
 import { LogSeverity } from '@/lib/types';
 import { logSecurityEvent, SecurityEvent } from '@/lib/security-logger';
-import { decryptBuffer } from '@/lib/encryption';
+import { decryptBuffer, isAuthenticatedFormat, legacyCbcAllowed } from '@/lib/encryption';
+import { detectFileType } from '@/lib/file-validation';
 
 export async function GET(req: NextRequest, { params }: { params: { path: string[] } }) {
     const filePathParts = params.path;
@@ -182,11 +183,25 @@ export async function GET(req: NextRequest, { params }: { params: { path: string
         // Decrypt signatures if they were encrypted during upload
         if (fileType === 'signatures') {
             try {
+                // Authenticated decryption: the GCM tag is verified before any
+                // bytes are returned (see src/lib/encryption.ts).
                 fileBuffer = decryptBuffer(fileBuffer);
             } catch (decryptError) {
-                // If decryption fails, it might be an old unencrypted file.
-                // We serve it as is for backward compatibility.
-                console.warn(`[Encryption] Decryption failed for ${dbPath}. Serving as-is. Error:`, decryptError instanceof Error ? decryptError.message : decryptError);
+                // Never fall back to serving bytes that failed authentication. The
+                // one exception, while legacy reads are still enabled, is a
+                // signature stored as a plain image before encryption existed —
+                // recognised by its real image magic bytes, not by the failure.
+                const legacyPlainImage = legacyCbcAllowed() && !isAuthenticatedFormat(fileBuffer) && detectFileType(fileBuffer)?.mime.startsWith('image/');
+                if (!legacyPlainImage) {
+                    await logSecurityEvent({
+                        event: SecurityEvent.FILE_INTEGRITY_FAILURE,
+                        severity: LogSeverity.CRITICAL,
+                        actor: user,
+                        details: `Encrypted file '${dbPath}' failed authentication and was not served: ${decryptError instanceof Error ? decryptError.message : String(decryptError)}`,
+                    });
+                    return new NextResponse('This file could not be verified and was not served.', { status: 422 });
+                }
+                console.warn(`[Encryption] Serving legacy unencrypted signature ${dbPath}; run scripts/migrate-signature-encryption.ts to encrypt it.`);
             }
         }
 
