@@ -12,6 +12,7 @@ import { Loader2, KeyRound, ShieldCheck, LogOut, Eye, EyeOff } from 'lucide-reac
 import { completeFirstLoginPasswordChange, getFirstAccessiblePage } from '@/app/actions/auth';
 import { getClientBaseUrl } from '@/lib/url';
 import { toUserError } from '@/lib/errors';
+import { PASSWORD_GUIDANCE, PASSWORD_REQUIREMENTS } from '@/lib/password-rules';
 
 export default function ForcePasswordChangeClient() {
   const router = useRouter();
@@ -23,7 +24,9 @@ export default function ForcePasswordChangeClient() {
   const [saving, setSaving] = useState(false);
 
   const submit = async () => {
-    if (next.length < 8) { toast.error('Password must be at least 8 characters.'); return; }
+    // Quick local check; the server enforces the full policy.
+    const failed = PASSWORD_REQUIREMENTS.find((r) => !r.test(next));
+    if (failed) { toast.error(failed.error); return; }
     if (next !== confirm) { toast.error('Passwords do not match.'); return; }
     setSaving(true);
     let res: { success: boolean; error?: string };
@@ -79,7 +82,7 @@ export default function ForcePasswordChangeClient() {
             </div>
           </div>
           <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
-            <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" /> Use at least 8 characters with a mix of upper/lowercase letters, a number, and a symbol.
+            <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" /> {PASSWORD_GUIDANCE}
           </p>
           <Button className="w-full" onClick={submit} disabled={saving}>
             {saving && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />} Set password &amp; continue

@@ -1,5 +1,5 @@
-'use server';
-
+// Server-only helper. Deliberately NOT a 'use server' module: that would expose
+// it as a publicly callable server action (a free breach-lookup oracle/proxy).
 import { createHash } from 'crypto';
 
 /**

@@ -20,24 +20,20 @@ import {
 import Logo from '@/components/logo';
 import { toast } from 'sonner';
 import { verifyPasswordResetToken, setPassword } from '@/app/actions/auth';
+import { PASSWORD_REQUIREMENTS } from '@/lib/password-rules';
 
 // ── Password requirements ─────────────────────────────────────────────────────
 
-const REQUIREMENTS = [
-  { label: 'At least 8 characters',  test: (p: string) => p.length >= 8 },
-  { label: 'One uppercase letter',   test: (p: string) => /[A-Z]/.test(p) },
-  { label: 'One lowercase letter',   test: (p: string) => /[a-z]/.test(p) },
-  { label: 'One number',             test: (p: string) => /[0-9]/.test(p) },
-  { label: 'One special character',  test: (p: string) => /[^A-Za-z0-9]/.test(p) },
-] as const;
+// Shared with the server policy. The server additionally rejects common,
+// breached and easily guessable passwords, and reports why.
+const REQUIREMENTS = PASSWORD_REQUIREMENTS;
 
 const passwordSchema = z
   .string()
-  .min(8,           'At least 8 characters')
-  .regex(/[A-Z]/,   'At least one uppercase letter')
-  .regex(/[a-z]/,   'At least one lowercase letter')
-  .regex(/[0-9]/,   'At least one number')
-  .regex(/[^A-Za-z0-9]/, 'At least one special character');
+  .superRefine((p, ctx) => {
+    const failed = PASSWORD_REQUIREMENTS.find((r) => !r.test(p));
+    if (failed) ctx.addIssue({ code: z.ZodIssueCode.custom, message: failed.error });
+  });
 
 const setPasswordSchema = z.object({
   password:        passwordSchema,

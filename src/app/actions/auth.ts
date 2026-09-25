@@ -14,7 +14,7 @@ import { IMPLEMENTED_PAGES } from '@/lib/nav';
 import { normalizeNibEmail } from '@/lib/utils';
 import { sendPasswordChangedNotificationEmail } from '@/lib/email';
 import { issueSetPasswordLink } from '@/lib/set-password-link';
-import { passwordSchema } from '@/lib/password-policy';
+import { validatePassword } from '@/lib/password-policy';
 import { enforceServerActionCsrf } from '@/lib/csrf';
 
 /**
@@ -144,16 +144,29 @@ export async function setPassword(token: string, newPassword: string) {
         return { success: false, error: result.error };
     }
 
-    const hashedPassword = await bcrypt.hash(newPassword, 12);
-
     const user = await prisma.user.findUnique({
         where: { email: result.email },
-        select: { id: true, name: true, email: true, onboardingCompleted: true, status: true },
+        select: { id: true, name: true, email: true, phone: true, onboardingCompleted: true, status: true },
     });
 
     if (!user) {
         return { success: false, error: 'User not found' };
     }
+
+    // Same policy as every other password-setting path — this one covers both
+    // invitation (account registration) and password reset. The token is only
+    // consumed once a compliant password is accepted.
+    const policy = await validatePassword(newPassword, user);
+    if (!policy.ok) {
+        return { success: false, error: policy.error };
+    }
+    // Fetch the hash separately so it never rides along on `user` (logged below).
+    const cred = await prisma.user.findUnique({ where: { id: user.id }, select: { hashedPassword: true } });
+    if (cred?.hashedPassword && await bcrypt.compare(newPassword, cred.hashedPassword)) {
+        return { success: false, error: 'Please choose a password different from your current one.' };
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 12);
 
     const isReset = user.onboardingCompleted === true;
 
@@ -215,9 +228,10 @@ export async function completeFirstLoginPasswordChange(newPassword: string) {
     return { success: false, error: 'No password change is required for this account.' };
   }
 
-  const validation = await passwordSchema.safeParseAsync(newPassword);
-  if (!validation.success) {
-    return { success: false, error: validation.error.issues[0]?.message || 'Password does not meet the security requirements.' };
+  // Full server-side policy, including the user's own name/email/phone.
+  const policy = await validatePassword(newPassword, user);
+  if (!policy.ok) {
+    return { success: false, error: policy.error };
   }
   // Fetch the hash directly (getLoggedInUser strips it from its response).
   const cred = await prisma.user.findUnique({ where: { id: user.id }, select: { hashedPassword: true } });
@@ -277,9 +291,10 @@ export async function changePassword(currentPassword: string, newPassword: strin
         return { success: false, error: 'New password must be different from your current password.' };
     }
 
-    const validation = await passwordSchema.safeParseAsync(newPassword);
-    if (!validation.success) {
-        return { success: false, error: validation.error.issues[0]?.message || 'Password does not meet the security requirements.' };
+    // Full server-side policy, including the user's own name/email/phone.
+    const policy = await validatePassword(newPassword, user);
+    if (!policy.ok) {
+        return { success: false, error: policy.error };
     }
 
     const hashedPassword = await bcrypt.hash(newPassword, 12);

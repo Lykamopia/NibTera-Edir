@@ -19,6 +19,7 @@ import { PageHeader, LoadingState, ErrorState, EmptyState, StatCard } from '@/co
 import { NotificationSettings } from '@/components/notification-settings';
 import { PaymentReceiptModal } from '@/components/payment-receipt-modal';
 import { changePassword } from '@/app/actions/auth';
+import { PASSWORD_GUIDANCE, PASSWORD_REQUIREMENTS } from '@/lib/password-rules';
 import { getMyPortal } from '@/app/actions/account';
 import { getMyRequests } from '@/app/actions/member-requests';
 import { submitRelativeDocument } from '@/app/actions/relative-documents';
@@ -445,6 +446,9 @@ function ChangePassword() {
   const [saving, setSaving] = useState(false);
 
   const submit = async () => {
+    // Quick local check; the server enforces the full policy.
+    const failed = PASSWORD_REQUIREMENTS.find((r) => !r.test(next));
+    if (failed) { toast.error(failed.error); return; }
     if (next !== confirm) { toast.error('Passwords do not match.'); return; }
     setSaving(true);
     try {
@@ -463,6 +467,7 @@ function ChangePassword() {
         <div className="space-y-1.5"><Label className="text-xs">Current Password</Label><Input type="password" value={current} onChange={e => setCurrent(e.target.value)} /></div>
         <div className="space-y-1.5"><Label className="text-xs">New Password</Label><Input type="password" value={next} onChange={e => setNext(e.target.value)} /></div>
         <div className="space-y-1.5"><Label className="text-xs">Confirm New Password</Label><Input type="password" value={confirm} onChange={e => setConfirm(e.target.value)} /></div>
+        <p className="text-xs text-muted-foreground">{PASSWORD_GUIDANCE}</p>
         <Button onClick={submit} disabled={saving}>{saving && <Loader2 className="mr-1 h-4 w-4 animate-spin" />} Update Password</Button>
       </CardContent>
     </Card>
