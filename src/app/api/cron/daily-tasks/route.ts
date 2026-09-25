@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { runDailyTasks } from '@/app/actions/scheduled-tasks';
+import { runDailyTasks } from '@/lib/daily-tasks';
 
 export const dynamic = 'force-dynamic';
 

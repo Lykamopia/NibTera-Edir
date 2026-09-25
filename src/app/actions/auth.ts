@@ -5,7 +5,6 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { LogSeverity, Permission, User } from '@/lib/types';
 import { logSecurityEvent, SecurityEvent } from '@/lib/security-logger';
-import { getGeneralSettings } from './settings';
 import { revalidatePath } from 'next/cache';
 import bcrypt from 'bcrypt';
 import { AccessDeniedError, NotAuthenticatedError } from '@/lib/errors';
@@ -17,6 +16,7 @@ import { issueSetPasswordLink } from '@/lib/set-password-link';
 import { validatePassword } from '@/lib/password-policy';
 import { getCurrentSessionId, revokeAllUserSessions } from '@/lib/sessions';
 import { enforceServerActionCsrf } from '@/lib/csrf';
+import { getActor, actorHasPermission, assertSameTenant } from '@/lib/tenant-scope';
 
 /**
  * Returns the first application page this user is allowed to access,
@@ -106,14 +106,22 @@ export async function hasPermission(permission: Permission | Permission[]): Prom
 }
 
 export async function revokeUserTokens(userId: string) {
-    const user = await getLoggedInUser();
-    if (!user || (user.id !== userId && !(user.role?.permissions?.includes('manage_users')))) {
-        throw new Error("Unauthorized to revoke tokens.");
+    // Authorize inside the action (never rely on routing): a user may revoke their
+    // own sessions; revoking someone else's needs manage_users AND the target must
+    // be within the actor's tenant scope (super-admin: any).
+    const actor = await getActor();
+    const user = { id: actor.id, name: actor.name ?? actor.id };
+    if (typeof userId !== 'string' || !userId) throw new AccessDeniedError('Unauthorized to revoke tokens.');
+    if (actor.id !== userId) {
+        if (!actorHasPermission(actor, 'manage_users')) throw new AccessDeniedError('Unauthorized to revoke tokens.');
+        const target = await prisma.user.findUnique({ where: { id: userId }, select: { edirId: true } });
+        if (!target) throw new AccessDeniedError('Unauthorized to revoke tokens.');
+        if (!actor.isSuperAdmin) await assertSameTenant(actor, target.edirId);
     }
 
-    const count = await revokeAllUserSessions(userId, user.id === userId ? 'user_revoked' : 'admin_revoked');
+    const count = await revokeAllUserSessions(userId, actor.id === userId ? 'user_revoked' : 'admin_revoked');
 
-    await logSecurityEvent({ event: SecurityEvent.SESSIONS_REVOKED, severity: LogSeverity.WARN, actor: user, details: `All sessions (${count}) for user ID ${userId} were revoked by ${user?.name}.`, targetId: userId, targetType: 'User' });
+    await logSecurityEvent({ event: SecurityEvent.SESSIONS_REVOKED, severity: LogSeverity.WARN, actor: user, details: `All sessions (${count}) for user ID ${userId} were revoked by ${user.name}.`, targetId: userId, targetType: 'User' });
 
     return { success: true };
 }

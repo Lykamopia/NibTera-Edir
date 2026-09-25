@@ -4,7 +4,7 @@ import { z } from 'zod';
 import prisma from '@/lib/prisma';
 import { getActor } from '@/lib/tenant-scope';
 import { writeAudit } from '@/lib/audit';
-import { ensureMembershipForUser } from '@/app/actions/members';
+import { ensureMembershipForUser } from '@/lib/membership-provisioning';
 import { computeContributionArrears, computePenalty, computePayWindow } from '@/lib/data';
 import { paymentLogStatusLabel } from '@/lib/payment-log-status';
 import { revalidatePath } from 'next/cache';

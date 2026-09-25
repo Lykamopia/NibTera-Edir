@@ -162,6 +162,9 @@ export async function submitRelativeDocumentDelete(documentId: string) {
 /** Checker action: approve the document's pending request (delegates to the engine). */
 export async function approveRelativeDocument(documentId: string, comment?: string) {
   try {
+    // Authenticate before touching data; approveRequest/rejectRequest then enforce
+    // checker permission, tenant scope and maker≠checker.
+    await getActor();
     const req = await prisma.approvalRequest.findFirst({ where: { module: 'RELATIVE_DOCUMENT_ACTION', targetId: documentId, status: 'PENDING' }, orderBy: { createdAt: 'desc' } });
     if (!req) return { success: false as const, error: 'No pending approval for this document.' };
     await approveRequest(req.id, comment);
@@ -176,6 +179,9 @@ export async function approveRelativeDocument(documentId: string, comment?: stri
 /** Checker action: reject the document's pending request (delegates to the engine). */
 export async function rejectRelativeDocument(documentId: string, comment?: string) {
   try {
+    // Authenticate before touching data; approveRequest/rejectRequest then enforce
+    // checker permission, tenant scope and maker≠checker.
+    await getActor();
     const req = await prisma.approvalRequest.findFirst({ where: { module: 'RELATIVE_DOCUMENT_ACTION', targetId: documentId, status: 'PENDING' }, orderBy: { createdAt: 'desc' } });
     if (!req) return { success: false as const, error: 'No pending approval for this document.' };
     await rejectRequest(req.id, comment);

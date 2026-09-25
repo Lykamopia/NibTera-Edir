@@ -4,7 +4,7 @@ import { headers } from 'next/headers';
 import type { User } from './types';
 import { LogSeverity } from './types';
 import { sendEmail } from './email';
-import { getEmailSettings, getGeneralSettings } from '@/app/actions/settings';
+import { readEmailSettings as getEmailSettings, readGeneralSettings as getGeneralSettings } from '@/lib/settings-store';
 
 export enum SecurityEvent {
   LOGIN_SUCCESS = 'LOGIN_SUCCESS',

@@ -5,111 +5,63 @@ import { readdir, stat, mkdir, writeFile, unlink } from 'fs/promises';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { UPLOAD_POLICIES, buildStoredFilename, validateUpload } from '@/lib/file-validation';
-import { getLoggedInUser } from './auth';
-import { hasPermission } from './auth';
 import { LogSeverity } from '@/lib/types';
 import { logSecurityEvent, SecurityEvent } from '@/lib/security-logger';
 import { revalidatePath } from 'next/cache';
-import { getActor, assertPermission } from '@/lib/tenant-scope';
+import { getActor, tryGetActor, assertPermission, actorHasPermission } from '@/lib/tenant-scope';
 import {
   MEMBERSHIP_SETTING_KEY,
   getMembershipPolicy,
   type MembershipPolicy,
 } from '@/lib/membership-policy';
 import { writeAudit } from '@/lib/audit';
+import {
+  readGeneralSettings, readEmailSettings,
+  type AcknowledgementType, type ReferenceFormatSettings, type GeneralSettings, type EmailSettings,
+} from '@/lib/settings-store';
 
-// Define the types locally as they are simple and specific to settings
-type AcknowledgementType = 'BADGE' | 'SIGNATURE';
+// Every export below is a publicly reachable Server Action endpoint (it can be
+// POSTed to any route, including public ones the middleware never guards), so
+// each one authenticates and authorizes itself. Server internals that need
+// settings without a session use src/lib/settings-store.ts directly.
 
-type ReferenceFormatSettings = {
-    separator: '-' | '/';
-    numberLength: number;
-};
+// 'general' / 'email' / background images are PLATFORM-wide settings (one row
+// for every Edir), so writes require the platform settings permission.
+const PLATFORM_SETTINGS_PERMS = ['manage_platform_settings', 'super_admin'] as const;
 
-type GeneralSettings = {
-  acknowledgementType: AcknowledgementType;
-  referenceFormat: ReferenceFormatSettings;
-  acknowledgementMode: 'auto' | 'manual';
-  enableCriticalAlerts: boolean;
-};
-
-type EmailSettings = {
-    notificationsEnabled: boolean;
-    headerText: string;
-    bodyText: string;
-    footerText: string;
-};
-
-const defaultGeneralSettings: GeneralSettings = {
-    acknowledgementType: 'SIGNATURE',
-    acknowledgementMode: 'manual',
-    referenceFormat: {
-      separator: '-',
-      numberLength: 4
-    },
-    enableCriticalAlerts: true,
-};
-
-const defaultEmailSettings: EmailSettings = {
-    notificationsEnabled: true,
-    headerText: "New Plan Notification",
-    bodyText: "Hello,\n\nYou have received a new plan titled '{{subject}}' from {{senderName}}. Please log in to view it.",
-    footerText: "This is an automated message. Please do not reply."
-};
-
+/** General settings for the signed-in user's UI. */
 export async function getGeneralSettings(): Promise<GeneralSettings> {
-    try {
-        const setting = await prisma.setting.findUnique({ where: { key: 'general' } });
-        if (setting && typeof setting.value === 'object' && setting.value !== null) {
-            // Merge defaults with saved settings to ensure all keys are present
-            const dbSettings = setting.value as Partial<GeneralSettings>;
-            return {
-                acknowledgementType: dbSettings.acknowledgementType || defaultGeneralSettings.acknowledgementType,
-                acknowledgementMode: dbSettings.acknowledgementMode || defaultGeneralSettings.acknowledgementMode,
-                referenceFormat: {
-                    separator: dbSettings.referenceFormat?.separator || defaultGeneralSettings.referenceFormat.separator,
-                    numberLength: dbSettings.referenceFormat?.numberLength || defaultGeneralSettings.referenceFormat.numberLength
-                },
-                enableCriticalAlerts: dbSettings.enableCriticalAlerts ?? defaultGeneralSettings.enableCriticalAlerts,
-            };
-        }
-    } catch (error) {
-        console.error("Failed to fetch general settings, returning defaults:", error);
-    }
-    return defaultGeneralSettings;
+  await getActor(); // any authenticated user
+  return readGeneralSettings();
 }
 
+/** Email templates — platform settings administrators only. */
 export async function getEmailSettings(): Promise<EmailSettings> {
-    try {
-        const setting = await prisma.setting.findUnique({ where: { key: 'email' } });
-        if (setting && typeof setting.value === 'object' && setting.value !== null) {
-            return { ...defaultEmailSettings, ...(setting.value as Partial<EmailSettings>) };
-        }
-    } catch (error) {
-        console.error("Failed to fetch email settings, returning defaults:", error);
-    }
-    return defaultEmailSettings;
+  const actor = await getActor();
+  await assertPermission(actor, [...PLATFORM_SETTINGS_PERMS]);
+  return readEmailSettings();
 }
 
 export async function deleteBackgroundImage(imagePath: string): Promise<{ success: boolean; error?: string }> {
-    const user = await getLoggedInUser();
-    if (!user || !user.role?.permissions?.includes('manage_general_settings')) {
+    const actor = await tryGetActor();
+    if (!actor || !actorHasPermission(actor, [...PLATFORM_SETTINGS_PERMS])) {
         return { success: false, error: 'Unauthorized' };
     }
 
     try {
-        const fileName = imagePath.split('/').pop();
-        if (!fileName) throw new Error("Invalid file name");
+        const fileName = String(imagePath || '').split('/').pop();
+        if (!fileName || !/^[\w.-]+$/.test(fileName)) throw new Error("Invalid file name");
 
-        const absolutePath = join(process.cwd(), 'uploads', 'bg', fileName);
-        
-        // Security check
         const bgDir = join(process.cwd(), 'uploads', 'bg');
+        const absolutePath = join(bgDir, fileName);
+
+        // Security check
         if (!absolutePath.startsWith(bgDir)) {
             throw new Error("Invalid path");
         }
 
         await unlink(absolutePath);
+        await writeAudit({ userId: actor.id, action: 'BACKGROUND_IMAGE_DELETED', targetType: 'Setting', details: fileName });
         return { success: true };
     } catch (error) {
         console.error("Failed to delete background image:", error);
@@ -118,10 +70,11 @@ export async function deleteBackgroundImage(imagePath: string): Promise<{ succes
 }
 
 export async function uploadBackgroundImage(formData: FormData): Promise<{ success: boolean; error?: string; url?: string }> {
-    const user = await getLoggedInUser();
-    if (!user || !user.role?.permissions?.includes('manage_general_settings')) {
+    const actor = await tryGetActor();
+    if (!actor || !actorHasPermission(actor, [...PLATFORM_SETTINGS_PERMS])) {
         return { success: false, error: 'Unauthorized' };
     }
+    const user = { id: actor.id, name: actor.name ?? actor.id };
 
     const file = formData.get('file') as File;
     if (!file) {
@@ -180,6 +133,10 @@ export async function uploadBackgroundImage(formData: FormData): Promise<{ succe
     }
 }
 
+/**
+ * Intentionally PUBLIC (no session): the login page shows these backgrounds to
+ * signed-out visitors. Returns only /uploads/bg image URLs — no settings data.
+ */
 export async function getBackgroundImages(): Promise<string[]> {
     try {
         const bgDir = join(process.cwd(), 'uploads', 'bg');
@@ -200,7 +157,9 @@ export async function saveGeneralSettings(settings: {
     enableCriticalAlerts: boolean; 
     showOnboardingTour: boolean 
 }) {
-    const user = await hasPermission('manage_general_settings');
+    const actor = await getActor();
+    await assertPermission(actor, [...PLATFORM_SETTINGS_PERMS]);
+    const user = { id: actor.id, name: actor.name ?? actor.id };
     await prisma.setting.upsert({
         where: { key: 'general' },
         update: { value: settings },
@@ -222,7 +181,9 @@ export async function saveEmailSettings(settings: {
     bodyText: string; 
     footerText: string 
 }) {
-    const user = await hasPermission('manage_email_settings');
+    const actor = await getActor();
+    await assertPermission(actor, [...PLATFORM_SETTINGS_PERMS]);
+    const user = { id: actor.id, name: actor.name ?? actor.id };
     await prisma.setting.upsert({
         where: { key: 'email' },
         update: { value: settings },

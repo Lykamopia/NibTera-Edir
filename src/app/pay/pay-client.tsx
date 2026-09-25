@@ -191,7 +191,7 @@ function PayInner() {
     const poll = setInterval(async () => {
       if (done || polls++ > 30) { clearInterval(poll); return; }
       try {
-        const s = await checkTransactionStatus(res.transactionId!);
+        const s = await checkTransactionStatus(res.transactionId!, token || undefined);
         payLog('client/pay', `fallback status check #${polls}`, s);
         if (s.status === 'success' || s.status === 'partial') { clearInterval(poll); finishSuccess(); }
         else if (s.status === 'failed' || s.status === 'void') { clearInterval(poll); if (!done) { setPaying(false); setError(t('err_notCompleted')); } }

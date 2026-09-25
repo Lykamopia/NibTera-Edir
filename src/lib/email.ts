@@ -2,7 +2,7 @@
 import nodemailer from 'nodemailer';
 import type { Memo, User, Role, Prisma } from './types';
 import prisma from './prisma';
-import { getEmailSettings, getGeneralSettings } from '@/app/actions/settings';
+import { readEmailSettings as getEmailSettings, readGeneralSettings as getGeneralSettings } from '@/lib/settings-store';
 import { getBaseUrl } from './url';
 const logoUrl = 'https://cdn.brandfetch.io/id3xwknDM-/w/2048/h/2048/theme/dark/icon.jpeg?c=1bxid64Mup7aczewSAYMX&t=1769246323397';
 

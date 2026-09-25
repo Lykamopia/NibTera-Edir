@@ -10,6 +10,7 @@
  * requests.
  */
 
+import { cache } from 'react';
 import { getServerSession } from 'next-auth/next';
 import { cookies } from 'next/headers';
 import { authOptions } from '@/lib/auth';
@@ -56,8 +57,21 @@ function deriveOrgScope(edirId: string | null, branchId: string | null, district
   return 'EDIR';
 }
 
-/** Resolve the current authenticated actor (with role + permissions). Throws if unauthenticated. */
-export async function getActor(): Promise<Actor> {
+/**
+ * Resolve the current authenticated actor (with role + permissions). Throws if unauthenticated.
+ *
+ * Wrapped in React `cache()` — a REQUEST-scoped memo: during one server render,
+ * every page/component/action that calls getActor() shares a single session +
+ * DB lookup, and the result can never leak into another request or user.
+ * Server Actions invoked by the client run outside a render, so each call
+ * re-verifies the session and CSRF token.
+ * Never put getActor()/permission checks inside a cross-request cache
+ * (unstable_cache / 'use cache') — authorize first, then read cached data keyed
+ * by the authorized tenant.
+ */
+export const getActor = cache(resolveActor);
+
+async function resolveActor(): Promise<Actor> {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) throw new NotAuthenticatedError();
 

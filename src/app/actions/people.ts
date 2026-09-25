@@ -5,7 +5,7 @@ import { Prisma } from '@prisma/client';
 import { getActor, actorHasPermission, tenantWhere } from '@/lib/tenant-scope';
 import { isSystemUserRole } from '@/lib/permissions';
 import { AccessDeniedError } from '@/lib/errors';
-import { ensureMembershipForUser } from '@/app/actions/members';
+import { ensureMembershipForUser } from '@/lib/membership-provisioning';
 import { dateWhere, type DateRangeParam } from '@/lib/date-range';
 import { pickPrimaryMembership } from '@/lib/membership-policy';
 

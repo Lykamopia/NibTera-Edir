@@ -2,7 +2,7 @@
 import React, { Suspense } from "react"
 import { redirect } from "next/navigation";
 import { getLoggedInUser } from "@/app/actions/auth";
-import { getGeneralSettings } from "@/app/actions/settings";
+import { readGeneralSettings as getGeneralSettings } from "@/lib/settings-store";
 import { DashboardLayoutClient } from "./dashboard-layout-client";
 import { SettingsProvider } from "@/components/settings-provider";
 import { HoneycombLoader } from "@/components/honeycomb-loader";

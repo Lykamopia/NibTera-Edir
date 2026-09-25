@@ -1,4 +1,9 @@
-'use server';
+// Deliberately NOT 'use server': these helpers take caller-supplied user ids and
+// perform no authentication, so they must only be called from server code that
+// has already resolved the actor (getActor/requireActor). Exposing them as
+// Server Actions would let anyone forge approval events or read approval data.
+
+import 'server-only'; // build fails if a client component ever imports this module
 
 import prisma from '@/lib/prisma';
 import { type ApprovalModule } from '@prisma/client';

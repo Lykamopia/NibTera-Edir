@@ -53,6 +53,24 @@ async function validateToken(token: string): Promise<{ ok: boolean; phone?: stri
 }
 
 /**
+ * Server-side authentication for every mini-app Server Action: resolves the Super
+ * App token (header / cookie / query) and validates it with NIB. Returns the
+ * authenticated phone, or null — callers must refuse to act on null. Module-local
+ * (not exported) so it is never itself a Server Action endpoint.
+ */
+async function authenticateMiniApp(queryToken?: string): Promise<{ token: string; phone: string | null } | null> {
+  const token = await resolveToken(queryToken);
+  if (!token) return null;
+  const v = await validateToken(token);
+  return v.ok ? { token, phone: v.phone ?? null } : null;
+}
+
+/** Last 9 digits of a phone, for payer/beneficiary matching across formats. */
+function phoneTail(s?: string | null): string {
+  return normalizeEthiopianPhone(s || '').replace(/\D/g, '').slice(-9);
+}
+
+/**
  * Steps 1 & 2 — extract and validate the Super App token. Returns the token and
  * the authenticated phone number so the page can PRE-FILL the lookup field. It no
  * longer auto-loads member data; the user fetches it explicitly.
@@ -138,7 +156,12 @@ export async function getPaymentToken(amount: number, token: string, memberId: s
   //  • BENEFICIARY — the fetched member whose obligations are settled (who we pay for).
   // Deriving both server-side prevents the client from spoofing either identity.
   const v = await validateToken(token);
-  const payerPhone = v.ok ? (v.phone ?? null) : null;
+  // No valid Super App session → no payment initiation and no records written.
+  if (!v.ok) {
+    payLog('getPaymentToken', 'token invalid → unauthorized', { memberId });
+    return { status: 'error', message: 'Your payment session is no longer valid. Please reopen from the Super App.', transactionId };
+  }
+  const payerPhone = v.phone ?? null;
   const beneficiary = await prisma.member.findUnique({
     where: { id: memberId },
     select: { phone: true, edirId: true, memberId: true, name: true, status: true },
@@ -311,13 +334,27 @@ export async function getPaymentToken(amount: number, token: string, memberId: s
   }
 }
 
-export async function pollPaymentDatabaseState(phone: string, transactionId: string, previousOutstanding?: number) {
+export async function pollPaymentDatabaseState(phone: string, transactionId: string, previousOutstanding?: number, queryToken?: string) {
+  if (!(await authenticateMiniApp(queryToken))) return { status: 'unauthorized' as const };
   return getPendingPaymentStatus(transactionId, phone, previousOutstanding);
 }
 
-export async function checkTransactionStatus(transactionId: string) {
-  const log = await prisma.paymentLog.findUnique({ where: { transactionId } });
-  if (log) return { status: log.status.toLowerCase(), amount: Number(log.amount) };
+export async function checkTransactionStatus(transactionId: string, queryToken?: string) {
+  const auth = await authenticateMiniApp(queryToken);
+  if (!auth) return { status: 'unauthorized' };
+  const log = await prisma.paymentLog.findUnique({
+    where: { transactionId },
+    select: { status: true, amount: true, description: true, member: { select: { phone: true } } },
+  });
+  if (log) {
+    // Only a party to the payment (payer or beneficiary) may see its status.
+    let meta: any = {};
+    try { meta = JSON.parse(log.description || '{}') || {}; } catch { meta = {}; }
+    const caller = phoneTail(auth.phone);
+    const isParty = !!caller && [log.member?.phone, meta.payerPhone, meta.beneficiaryPhone].some(p => phoneTail(p) === caller);
+    if (!isParty) return { status: 'pending' };
+    return { status: log.status.toLowerCase(), amount: Number(log.amount) };
+  }
   return { status: 'pending' };
 }
 
