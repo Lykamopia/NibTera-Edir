@@ -54,7 +54,9 @@ function filterHeaders(headers: unknown): unknown {
 }
 
 export function installResponseHeaderGuard() {
-  const proto = http.ServerResponse.prototype as any;
+  // Patched in place, so typed loosely as a bag of methods.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const proto = http.ServerResponse.prototype as unknown as Record<string | symbol, any>;
   if (proto[INSTALLED]) return;
 
   const setHeader = proto.setHeader;
