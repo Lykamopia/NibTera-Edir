@@ -108,7 +108,7 @@ export function EditUserDialog({ row, roles, onClose, onDone }: {
               </div>
               <div className="space-y-1.5">
                 <Label className="flex items-center gap-1 text-xs"><Phone className="h-3 w-3" /> Phone</Label>
-                <Input value={form.phone} onChange={e => set('phone', e.target.value)} placeholder="0912345678" />
+                <Input type="tel" allow="phone" value={form.phone} onChange={e => set('phone', e.target.value)} placeholder="0912345678" />
               </div>
             </div>
           </div>

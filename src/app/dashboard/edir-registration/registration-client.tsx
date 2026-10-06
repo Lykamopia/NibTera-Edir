@@ -499,7 +499,7 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
                     </div>
                     <div className="space-y-1.5">
                       <Label htmlFor="accountNumber">Account Number</Label>
-                      <Input id="accountNumber" name="accountNumber" value={formData.accountNumber} onChange={handleInputChange} placeholder="Bank account number" />
+                      <Input id="accountNumber" name="accountNumber" allow="digits" minLength={6} maxLength={20} value={formData.accountNumber} onChange={handleInputChange} placeholder="Bank account number" />
                     </div>
                   </div>
                 )}
@@ -550,7 +550,7 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
                     <div className="grid gap-4 sm:grid-cols-2">
                       <div className="space-y-1.5">
                         <Label htmlFor="contactMobile">Mobile Number <span className="text-destructive">*</span></Label>
-                        <Input id="contactMobile" name="contactMobile" value={formData.contactMobile} onChange={handleInputChange} placeholder="+251 9xx xxx xxx" />
+                        <Input id="contactMobile" name="contactMobile" type="tel" allow="phone" value={formData.contactMobile} onChange={handleInputChange} placeholder="+251 9xx xxx xxx" />
                       </div>
                       <div className="space-y-1.5">
                         <Label htmlFor="contactEmail">Email Address <span className="text-destructive">*</span></Label>
@@ -628,7 +628,7 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
                       </div>
                       <div className="space-y-1.5">
                         <Label htmlFor="adminPhone">Phone <span className="text-destructive">*</span></Label>
-                        <Input id="adminPhone" name="adminPhone" value={formData.adminPhone} onChange={handleInputChange} placeholder="0912345678" />
+                        <Input id="adminPhone" name="adminPhone" type="tel" allow="phone" value={formData.adminPhone} onChange={handleInputChange} placeholder="0912345678" />
                       </div>
                     </div>
                   </div>
@@ -824,7 +824,7 @@ function EditEdirDialog({ edir, branches, onClose, onDone }: { edir: EdirItem; b
             <div className="space-y-1.5"><Label className="text-xs">Edir Name <span className="text-destructive">*</span></Label><Input value={form.name} onChange={e => set('name', e.target.value)} /></div>
             <div className="space-y-1.5"><Label className="text-xs">Description</Label><Textarea rows={2} value={form.description} onChange={e => set('description', e.target.value)} /></div>
             <div className="grid gap-3 sm:grid-cols-2">
-              <div className="space-y-1.5"><Label className="text-xs">Account Number</Label><Input value={form.accountNumber} onChange={e => set('accountNumber', e.target.value)} /></div>
+              <div className="space-y-1.5"><Label className="text-xs">Account Number</Label><Input allow="digits" minLength={6} maxLength={20} placeholder="6–20 digits" value={form.accountNumber} onChange={e => set('accountNumber', e.target.value)} /></div>
               <div className="space-y-1.5">
                 <Label className="text-xs">Branch</Label>
                 <Select value={form.branchId} onValueChange={v => set('branchId', v)}>
@@ -844,7 +844,7 @@ function EditEdirDialog({ edir, branches, onClose, onDone }: { edir: EdirItem; b
             <h4 className="text-sm font-semibold text-muted-foreground">Chairperson / Contact</h4>
             <div className="space-y-1.5"><Label className="text-xs">Contact Person Name</Label><Input value={form.contactPersonName} onChange={e => set('contactPersonName', e.target.value)} /></div>
             <div className="grid gap-3 sm:grid-cols-2">
-              <div className="space-y-1.5"><Label className="text-xs">Mobile Number</Label><Input value={form.contactMobile} onChange={e => set('contactMobile', e.target.value)} /></div>
+              <div className="space-y-1.5"><Label className="text-xs">Mobile Number</Label><Input type="tel" allow="phone" value={form.contactMobile} onChange={e => set('contactMobile', e.target.value)} /></div>
               <div className="space-y-1.5"><Label className="text-xs">Email Address</Label><Input type="email" value={form.contactEmail} onChange={e => set('contactEmail', e.target.value)} /></div>
             </div>
             <div className="space-y-1.5"><Label className="text-xs">Contact Address</Label><Textarea rows={2} value={form.contactAddress} onChange={e => set('contactAddress', e.target.value)} /></div>

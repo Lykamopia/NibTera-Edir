@@ -20,7 +20,7 @@ import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
 import { dateWhere, type DateRangeParam } from '@/lib/date-range';
 import { toCsv } from '@/lib/csv';
-import { zId, zOptionalId, zName, zEmail, zEthiopianPhone, zOptionalEmail, zOptionalText, zOptionalPhone, zOptionalUploadPath, zCode, zInt, zSearch, zDateRange, parseArgs } from '@/lib/validation';
+import { zId, zOptionalId, zName, zEmail, zEthiopianPhone, zOptionalEmail, zOptionalText, zOptionalPhone, zOptionalUploadPath, zOptionalAccountNumber, zCode, zInt, zSearch, zDateRange, parseArgs } from '@/lib/validation';
 
 // ─── Users ───────────────────────────────────────────────────────────────────
 
@@ -73,8 +73,6 @@ export async function getRoles() {
   });
   return roles.map(r => ({ id: r.id, name: r.name, scope: r.scope, permissions: r.permissions, userCount: r._count.users, edirId: r.edirId, edirName: r.edir?.name ?? null }));
 }
-
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
  * Create one INVITED user: account → 48h set-password token → set-password email
@@ -193,7 +191,7 @@ export async function bulkInviteUsers(input: { edirId?: string | null; rows: Bul
       let roleId: string | null = null;
       const nameCheck = zName().safeParse(name);
       if (!nameCheck.success) error = nameCheck.error.issues[0].message;
-      else if (email.length > 254 || !EMAIL_RE.test(email)) error = 'Invalid email.';
+      else if (!zEmail.safeParse(email).success) error = 'Invalid email.';
       else if (rawPhone.length > 20 || !isValidEthiopianPhone(rawPhone)) error = 'Invalid phone number.';
       else if (roleName.length > 80) error = 'Role name is too long.';
       else if (roleName) {
@@ -801,7 +799,7 @@ export async function saveEdir(input: SaveEdirInput) {
       id: zId.optional(),
       name: zName('Edir name', 160),
       description: zOptionalText('Description', { max: 2000, multiline: true }),
-      accountNumber: z.preprocess(v => (typeof v === 'string' && v.trim() === '' ? null : v), z.string().trim().regex(/^[0-9]{6,20}$/, 'Account number must be 6–20 digits.').nullable().optional()),
+      accountNumber: zOptionalAccountNumber,
       address: zOptionalText('Address', { max: 300 }),
       branchId: zOptionalId,
       contactPersonName: zOptionalText('Contact person', { max: 120 }),

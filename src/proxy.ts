@@ -1,6 +1,9 @@
 import { withAuth, type NextRequestWithAuth } from "next-auth/middleware";
 import { NextRequest, NextResponse, type NextFetchEvent } from "next/server";
 import { safeRedirectUrl, untrustedHostReason } from "@/lib/trusted-host";
+// proxy.ts runs on the Node.js runtime (Next 16), so it can consult the
+// session table directly.
+import { isSessionActive } from "@/lib/sessions";
 import {
   CSRF_COOKIE_NAME,
   CSRF_COOKIE_OPTIONS,
@@ -195,10 +198,17 @@ const authMiddleware = withAuth(
     return withCsrfCookie(response);
   },
   {
-    // A token must reference a server-side session (sid). Whether that session
-    // is still alive (not revoked/idle/expired) is checked against the database
-    // on every server-side session read — see src/lib/sessions.ts.
-    callbacks: { authorized: ({ token }) => !!token?.id && typeof token?.sid === 'string' },
+    // A token must reference a server-side session (sid) that is STILL ALIVE in
+    // the database: not revoked (logout, superseded by a newer sign-in, admin
+    // action…), not idle, not expired, and at the user's current tokenVersion.
+    // Decoding the cookie alone is not enough — a copied or older cookie is
+    // rejected here on every request, before any page, action or API runs.
+    callbacks: {
+      authorized: async ({ token }) =>
+        typeof token?.id === 'string' &&
+        typeof token?.sid === 'string' &&
+        (await isSessionActive(token.sid, token.id)),
+    },
     pages: { signIn: '/login' },
   },
 );
@@ -207,7 +217,7 @@ const authMiddleware = withAuth(
 // webhooks and token-link auth pages. Same prefixes the matcher used to exclude.
 const PUBLIC_PATH = /^\/(?:api\/nib-callback|api\/cron|login|forgot-password|set-password|verify-email|portal|pay)/;
 
-export default function middleware(req: NextRequest, event: NextFetchEvent) {
+export default function proxy(req: NextRequest, event: NextFetchEvent) {
   // ── Host / X-Forwarded-Host allowlist ───────────────────────────────────────
   // Reject requests addressed to a host we don't serve before anything can build
   // an absolute URL (redirect, rewrite, callback) from a spoofed header.

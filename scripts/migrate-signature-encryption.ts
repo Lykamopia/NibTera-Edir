@@ -12,8 +12,8 @@
  *   - anything else                 → reported, never modified
  *
  * Writes are atomic (temp file + rename). Run it with the same
- * SIGNATURE_ENCRYPTION_KEY the app uses, then set ENCRYPTION_ALLOW_LEGACY_CBC=false
- * so unauthenticated ciphertext is refused from then on.
+ * SIGNATURE_ENCRYPTION_KEY the app uses. The app itself refuses unauthenticated
+ * (CBC) ciphertext by default, so any file not migrated will not be served.
  */
 import 'dotenv/config';
 import { readdir, readFile, writeFile, rename, stat } from 'fs/promises';

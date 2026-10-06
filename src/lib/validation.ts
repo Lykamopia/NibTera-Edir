@@ -105,6 +105,15 @@ export const zEmail = z.string({ invalid_type_error: 'Email must be text.' })
   .email('A valid email is required.');
 export const zOptionalEmail = z.preprocess(emptyToNull, zEmail.nullable().optional());
 
+/** Bank account number: digits only, 6–20 long (no letters, spaces or symbols). */
+export const zAccountNumber = z.string({ invalid_type_error: 'Account number must be text.' })
+  .trim()
+  .max(20, 'Account number must be at most 20 digits.')
+  .regex(/^[0-9]+$/, 'Account number may contain digits only.')
+  .min(6, 'Account number must be at least 6 digits.');
+/** Optional account number: '' / null / undefined → null. */
+export const zOptionalAccountNumber = z.preprocess(emptyToNull, zAccountNumber.nullable().optional());
+
 /** Ethiopian mobile (09…, 07…, +2519…, 2517…) — stored/normalized by the caller. */
 export const zEthiopianPhone = z.string({ invalid_type_error: 'Phone must be text.' })
   .trim()

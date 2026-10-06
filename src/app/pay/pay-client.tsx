@@ -249,7 +249,7 @@ function PayInner() {
             <Label className="text-xs font-medium">{t('phoneLabel')}</Label>
             <div className="relative">
               <Phone className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input className="h-12 pl-9 text-base" inputMode="tel" placeholder="09xxxxxxxx" value={phone} onChange={e => setPhone(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') fetchMember(); }} disabled={paying} />
+              <Input className="h-12 pl-9 text-base" type="tel" allow="phone" placeholder="09xxxxxxxx" value={phone} onChange={e => setPhone(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') fetchMember(); }} disabled={paying} />
             </div>
             <p className="text-[11px] text-muted-foreground">{t('phoneHelp')}</p>
           </div>

@@ -128,7 +128,7 @@ export function RequestDialog({ type, onClose, onDone }: { type: string; onClose
               <div className="space-y-1.5"><Label className="text-xs">Relationship</Label>
                 <Select value={f.relationship} onValueChange={v => set('relationship', v)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{relChoices.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}</SelectContent></Select>
               </div>
-              <div className="space-y-1.5"><Label className="text-xs">Phone</Label><Input value={f.phone} onChange={e => set('phone', e.target.value)} /></div>
+              <div className="space-y-1.5"><Label className="text-xs">Phone</Label><Input type="tel" allow="phone" value={f.phone} onChange={e => set('phone', e.target.value)} /></div>
               <div className="space-y-1.5"><Label className="text-xs">Date of Birth</Label><Input type="date" value={f.dateOfBirth} onChange={e => set('dateOfBirth', e.target.value)} /></div>
             </div>
           )}

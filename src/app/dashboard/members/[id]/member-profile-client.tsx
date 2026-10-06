@@ -866,7 +866,7 @@ function RelativeDialog({ relative, memberId, onClose, onDone }: { relative: any
                 <SelectContent>{options.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}</SelectContent>
               </Select>
             </div>
-            <div className="space-y-1.5"><Label className="text-xs">Phone</Label><Input value={form.phone} onChange={e => set('phone', e.target.value)} /></div>
+            <div className="space-y-1.5"><Label className="text-xs">Phone</Label><Input type="tel" allow="phone" value={form.phone} onChange={e => set('phone', e.target.value)} /></div>
             <div className="space-y-1.5"><Label className="text-xs">Date of Birth</Label><Input type="date" value={form.dateOfBirth} onChange={e => set('dateOfBirth', e.target.value)} /></div>
           </div>
           <div className="space-y-1.5">

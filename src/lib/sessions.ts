@@ -24,8 +24,13 @@ import { SESSION_COOKIE_NAME } from './session-cookie';
 export const SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 /** Absolute lifetime: re-authentication is required after this, active or not. */
 export const SESSION_ABSOLUTE_TIMEOUT_MS = 8 * 60 * 60 * 1000;
-/** Oldest sessions beyond this many concurrent ones are revoked at sign-in. */
-export const MAX_ACTIVE_SESSIONS_PER_USER = 5;
+/**
+ * Concurrent sessions allowed per user. A fresh sign-in (re-authentication)
+ * revokes every other session of that user, so only the newest one is ever
+ * valid. Tokens held by other browsers/devices die on their next request
+ * (checked in src/proxy.ts and in the NextAuth jwt callback).
+ */
+export const MAX_ACTIVE_SESSIONS_PER_USER = 1;
 /** Activity is written at most this often per session (keeps reads cheap). */
 const ACTIVITY_WRITE_INTERVAL_MS = 60 * 1000;
 
@@ -40,6 +45,7 @@ export type SessionRevokeReason =
   | 'expired'
   | 'invalidated'
   | 'session_limit'
+  | 'superseded'
   | 'ip_mismatch'
   | 'user_agent_mismatch';
 
@@ -64,17 +70,19 @@ export async function createUserSession(input: {
     select: { id: true, expiresAt: true },
   });
 
-  // Enforce the concurrent-session cap: keep the newest N live sessions.
-  const live = await prisma.userSession.findMany({
-    where: activeSessionWhere(input.userId, input.tokenVersion),
-    orderBy: { lastActiveAt: 'desc' },
+  // Enforce the concurrent-session cap: keep the new session plus the newest
+  // (MAX - 1) others. Every other unrevoked row is revoked — whatever its
+  // tokenVersion or idle state — so no older token can ever come back to life.
+  const others = await prisma.userSession.findMany({
+    where: { userId: input.userId, revokedAt: null, id: { not: session.id } },
+    orderBy: { createdAt: 'desc' },
     select: { id: true },
   });
-  const excess = live.slice(MAX_ACTIVE_SESSIONS_PER_USER).map((s) => s.id);
+  const excess = others.slice(Math.max(0, MAX_ACTIVE_SESSIONS_PER_USER - 1)).map((s) => s.id);
   if (excess.length > 0) {
     await prisma.userSession.updateMany({
       where: { id: { in: excess }, revokedAt: null },
-      data: { revokedAt: now, revokedReason: 'session_limit' },
+      data: { revokedAt: now, revokedReason: 'superseded' },
     });
   }
 

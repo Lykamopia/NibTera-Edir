@@ -11,7 +11,7 @@ import { sendConcurrentLoginNotification } from './email';
 import { normalizeNibEmail, normalizeEthiopianPhone } from './utils';
 import { newCsrfSessionId } from './csrf-token';
 import { SESSION_COOKIE_NAME } from './session-cookie';
-import { SESSION_IDLE_TIMEOUT_MS, createUserSession, revokeSession, validateSession } from './sessions';
+import { SESSION_IDLE_TIMEOUT_MS, createUserSession, revokeAllUserSessions, revokeSession, validateSession } from './sessions';
 
 const MAX_FAILED_ATTEMPTS = parseInt(process.env.MAX_FAILED_LOGIN_ATTEMPTS || '5', 10);
 const LOCKOUT_DURATION_MINUTES = parseInt(process.env.LOCKOUT_DURATION_MINUTES || '15', 10);
@@ -121,7 +121,7 @@ export const authOptions: NextAuthOptions = {
             await prisma.user.update({ where: { id: user.id }, data: { failedLoginAttempts: 0, lockoutUntil: null } });
           }
 
-          const headerList = headers();
+          const headerList = await headers();
           const rawIp = headerList.get('x-forwarded-for') || headerList.get('cf-connecting-ip') || 'unknown';
           const ipAddress = getCleanIp(rawIp);
           const userAgent = headerList.get('user-agent') || 'unknown';
@@ -198,12 +198,14 @@ export const authOptions: NextAuthOptions = {
   session: { strategy: "jwt", maxAge: SESSION_IDLE_TIMEOUT_MS / 1000, updateAge: 5 * 60 },
   pages: { signIn: "/login" },
   events: {
-    // Logout invalidates the server-side session, not just the browser cookie:
-    // a copy of the token taken before sign-out is dead from this moment on.
+    // Logout invalidates the server side, not just the browser cookie: EVERY
+    // session of the user is revoked and tokenVersion is bumped, so the token
+    // being signed out — and any copy of it, or any other concurrent session —
+    // is dead from this moment on.
     async signOut({ token }) {
-      if (typeof token?.sid !== 'string') return;
-      const revoked = await revokeSession(token.sid, 'logout');
-      if (revoked && token.id) {
+      if (typeof token?.sid !== 'string' || typeof token?.id !== 'string') return;
+      const revoked = await revokeAllUserSessions(token.id, 'logout');
+      if (revoked > 0) {
         await logSecurityEvent({
           event: SecurityEvent.LOGOUT,
           severity: LogSeverity.INFO,
@@ -218,7 +220,7 @@ export const authOptions: NextAuthOptions = {
   secret: process.env.NEXTAUTH_SECRET,
   callbacks: {
     async jwt({ token, user, trigger, session }) {
-      const headerList = headers();
+      const headerList = await headers();
       const rawIp = headerList.get('x-forwarded-for') || headerList.get('cf-connecting-ip') || 'unknown';
       const ipAddress = getCleanIp(rawIp);
       const userAgent = headerList.get('user-agent');
@@ -245,9 +247,9 @@ export const authOptions: NextAuthOptions = {
       if (user) { // Initial sign-in
         const dbUser = await prisma.user.findUnique({ where: { id: user.id }, include: { role: true } });
         if (dbUser) {
-          // Signing in no longer revokes the user's other devices (tokenVersion
-          // is left alone): each sign-in gets its own server-side session, which
-          // the user can review and revoke individually from their account page.
+          // Each sign-in gets its own server-side session; createUserSession
+          // revokes the user's other sessions (one active session per user),
+          // so re-authenticating elsewhere logs the previous browser out.
           await prisma.user.update({
             where: { id: dbUser.id },
             data: { lastIp: ipAddress, lastUserAgent: userAgent, lastLoginAt: new Date() },

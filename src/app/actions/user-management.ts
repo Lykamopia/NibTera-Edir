@@ -12,9 +12,13 @@ import { failure } from '@/lib/action-result';
 import { z } from 'zod';
 import { zId, zOptionalId, zName, zEmail, zEthiopianPhone } from '@/lib/validation';
 
-// Login identifier: a full email, or a NIB username that normalizeNibEmail completes.
+// Login identifier: a full email, or a NIB username that normalizeNibEmail
+// completes. The COMPLETED address is then held to the same strict email
+// format/length rules as every other email field (zEmail).
 const zLoginEmail = z.string().trim().min(3, 'Email is required.').max(254, 'Email is too long.')
-  .regex(/^[A-Za-z0-9._%+-]+(@[A-Za-z0-9.-]+\.[A-Za-z]{2,})?$/, 'Enter a valid email or NIB username.');
+  .regex(/^[A-Za-z0-9._%+-]+(@[A-Za-z0-9.-]+\.[A-Za-z]{2,})?$/, 'Enter a valid email or NIB username.')
+  .transform(normalizeNibEmail)
+  .pipe(zEmail);
 
 // Strict server-side input contracts (length-bounded, required fields explicit).
 const branchUserSchema = z.object({

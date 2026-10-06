@@ -8,7 +8,7 @@ import { writeAudit } from '@/lib/audit';
 import { isValidEthiopianPhone, normalizeEthiopianPhone } from '@/lib/utils';
 import { failure } from '@/lib/action-result';
 import { z } from 'zod';
-import { zId, zName, zEmail, zEthiopianPhone, zOptionalText, zOptionalPhone, zOptionalEmail, zOptionalUploadPath, zInt, parseArgs } from '@/lib/validation';
+import { zId, zName, zEmail, zEthiopianPhone, zOptionalText, zOptionalPhone, zOptionalEmail, zOptionalUploadPath, zOptionalAccountNumber, zInt, parseArgs } from '@/lib/validation';
 
 export interface EdirRegistrationInput {
   name: string;
@@ -35,7 +35,7 @@ export async function submitEdirRegistration(input: EdirRegistrationInput) {
       name: zName('Edir name', 160),
       description: zOptionalText('Description', { max: 2000, multiline: true }),
       address: zOptionalText('Address', { max: 300 }),
-      accountNumber: z.preprocess(v => (typeof v === 'string' && v.trim() === '' ? undefined : v), z.string().trim().regex(/^[0-9]{6,20}$/, 'Account number must be 6–20 digits.').optional()),
+      accountNumber: zOptionalAccountNumber.transform(v => v ?? undefined),
       branchId: zId,
       contactPersonName: zOptionalText('Contact person', { max: 120 }),
       contactAddress: zOptionalText('Contact address', { max: 300 }),

@@ -19,10 +19,10 @@ import crypto from 'crypto';
  *   the FULL secret (the legacy scheme used only its first 32 characters).
  *
  * Legacy format — AES-256-CBC with no MAC (IV | ciphertext), written by earlier
- * releases. It is readable only while ENCRYPTION_ALLOW_LEGACY_CBC is not
- * "false", purely so existing files keep working until they are re-encrypted
- * with `npx tsx scripts/migrate-signature-encryption.ts`. After migrating, set
- * ENCRYPTION_ALLOW_LEGACY_CBC=false so unauthenticated ciphertext is refused.
+ * releases. It is REFUSED by default. The only way to read it is the one-off
+ * re-encryption `npx tsx scripts/migrate-signature-encryption.ts --apply`,
+ * which enables legacy reads for its own process and rewrites every file as
+ * GCM. (ENCRYPTION_ALLOW_LEGACY_CBC=true exists only as an emergency override.)
  */
 
 const MAGIC = Buffer.from([0x4e, 0x54, 0x45, 0x01]); // "NTE" + format version 1
@@ -77,9 +77,15 @@ function getLegacyCbcKey(): Buffer {
   return Buffer.from(getSecret().slice(0, 32));
 }
 
-/** Whether legacy (unauthenticated) CBC ciphertext may still be read. */
+/**
+ * Whether legacy (unauthenticated) CBC ciphertext may still be read.
+ *
+ * Secure by default: CBC without a MAC is REFUSED unless an operator explicitly
+ * sets ENCRYPTION_ALLOW_LEGACY_CBC=true (only the migration script does so, for
+ * its own process). Nothing in the app ever encrypts with CBC.
+ */
 export function legacyCbcAllowed(): boolean {
-  return (process.env.ENCRYPTION_ALLOW_LEGACY_CBC ?? 'true').trim().toLowerCase() !== 'false';
+  return (process.env.ENCRYPTION_ALLOW_LEGACY_CBC ?? 'false').trim().toLowerCase() === 'true';
 }
 
 /** True when `buffer` is in the current authenticated (GCM v1) format. */

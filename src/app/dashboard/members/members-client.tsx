@@ -486,8 +486,8 @@ function AddMemberDialog({ ctx, onCreated, onNeedsEmail }: {
               <FormField label="National ID"><Input value={form.nationalId ?? ''} onChange={e => set('nationalId', e.target.value)} /></FormField>
             </FormSection>
             <FormSection title="Contact">
-              <FormField label="Phone (09… )"><Input value={form.phone ?? ''} onChange={e => set('phone', e.target.value)} placeholder="0912345678" /></FormField>
-              <FormField label="Email"><Input value={form.email ?? ''} onChange={e => set('email', e.target.value)} /></FormField>
+              <FormField label="Phone (09… )"><Input type="tel" allow="phone" value={form.phone ?? ''} onChange={e => set('phone', e.target.value)} placeholder="0912345678" /></FormField>
+              <FormField label="Email"><Input type="email" value={form.email ?? ''} onChange={e => set('email', e.target.value)} /></FormField>
               <FormField label="Address" full><Input value={form.address ?? ''} onChange={e => set('address', e.target.value)} /></FormField>
               <FormField label="City"><Input value={form.city ?? ''} onChange={e => set('city', e.target.value)} /></FormField>
               <FormField label="Sub-city"><Input value={form.subcity ?? ''} onChange={e => set('subcity', e.target.value)} /></FormField>
@@ -495,7 +495,7 @@ function AddMemberDialog({ ctx, onCreated, onNeedsEmail }: {
             </FormSection>
             <FormSection title="Emergency Contact">
               <FormField label="Name"><Input value={form.emergencyContactName ?? ''} onChange={e => set('emergencyContactName', e.target.value)} /></FormField>
-              <FormField label="Phone"><Input value={form.emergencyContactPhone ?? ''} onChange={e => set('emergencyContactPhone', e.target.value)} /></FormField>
+              <FormField label="Phone"><Input type="tel" allow="phone" value={form.emergencyContactPhone ?? ''} onChange={e => set('emergencyContactPhone', e.target.value)} /></FormField>
             </FormSection>
             <FormSection title="Membership">
               {ctx.isSuperAdmin && (

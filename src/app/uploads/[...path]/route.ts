@@ -11,8 +11,8 @@ import { logSecurityEvent, SecurityEvent } from '@/lib/security-logger';
 import { decryptBuffer, isAuthenticatedFormat, legacyCbcAllowed } from '@/lib/encryption';
 import { detectFileType } from '@/lib/file-validation';
 
-export async function GET(req: NextRequest, { params }: { params: { path: string[] } }) {
-    const filePathParts = params.path;
+export async function GET(req: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
+    const { path: filePathParts } = await params;
     if (!filePathParts || filePathParts.length === 0) {
         return new NextResponse('File not found', { status: 404 });
     }

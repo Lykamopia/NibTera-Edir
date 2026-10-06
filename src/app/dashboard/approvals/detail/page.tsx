@@ -5,10 +5,10 @@ import ApprovalDetailClient from './approval-detail-client';
 export default async function ApprovalDetailPage({
   searchParams,
 }: {
-  searchParams: { id?: string };
+  searchParams: Promise<{ id?: string }>;
 }) {
   const actor = await getActor();
-  const requestId = searchParams.id;
+  const { id: requestId } = await searchParams;
 
   if (!requestId) {
     redirect('/dashboard/approvals');

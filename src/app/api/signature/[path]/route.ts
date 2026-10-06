@@ -9,7 +9,8 @@ import { decryptBuffer, DecryptionError } from '@/lib/encryption';
 import { logSecurityEvent, SecurityEvent } from '@/lib/security-logger';
 import { LogSeverity } from '@/lib/types';
 
-export async function GET(req: NextRequest, { params }: { params: { path: string } }) {
+export async function GET(req: NextRequest, { params: paramsPromise }: { params: Promise<{ path: string }> }) {
+  const params = await paramsPromise;
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
     return new NextResponse('Unauthorized', { status: 401 });

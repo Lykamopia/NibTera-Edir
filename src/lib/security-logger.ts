@@ -224,7 +224,7 @@ async function triggerCriticalAlert(log: LogDetails, context: { ipAddress: strin
 }
 
 export async function logSecurityEvent(log: LogDetails) {
-    const headerList = headers();
+    const headerList = await headers();
     const rawIp = headerList.get('x-forwarded-for') || headerList.get('cf-connecting-ip') || 'unknown';
     const ipAddress = getCleanIp(rawIp);
     const userAgent = headerList.get('user-agent');

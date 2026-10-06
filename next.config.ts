@@ -81,9 +81,6 @@ const nextConfig: NextConfig = {
   typescript: {
     ignoreBuildErrors: true,
   },
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
   experimental: {
     // Cap Server Action request bodies to mitigate memory-exhaustion DoS. Large
     // binary uploads go through the dedicated /api/upload route (10MB limit),
