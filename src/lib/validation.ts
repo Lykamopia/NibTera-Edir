@@ -56,8 +56,27 @@ export const zId = z.string({ invalid_type_error: 'Invalid identifier.' })
 /** Optional identifier: '' / null / undefined → null. */
 export const zOptionalId = z.preprocess(emptyToNull, zId.nullable().optional());
 
+/**
+ * Length-bounded array. ALWAYS use this instead of `z.array(...)` for input.
+ *
+ * zod (SNYK-JS-ZOD-20510278, no fixed version) validates EVERY element before
+ * applying `.max()`, collecting one issue per bad element — a 2MB request of a
+ * million bad items allocates ~300MB. Here the length is checked first and, if
+ * it is over the limit, the element schema never runs.
+ */
+export function zArray<T extends z.ZodTypeAny>(
+  item: T,
+  { max, min = 0, maxMessage = `At most ${max} items are allowed.`, minMessage }: { max: number; min?: number; maxMessage?: string; minMessage?: string },
+) {
+  let inner = z.array(item).max(max, maxMessage);
+  if (min > 0) inner = inner.min(min, minMessage ?? `At least ${min} item${min === 1 ? ' is' : 's are'} required.`);
+  return z
+    .custom<unknown>((v) => !Array.isArray(v) || v.length <= max, { message: maxMessage })
+    .pipe(inner);
+}
+
 /** Bounded list of identifiers (bulk selections). */
-export const zIdList = (max = 1000) => z.array(zId).max(max, `Select at most ${max} items.`);
+export const zIdList = (max = 1000) => zArray(zId, { max, maxMessage: `Select at most ${max} items.` });
 
 type TextOpts = { min?: number; max: number; multiline?: boolean; allowMarkup?: boolean };
 

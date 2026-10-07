@@ -20,7 +20,7 @@ import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
 import { dateWhere, type DateRangeParam } from '@/lib/date-range';
 import { toCsv } from '@/lib/csv';
-import { zId, zOptionalId, zName, zEmail, zEthiopianPhone, zOptionalEmail, zOptionalText, zOptionalPhone, zOptionalUploadPath, zOptionalAccountNumber, zCode, zInt, zSearch, zDateRange, parseArgs } from '@/lib/validation';
+import { zArray, zId, zOptionalId, zName, zEmail, zEthiopianPhone, zOptionalEmail, zOptionalText, zOptionalPhone, zOptionalUploadPath, zOptionalAccountNumber, zCode, zInt, zSearch, zDateRange, parseArgs } from '@/lib/validation';
 
 // ─── Users ───────────────────────────────────────────────────────────────────
 
@@ -162,7 +162,7 @@ export async function bulkInviteUsers(input: { edirId?: string | null; rows: Bul
   try {
     input = z.object({
       edirId: zOptionalId,
-      rows: z.array(z.object({ name: z.unknown().optional(), email: z.unknown().optional(), phone: z.unknown().optional(), role: z.unknown().optional() }).passthrough()).max(500, 'Import is limited to 500 rows at a time.'),
+      rows: zArray(z.object({ name: z.unknown().optional(), email: z.unknown().optional(), phone: z.unknown().optional(), role: z.unknown().optional() }).passthrough(), { max: 500, maxMessage: 'Import is limited to 500 rows at a time.' }),
     }).parse(input) as typeof input;
     const actor = await getActor();
     await assertPermission(actor, 'manage_users');
@@ -604,7 +604,7 @@ const roleSchema = z.object({
   id: zId.optional(),
   name: zName('Role name', 80),
   // Allowlisted again against the permission registry when saved.
-  permissions: z.array(z.string().max(64).regex(/^[a-z0-9_]+$/, 'Invalid permission.')).max(500).default([]),
+  permissions: zArray(z.string().max(64).regex(/^[a-z0-9_]+$/, 'Invalid permission.'), { max: 500 }).default([]),
   // Scope is set on create; 'EDIR' (a specific Edir or a cross-Edir template) or
   // 'PLATFORM' (a platform role). Edir Admins always create EDIR roles.
   scope: z.enum(['EDIR', 'PLATFORM']).default('EDIR'),

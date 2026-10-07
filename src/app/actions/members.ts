@@ -20,7 +20,7 @@ import { checkCanJoinEdir, getMembershipPolicy } from '@/lib/membership-policy';
 import { nextMemberId } from '@/lib/membership-provisioning';
 import { toCsv } from '@/lib/csv';
 import {
-  zId, zOptionalId, zName, zOptionalName, zText, zOptionalText, zOptionalEmail, zOptionalPhone, zPercent,
+  zArray, zId, zOptionalId, zName, zOptionalName, zText, zOptionalText, zOptionalEmail, zOptionalPhone, zPercent,
   zOptionalPastDateString, zOptionalUploadPath, zUploadPath, zFileName, zComment, zSearch, zFilter, zDateRange, zInt, parseArgs,
 } from '@/lib/validation';
 
@@ -1016,7 +1016,7 @@ export async function bulkImportMembers(input: { edirId?: string | null; rows: B
       edirId: zOptionalId,
       // Every cell is coerced to a string, then each row is validated below with
       // the same field rules as createMember.
-      rows: z.array(z.record(z.unknown())).max(500, 'Import is limited to 500 rows at a time.')
+      rows: zArray(z.record(z.unknown()), { max: 500, maxMessage: 'Import is limited to 500 rows at a time.' })
         .transform(rows => rows.map(r => Object.fromEntries(Object.entries(r).map(([k, v]) => [k, v == null ? '' : String(v)])))),
     }).parse(input) as typeof input;
     const actor = await getActor();

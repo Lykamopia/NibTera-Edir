@@ -11,7 +11,7 @@ import '@/lib/approval-modules';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
 import { dateWhere, type DateRangeParam } from '@/lib/date-range';
-import { zId, zOptionalId, zName, zOptionalName, zText, zOptionalText, zMoney, zInt, zComment, zRequiredComment, zSearch, zFilter, zDateRange, zOptionalPastDateString, zUploadPath, parseArgs } from '@/lib/validation';
+import { zArray, zId, zOptionalId, zName, zOptionalName, zText, zOptionalText, zMoney, zInt, zComment, zRequiredComment, zSearch, zFilter, zDateRange, zOptionalPastDateString, zUploadPath, parseArgs } from '@/lib/validation';
 
 /** Tenant-wide emergency KPIs for the summary cards. */
 export async function getEmergencySummary(range?: DateRangeParam) {
@@ -364,7 +364,7 @@ const receiptSchema = z.object({ path: zUploadPath, name: zText('File name', { m
 const disburseSchema = z.object({
   claimId: zId,
   amount: zMoney('Amount'),
-  receipts: z.array(receiptSchema).max(20, 'Attach at most 20 receipts.').optional(),
+  receipts: zArray(receiptSchema, { max: 20, maxMessage: 'Attach at most 20 receipts.' }).optional(),
 });
 
 /** Maker requests disbursement of an approved (ACTIVE) claim (EMERGENCY_DISBURSEMENT). */

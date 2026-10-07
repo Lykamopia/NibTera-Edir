@@ -8,7 +8,7 @@ import { submitForApproval } from '@/lib/approval-engine';
 import { buildEdirSettingsUpdate, DEFAULT_MEMBER_ROLES, type EdirSettingsData } from '@/lib/edir-settings';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
-import { zText, zOptionalText, zMoney, zComment } from '@/lib/validation';
+import { zArray, zText, zOptionalText, zMoney, zComment } from '@/lib/validation';
 
 // ─── Penalty tiers ───────────────────────────────────────────────────────────
 
@@ -34,7 +34,7 @@ const configSchema = z.object({
   // payable (0 = members may pay ahead at any time).
   nextPaymentDelayDays: z.coerce.number().int().min(0).max(28).default(0),
   // Penalties
-  penaltyTiers: z.array(tierSchema).max(20, 'At most 20 penalty tiers.').default([]),
+  penaltyTiers: zArray(tierSchema, { max: 20, maxMessage: 'At most 20 penalty tiers.' }).default([]),
   // Daily penalty accrual (optional)
   dailyPenaltyEnabled: z.boolean().default(false),
   dailyPenaltyType: z.enum(['FIXED', 'PERCENT']).default('FIXED'),
@@ -48,9 +48,9 @@ const configSchema = z.object({
   autoSuspendEnabled: z.boolean(),
   autoTerminateEnabled: z.boolean(),
   autoReminderEnabled: z.boolean(),
-  reminderDaysBefore: z.array(z.coerce.number().int().min(1).max(60)).max(10, 'At most 10 reminder days.').default([1, 3, 7]),
+  reminderDaysBefore: zArray(z.coerce.number().int().min(1).max(60), { max: 10, maxMessage: 'At most 10 reminder days.' }).default([1, 3, 7]),
   // Configurable member roles
-  memberRoles: z.array(zText('Member role', { min: 1, max: 60 })).max(50, 'At most 50 member roles.').default([]),
+  memberRoles: zArray(zText('Member role', { min: 1, max: 60 }), { max: 50, maxMessage: 'At most 50 member roles.' }).default([]),
   // Optional reason captured for the change log
   reason: zComment('Reason', 1000),
 });

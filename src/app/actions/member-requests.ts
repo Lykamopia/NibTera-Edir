@@ -11,7 +11,7 @@ import '@/lib/approval-modules';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
 import { dateWhere, type DateRangeParam } from '@/lib/date-range';
-import { zId, zOptionalId, zText, zOptionalText, zOptionalName, zOptionalPhone, zOptionalPastDateString, zOptionalDateString, zInt, zUploadPath, zFilter, zDateRange } from '@/lib/validation';
+import { zArray, zId, zOptionalId, zText, zOptionalText, zOptionalName, zOptionalPhone, zOptionalPastDateString, zOptionalDateString, zInt, zUploadPath, zFilter, zDateRange } from '@/lib/validation';
 import { resolveOwnMembership } from '@/lib/membership-policy';
 
 const TYPE_LABEL: Record<string, string> = {
@@ -62,7 +62,7 @@ const submitSchema = z.object({
     typeId: zOptionalId,
     priority: z.enum(['low', 'normal', 'high', 'urgent']).optional(),
   }).optional().nullable(),
-  attachments: z.array(zUploadPath).max(10, 'Attach at most 10 files.').optional().default([]),
+  attachments: zArray(zUploadPath, { max: 10, maxMessage: 'Attach at most 10 files.' }).optional().default([]),
 });
 
 /** Member submits a self-service request (relative, emergency, asset, grievance, feedback). */

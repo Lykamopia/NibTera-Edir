@@ -13,7 +13,7 @@ import { generateTempPassword } from '@/lib/secure-random';
 import { issueSetPasswordLink } from '@/lib/set-password-link';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
-import { zId, zOptionalId, zName, zEmail, zEthiopianPhone, zOptionalEmail, zSearch, parseArgs } from '@/lib/validation';
+import { zArray, zId, zOptionalId, zName, zEmail, zEthiopianPhone, zOptionalEmail, zSearch, parseArgs } from '@/lib/validation';
 
 // Association management is a platform capability: full Super-Admins, or a
 // limited platform role granted `manage_associations` (e.g. an "assign Edir
@@ -400,7 +400,7 @@ export async function createPlatformUser(input: z.infer<typeof createUserSchema>
 }
 
 const associateSchema = z.object({
-  userIds: z.array(zId).min(1, 'Select at least one user.').max(500, 'Select at most 500 users.'),
+  userIds: zArray(zId, { min: 1, minMessage: 'Select at least one user.', max: 500, maxMessage: 'Select at most 500 users.' }),
   edirId: zId,
   roleId: zOptionalId,
   activate: z.boolean().default(true),
