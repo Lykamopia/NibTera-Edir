@@ -18,9 +18,10 @@ import { ensureDefaultEdirRoles } from '@/lib/default-edir-roles';
 import { resubmitRequest, submitForApproval } from '@/lib/approval-engine';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
+import { claimUpload } from '@/lib/uploads';
 import { dateWhere, type DateRangeParam } from '@/lib/date-range';
 import { toCsv } from '@/lib/csv';
-import { zArray, zId, zOptionalId, zName, zEmail, zEthiopianPhone, zOptionalEmail, zOptionalText, zOptionalPhone, zOptionalUploadPath, zOptionalAccountNumber, zCode, zInt, zSearch, zDateRange, parseArgs } from '@/lib/validation';
+import { zArray, zId, zOptionalId, zName, zEmail, zEthiopianPhone, zOptionalEmail, zOptionalText, zOptionalName, zOptionalEthiopianPhone, zOptionalUploadPath, zOptionalAccountNumber, zCode, zInt, zSearch, zDateRange, parseArgs } from '@/lib/validation';
 
 // ─── Users ───────────────────────────────────────────────────────────────────
 
@@ -802,9 +803,9 @@ export async function saveEdir(input: SaveEdirInput) {
       accountNumber: zOptionalAccountNumber,
       address: zOptionalText('Address', { max: 300 }),
       branchId: zOptionalId,
-      contactPersonName: zOptionalText('Contact person', { max: 120 }),
+      contactPersonName: zOptionalName('Chairperson name'),
       contactAddress: zOptionalText('Contact address', { max: 300 }),
-      contactMobile: zOptionalPhone,
+      contactMobile: zOptionalEthiopianPhone,
       contactEmail: zOptionalEmail,
       agreementDocUrl: zOptionalUploadPath,
     }).parse(input) as SaveEdirInput;
@@ -828,6 +829,10 @@ export async function saveEdir(input: SaveEdirInput) {
       contactEmail: norm(input.contactEmail),
       agreementDocUrl: norm(input.agreementDocUrl),
     };
+    // A new agreement file must be the actor's own upload; the Edir's current
+    // one may be kept as-is.
+    const existingDoc = input.id ? (await prisma.edir.findUnique({ where: { id: input.id }, select: { agreementDocUrl: true } }))?.agreementDocUrl : null;
+    await claimUpload(actor.id, profile.agreementDocUrl, { kinds: ['documents'], keep: [existingDoc] });
 
     if (input.id) {
       // A RETURNED registration being revised by its original maker resubmits the

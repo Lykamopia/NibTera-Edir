@@ -1012,3 +1012,20 @@ model SecurityLog {
   @@index([event])
   @@index([timestamp])
 }
+
+// Every file accepted by /api/upload. Records who uploaded it and what it
+// really is (detected from its bytes), so Server Actions can refuse to attach a
+// path the actor did not upload and never trust a client-supplied file name.
+model Upload {
+  id           String   @id @default(cuid())
+  path         String   @unique // "/uploads/<kind>/<stored name>"
+  kind         String
+  ownerId      String?
+  originalName String // sanitized display name, extension matches the real content
+  mimeType     String
+  size         Int
+  encrypted    Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  @@index([ownerId])
+}

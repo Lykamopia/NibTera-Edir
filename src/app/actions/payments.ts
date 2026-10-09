@@ -10,6 +10,7 @@ import { submitForApproval } from '@/lib/approval-engine';
 import '@/lib/approval-modules';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
+import { claimUpload } from '@/lib/uploads';
 import { dateWhere, type DateRangeParam } from '@/lib/date-range';
 import { zId, zMoney, zInt, zText, zOptionalUploadPath, zComment, zSearch, zFilter, zDateRange, zOptionalDateString, parseArgs } from '@/lib/validation';
 import { paymentLogStatusLabel } from '@/lib/payment-log-status';
@@ -471,6 +472,7 @@ export async function recordManualPayment(memberId: string, breakdownInput: z.in
     const breakdown = breakdownSchema.parse(breakdownInput);
     const total = Object.values(breakdown).reduce((a, b) => a + b, 0);
     if (total <= 0) return { success: false as const, error: 'Total must be greater than zero.' };
+    await claimUpload(actor.id, receiptUrl, { kinds: ['documents'] });
 
     // ── One pending manual payment at a time ─────────────────────────────────
     // A member's recorded payment must be settled or rejected by the checker
@@ -598,6 +600,7 @@ export async function requestMemberReinstatement(
     await assertSameTenant(actor, member.edirId);
     if (member.status === 'ACTIVE') return { success: false as const, error: 'This member is already active.' };
     if (!receiptUrl) return { success: false as const, error: 'Attach the payment receipt before submitting the reinstatement.' };
+    await claimUpload(actor.id, receiptUrl, { kinds: ['documents'] });
     const edirId = member.edirId;
 
     const breakdown = breakdownSchema.parse(breakdownInput);

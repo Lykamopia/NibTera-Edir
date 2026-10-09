@@ -8,7 +8,8 @@ import { authOptions } from '@/lib/auth';
 import prisma from '@/lib/prisma';
 import { logSecurityEvent, SecurityEvent } from '@/lib/security-logger';
 import { LogSeverity } from '@/lib/types';
-import { encryptBuffer } from '@/lib/encryption';
+import { encryptBuffer, encryptFile } from '@/lib/encryption';
+import { ENCRYPTED_UPLOAD_KINDS, recordUpload, trustedDisplayName } from '@/lib/uploads';
 import { CsrfValidationError, enforceRouteCsrf } from '@/lib/csrf';
 import { randomUUID } from 'crypto';
 import {
@@ -126,9 +127,14 @@ export async function POST(req: NextRequest) {
   }
   // --- End File Validation ---
 
-  // Advanced encryption for signatures to protect from direct file access
+  // At-rest encryption (AES-256-GCM). Signatures keep their own key; member /
+  // DMS documents and rules attachments use DATA_ENCRYPTION_KEY. The serving
+  // route (src/app/uploads/[...path]) decrypts after its authorization check.
+  const encrypted = type === 'signatures' || ENCRYPTED_UPLOAD_KINDS.includes(type);
   if (type === 'signatures') {
     buffer = encryptBuffer(buffer);
+  } else if (encrypted) {
+    buffer = encryptFile(buffer);
   }
 
   // Define the upload directory path at the root level
@@ -163,6 +169,16 @@ export async function POST(req: NextRequest) {
   
   // Return the public path relative to the root
   const publicPath = `/uploads/${type}/${uniqueFilename}`;
+
+  // Register the upload: Server Actions only accept paths the same user
+  // uploaded, and take the file's name/type from here — never from the client.
+  try {
+    await recordUpload({ path: publicPath, kind: type, ownerId: sessionUser.id, originalName: file.name, type: validation.type, size: file.size, encrypted });
+  } catch (error) {
+    console.error('Error recording upload:', error);
+    await rm(path, { force: true }).catch(() => {});
+    return NextResponse.json({ success: false, error: 'Failed to save file' }, { status: 500 });
+  }
   
   await logSecurityEvent({
     event: SecurityEvent.FILE_UPLOAD_SUCCESS,
@@ -175,7 +191,7 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({
     success: true,
     path: publicPath,
-    name: file.name,
+    name: trustedDisplayName(file.name, validation.type),
     size: file.size,
     // Report the VERIFIED type, not the client's claim.
     type: validation.type.mime

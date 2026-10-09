@@ -8,6 +8,7 @@ import '@/lib/approval-modules';
 import { writeAudit } from '@/lib/audit';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
+import { claimUpload } from '@/lib/uploads';
 import { zId, zOptionalId, zUploadPath, zOptionalText } from '@/lib/validation';
 
 // Module-local only — a "use server" file may export *only* async functions, so
@@ -52,6 +53,8 @@ export async function submitRelativeDocument(relativeId: string, input: z.infer<
     if (!isOwner) await assertPermission(actor, [...MAKER_PERMS]);
     await assertSameTenant(actor, rel.member.edirId);
     const data = uploadSchema.parse(input);
+    // Must be the actor's own upload; the stored name/type come from the server.
+    const file = (await claimUpload(actor.id, data.fileUrl, { kinds: ['documents'] }))!;
 
     let version = 1;
     if (data.supersedesId) {
@@ -65,9 +68,9 @@ export async function submitRelativeDocument(relativeId: string, input: z.infer<
         relativeId,
         category: data.category || 'General',
         documentName: data.documentName || null,
-        fileUrl: data.fileUrl,
-        fileName: data.fileName || null,
-        fileType: fileTypeOf(data.fileName),
+        fileUrl: file.path,
+        fileName: file.name,
+        fileType: file.fileType,
         remarks: data.remarks || null,
         status: 'PENDING',
         pendingAction: 'upload',

@@ -10,6 +10,7 @@ import { submitForApproval } from '@/lib/approval-engine';
 import '@/lib/approval-modules';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
+import { claimUploads } from '@/lib/uploads';
 import { dateWhere, type DateRangeParam } from '@/lib/date-range';
 import { zArray, zId, zOptionalId, zName, zOptionalName, zText, zOptionalText, zMoney, zInt, zComment, zRequiredComment, zSearch, zFilter, zDateRange, zOptionalPastDateString, zUploadPath, parseArgs } from '@/lib/validation';
 
@@ -385,9 +386,11 @@ export async function requestDisbursement(input: z.infer<typeof disburseSchema>)
 
     // Store any uploaded receipts / supporting documents on the claim for evidence.
     if (data.receipts?.length) {
+      // Each receipt must be the actor's own upload; names come from the server.
+      const files = await claimUploads(actor.id, data.receipts.map(r => r.path), { kinds: ['documents'] });
       await prisma.emergencyClaim.update({
         where: { id: claim.id },
-        data: { disbursementReceipts: data.receipts as unknown as Prisma.InputJsonValue },
+        data: { disbursementReceipts: files.map(f => ({ path: f.path, name: f.name })) as unknown as Prisma.InputJsonValue },
       });
     }
 

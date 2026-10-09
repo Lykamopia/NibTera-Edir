@@ -14,6 +14,8 @@ import { issueSetPasswordLink } from '@/lib/set-password-link';
 import bcrypt from 'bcrypt';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
+import { claimUpload } from '@/lib/uploads';
+import { encryptField, decryptField } from '@/lib/encryption';
 import { dateWhere, type DateRangeParam } from '@/lib/date-range';
 import { computeContributionArrears } from '@/lib/data';
 import { checkCanJoinEdir, getMembershipPolicy } from '@/lib/membership-policy';
@@ -197,7 +199,7 @@ export async function getMemberProfile(id: string) {
     member: {
       id: member.id, memberId: member.memberId, name: member.name, role: member.role, status: member.status,
       photoUrl: member.photoUrl, occupation: member.occupation, gender: member.gender,
-      dateOfBirth: member.dateOfBirth, nationalId: member.nationalId,
+      dateOfBirth: member.dateOfBirth, nationalId: decryptField('Member.nationalId', member.nationalId),
       phone: member.phone, email: member.email, address: member.address, city: member.city, subcity: member.subcity, woreda: member.woreda,
       emergencyContactName: member.emergencyContactName, emergencyContactPhone: member.emergencyContactPhone,
       joinDate: member.joinDate,
@@ -387,8 +389,9 @@ export async function addRelativeDocument(relativeId: string, input: z.infer<typ
     await assertSameTenant(actor, rel.member.edirId);
     const edirId = rel.member.edirId;
     const data = documentSchema.parse(input);
+    const file = (await claimUpload(actor.id, data.fileUrl, { kinds: ['documents'] }))!;
     const doc = await prisma.relativeDocument.create({
-      data: { relativeId, fileUrl: data.fileUrl, fileName: data.fileName || null, status: 'PENDING' },
+      data: { relativeId, fileUrl: file.path, fileName: file.name, status: 'PENDING' },
     });
     await writeAudit({ edirId, userId: actor.id, action: 'RELATIVE_DOCUMENT_UPLOADED', targetType: 'RelativeDocument', targetId: doc.id, details: `Document for ${rel.name}.` });
     revalidatePath('/dashboard/members');
@@ -455,8 +458,9 @@ export async function addMemberDocument(memberId: string, input: z.infer<typeof 
     await assertSameTenant(actor, member.edirId);
     const edirId = member.edirId;
     const data = memberDocSchema.parse(input);
+    const file = (await claimUpload(actor.id, data.fileUrl, { kinds: ['documents'] }))!;
     const doc = await prisma.memberDocument.create({
-      data: { memberId, category: data.category, fileUrl: data.fileUrl, fileName: data.fileName || null, status: 'PENDING' },
+      data: { memberId, category: data.category, fileUrl: file.path, fileName: file.name, status: 'PENDING' },
     });
     await writeAudit({ edirId, userId: actor.id, action: 'MEMBER_DOCUMENT_UPLOADED', targetType: 'MemberDocument', targetId: doc.id, details: `${data.category} for ${member.name}.` });
     revalidatePath(`/dashboard/members/${memberId}`);
@@ -519,6 +523,7 @@ export async function createMember(input: MemberInput) {
       return { success: false as const, error: 'Select an Edir for the new member.' };
     }
     const edirId = await resolveEdirId(actor, data.edirId);
+    await claimUpload(actor.id, data.photoUrl, { kinds: ['profile'] });
 
     if (data.phone && !isValidEthiopianPhone(data.phone)) {
       return { success: false as const, error: 'Enter a valid Ethiopian phone number.' };
@@ -606,7 +611,7 @@ export async function createMember(input: MemberInput) {
           photoUrl: data.photoUrl || null,
           dateOfBirth: data.dateOfBirth ? new Date(data.dateOfBirth) : null,
           gender: data.gender || null,
-          nationalId: data.nationalId || null,
+          nationalId: encryptField('Member.nationalId', data.nationalId),
           phone,
           email,
           address: data.address || null,
@@ -685,6 +690,7 @@ export async function updateMember(id: string, input: MemberInput) {
     if (!existing) return { success: false as const, error: 'Member not found.' };
     await assertSameTenant(actor, existing.edirId);
     const data = memberSchema.parse(input);
+    await claimUpload(actor.id, data.photoUrl, { kinds: ['profile'], keep: [existing.photoUrl] });
 
     const phone = data.phone ? normalizeEthiopianPhone(data.phone) : null;
     const email = data.email ? data.email.toLowerCase().trim() : null;
@@ -728,7 +734,7 @@ export async function updateMember(id: string, input: MemberInput) {
           photoUrl: data.photoUrl || null,
           dateOfBirth: data.dateOfBirth ? new Date(data.dateOfBirth) : null,
           gender: data.gender || null,
-          nationalId: data.nationalId || null,
+          nationalId: encryptField('Member.nationalId', data.nationalId),
           phone,
           email,
           address: data.address || null,
@@ -1129,7 +1135,7 @@ export async function bulkImportMembers(input: { edirId?: string | null; rows: B
             data: {
               edirId, memberId,
               name: n.name, phone: n.phone, email: n.email,
-              gender: n.gender, dateOfBirth: n.dateOfBirth, nationalId: n.nationalId, occupation: n.occupation,
+              gender: n.gender, dateOfBirth: n.dateOfBirth, nationalId: encryptField('Member.nationalId', n.nationalId), occupation: n.occupation,
               address: n.address, city: n.city, subcity: n.subcity, woreda: n.woreda,
               emergencyContactName: n.emergencyContactName,
               emergencyContactPhone: n.emergencyContactPhone ? normalizeEthiopianPhone(n.emergencyContactPhone) : null,

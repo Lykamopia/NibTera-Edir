@@ -44,8 +44,8 @@ export async function issueSetPasswordLink(opts: {
   const expires = new Date(Date.now() + minutes * 60 * 1000);
   await prisma.passwordResetToken.upsert({
     where: { email },
-    update: { token, expires, createdAt: new Date() },
-    create: { email, token, expires },
+    update: { token: hashResetToken(token), expires, createdAt: new Date() },
+    create: { email, token: hashResetToken(token), expires },
   });
 
   try {
@@ -58,4 +58,14 @@ export async function issueSetPasswordLink(opts: {
   } catch {
     return { sent: false, reason: 'SEND_FAILED' };
   }
+}
+
+/**
+ * Set-password / reset tokens are stored only as a SHA-256 hash: the raw token
+ * exists solely in the emailed link, so a database leak cannot be used to take
+ * over accounts. A fast hash is appropriate — the token is 256 random bits,
+ * not a guessable secret.
+ */
+export function hashResetToken(rawToken: string): string {
+  return crypto.createHash('sha256').update(rawToken, 'utf8').digest('hex');
 }

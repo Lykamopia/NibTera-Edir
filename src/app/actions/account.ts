@@ -11,6 +11,7 @@ import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
 import { pickPrimaryMembership } from '@/lib/membership-policy';
 import { zName, zOptionalText } from '@/lib/validation';
+import { decryptField } from '@/lib/encryption';
 
 function safeMeta(s: string | null): Record<string, any> {
   if (!s) return {};
@@ -191,7 +192,7 @@ export async function getMyPortal() {
     account,
     member: {
       id: m.id, memberId: m.memberId, name: m.name, role: m.role, status: m.status, photoUrl: m.photoUrl,
-      occupation: m.occupation, gender: m.gender, dateOfBirth: m.dateOfBirth, nationalId: m.nationalId,
+      occupation: m.occupation, gender: m.gender, dateOfBirth: m.dateOfBirth, nationalId: decryptField('Member.nationalId', m.nationalId),
       phone: m.phone, email: m.email, address: m.address, city: m.city, subcity: m.subcity, woreda: m.woreda,
       emergencyContactName: m.emergencyContactName, emergencyContactPhone: m.emergencyContactPhone, joinDate: m.joinDate,
     },

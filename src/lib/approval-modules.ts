@@ -15,6 +15,7 @@ import bcrypt from 'bcrypt';
 import crypto from 'crypto';
 import { generateTempPassword } from '@/lib/secure-random';
 import { sendVerificationEmail } from '@/lib/email';
+import { hashResetToken } from '@/lib/set-password-link';
 import { writeAudit } from '@/lib/audit';
 
 let registered = false;
@@ -568,8 +569,8 @@ export function ensureApprovalModules() {
           const token = crypto.randomBytes(32).toString('hex');
           await tx.passwordResetToken.upsert({
             where: { email },
-            update: { token, expires: new Date(Date.now() + 48 * 60 * 60 * 1000) },
-            create: { email, token, expires: new Date(Date.now() + 48 * 60 * 60 * 1000) },
+            update: { token: hashResetToken(token), expires: new Date(Date.now() + 48 * 60 * 60 * 1000) },
+            create: { email, token: hashResetToken(token), expires: new Date(Date.now() + 48 * 60 * 60 * 1000) },
           });
           // Best-effort "account created, set your password" email (non-blocking).
           sendVerificationEmail({ to: email, name: payload.admin.name, token })

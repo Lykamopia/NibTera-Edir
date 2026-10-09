@@ -33,7 +33,9 @@ import { getBranches } from '@/app/actions/branches';
 import { getEdirs, getEdirAdminCapabilities, revokeEdir, deleteEdir, saveEdir } from '@/app/actions/admin';
 import { useConfirm } from '@/components/ui/confirm-provider';
 import { type Actor } from '@/lib/tenant-scope';
-import { isValidEthiopianPhone } from '@/lib/utils';
+import {
+  EDIR_REGISTRATION_STEP_FIELDS, edirRegistrationErrors, type EdirRegistrationField,
+} from '@/lib/edir-registration-schema';
 import {
   Building2, Check, Clock, X, RotateCcw, Upload, FileText, ChevronLeft, ChevronRight,
   Users, UserCircle, ListChecks, Ban, Trash2, Pencil, Loader2, Eye,
@@ -81,8 +83,6 @@ interface EdirItem {
 }
 
 type EdirCaps = { canCreate: boolean; canEdit: boolean; canRevoke: boolean; canDelete: boolean; canApprove: boolean };
-
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /** Human label for a stored upload path (strips the random-token prefix). */
 const fileLabel = (url: string) => {
@@ -265,6 +265,44 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
+  // ── Step validation ─────────────────────────────────────────────────────────
+  // Errors are derived live from the same schema the server enforces. A field's
+  // error is shown once it has been blurred, or once the user tried to leave its
+  // step — so typing never flashes errors before the user is done.
+  const [touched, setTouched] = useState<Partial<Record<EdirRegistrationField, boolean>>>({});
+  const [attemptedSteps, setAttemptedSteps] = useState<Set<number>>(new Set());
+  const stepFields = (idx: number) => EDIR_REGISTRATION_STEP_FIELDS[FORM_STEPS[idx].id] ?? [];
+  const stepErrors = (idx: number) => edirRegistrationErrors(formData, stepFields(idx));
+  const isStepValid = (idx: number) => Object.keys(stepErrors(idx)).length === 0;
+  const allErrors = edirRegistrationErrors(formData, FORM_STEPS.flatMap((_, i) => stepFields(i)));
+  const fieldError = (f: EdirRegistrationField): string | undefined => {
+    const owner = FORM_STEPS.findIndex(s => (EDIR_REGISTRATION_STEP_FIELDS[s.id] ?? []).includes(f));
+    return touched[f] || attemptedSteps.has(owner) ? allErrors[f] : undefined;
+  };
+  const markTouched = (e: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    const name = e.target.name as EdirRegistrationField;
+    if (name) setTouched(prev => (prev[name] ? prev : { ...prev, [name]: true }));
+  };
+  /** Props wiring an input to its validation state. */
+  const v = (f: EdirRegistrationField) => ({ onBlur: markTouched, 'aria-invalid': fieldError(f) ? true : undefined, 'aria-describedby': fieldError(f) ? `${f}-error` : undefined });
+
+  /** Move to `target`, stopping at the first earlier step that is still invalid. */
+  const ensureStepsValid = (upTo: number): boolean => {
+    for (let i = 0; i < upTo; i++) {
+      if (!isStepValid(i)) {
+        setAttemptedSteps(prev => new Set(prev).add(i));
+        setCurrentStep(i);
+        toast.error(Object.values(stepErrors(i))[0] ?? `Complete "${FORM_STEPS[i].label}" first.`);
+        return false;
+      }
+    }
+    return true;
+  };
+  const goToStep = (target: number) => {
+    // Going back is always allowed; going forward requires every step before it.
+    if (target <= currentStep || ensureStepsValid(target)) setCurrentStep(target);
+  };
+
   const [agreementUploading, setAgreementUploading] = useState(false);
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -281,32 +319,8 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
   };
 
   const handleSubmit = async () => {
-    if (!formData.name.trim()) {
-      toast.error('Edir name is required');
-      setCurrentStep(0);
-      return;
-    }
-    if (!formData.branchId) {
-      toast.error('Please select a branch');
-      setCurrentStep(1);
-      return;
-    }
-    const adminStep = FORM_STEPS.findIndex(s => s.id === 'admin');
-    if (!formData.adminName.trim()) {
-      toast.error('Managing administrator name is required');
-      setCurrentStep(adminStep);
-      return;
-    }
-    if (!EMAIL_RE.test(formData.adminEmail.trim())) {
-      toast.error('Enter a valid email for the managing administrator');
-      setCurrentStep(adminStep);
-      return;
-    }
-    if (!isValidEthiopianPhone(formData.adminPhone)) {
-      toast.error('Enter a valid Ethiopian phone for the managing administrator');
-      setCurrentStep(adminStep);
-      return;
-    }
+    // Re-check every step; jumps back to the first one with a problem.
+    if (!ensureStepsValid(FORM_STEPS.length)) return;
     try {
       setSubmitting(true);
       const result = await submitEdirRegistration(formData);
@@ -319,6 +333,8 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
           adminName: '', adminEmail: '', adminPhone: '',
         });
         setCurrentStep(0);
+        setTouched({});
+        setAttemptedSteps(new Set());
         await loadRegistrations();
         setActiveTab('registrations');
       } else {
@@ -332,8 +348,7 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
   };
 
   const selectedBranch = branches.find(b => b.id === formData.branchId);
-  const canSubmit = formData.name.trim() && formData.branchId && formData.adminName.trim()
-    && EMAIL_RE.test(formData.adminEmail.trim()) && isValidEthiopianPhone(formData.adminPhone);
+  const canSubmit = Object.keys(allErrors).length === 0;
   const isLastStep = currentStep === FORM_STEPS.length - 1;
 
   const totalMembers = edirs.reduce((sum, e) => sum + e.members, 0);
@@ -459,15 +474,22 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
               {/* Stepper */}
               <div className="flex flex-wrap gap-1.5">
                 {FORM_STEPS.map((step, idx) => {
-                  const state = currentStep === idx ? 'current' : currentStep > idx ? 'done' : 'todo';
+                  // A step is only "done" (green) when it actually passes validation.
+                  const valid = isStepValid(idx);
+                  const state = currentStep === idx ? 'current'
+                    : !valid && (currentStep > idx || attemptedSteps.has(idx)) ? 'error'
+                    : currentStep > idx ? 'done' : 'todo';
                   return (
                     <button
                       key={step.id}
-                      onClick={() => setCurrentStep(idx)}
+                      type="button"
+                      onClick={() => goToStep(idx)}
+                      aria-current={state === 'current' ? 'step' : undefined}
                       className={[
                         'flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-colors',
                         state === 'current' && 'bg-primary text-primary-foreground',
                         state === 'done' && 'bg-success/15 text-success hover:bg-success/25',
+                        state === 'error' && 'bg-destructive/10 text-destructive hover:bg-destructive/15',
                         state === 'todo' && 'bg-muted text-muted-foreground hover:bg-muted/70',
                       ].filter(Boolean).join(' ')}
                     >
@@ -475,9 +497,10 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
                         'flex h-4 w-4 items-center justify-center rounded-full text-[10px]',
                         state === 'current' && 'bg-primary-foreground/20',
                         state === 'done' && 'bg-success/20',
+                        state === 'error' && 'bg-destructive/15',
                         state === 'todo' && 'bg-foreground/10',
                       ].filter(Boolean).join(' ')}>
-                        {state === 'done' ? <Check className="h-2.5 w-2.5" /> : idx + 1}
+                        {state === 'done' ? <Check className="h-2.5 w-2.5" /> : state === 'error' ? '!' : idx + 1}
                       </span>
                       <span className="hidden sm:inline">{step.label}</span>
                     </button>
@@ -491,15 +514,18 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
                   <div className="space-y-4">
                     <div className="space-y-1.5">
                       <Label htmlFor="name">Edir Name <span className="text-destructive">*</span></Label>
-                      <Input id="name" name="name" value={formData.name} onChange={handleInputChange} placeholder="e.g. Addis Ababa Community Edir" />
+                      <Input id="name" name="name" maxLength={160} value={formData.name} onChange={handleInputChange} {...v('name')} placeholder="e.g. Addis Ababa Community Edir" />
+                      <FieldError id="name" message={fieldError('name')} />
                     </div>
                     <div className="space-y-1.5">
                       <Label htmlFor="description">Description</Label>
-                      <Textarea id="description" name="description" value={formData.description} onChange={handleInputChange} placeholder="Brief overview of the Edir" rows={3} />
+                      <Textarea id="description" name="description" maxLength={2000} value={formData.description} onChange={handleInputChange} {...v('description')} placeholder="Brief overview of the Edir" rows={3} />
+                      <FieldError id="description" message={fieldError('description')} />
                     </div>
                     <div className="space-y-1.5">
                       <Label htmlFor="accountNumber">Account Number</Label>
-                      <Input id="accountNumber" name="accountNumber" allow="digits" minLength={6} maxLength={20} value={formData.accountNumber} onChange={handleInputChange} placeholder="Bank account number" />
+                      <Input id="accountNumber" name="accountNumber" allow="digits" minLength={6} maxLength={20} value={formData.accountNumber} onChange={handleInputChange} {...v('accountNumber')} placeholder="Bank account number (6–20 digits)" />
+                      <FieldError id="accountNumber" message={fieldError('accountNumber')} />
                     </div>
                   </div>
                 )}
@@ -525,6 +551,7 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
                           ))}
                         </SelectContent>
                       </Select>
+                      <FieldError id="branchId" message={fieldError('branchId')} />
                     </div>
                     {selectedBranch && (
                       <div className="rounded-md border border-border bg-background px-3 py-2 text-sm">
@@ -545,16 +572,19 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
                     <p className="text-sm text-muted-foreground">Primary leadership contact for this Edir.</p>
                     <div className="space-y-1.5">
                       <Label htmlFor="contactPersonName">Chairperson / Contact Person Name <span className="text-destructive">*</span></Label>
-                      <Input id="contactPersonName" name="contactPersonName" value={formData.contactPersonName} onChange={handleInputChange} placeholder="Full name" />
+                      <Input id="contactPersonName" name="contactPersonName" maxLength={120} value={formData.contactPersonName} onChange={handleInputChange} {...v('contactPersonName')} placeholder="Full name" />
+                      <FieldError id="contactPersonName" message={fieldError('contactPersonName')} />
                     </div>
                     <div className="grid gap-4 sm:grid-cols-2">
                       <div className="space-y-1.5">
                         <Label htmlFor="contactMobile">Mobile Number <span className="text-destructive">*</span></Label>
-                        <Input id="contactMobile" name="contactMobile" type="tel" allow="phone" value={formData.contactMobile} onChange={handleInputChange} placeholder="+251 9xx xxx xxx" />
+                        <Input id="contactMobile" name="contactMobile" type="tel" allow="phone" maxLength={16} value={formData.contactMobile} onChange={handleInputChange} {...v('contactMobile')} placeholder="0912345678 or +251912345678" />
+                        <FieldError id="contactMobile" message={fieldError('contactMobile')} />
                       </div>
                       <div className="space-y-1.5">
                         <Label htmlFor="contactEmail">Email Address <span className="text-destructive">*</span></Label>
-                        <Input id="contactEmail" name="contactEmail" type="email" value={formData.contactEmail} onChange={handleInputChange} placeholder="chairperson@example.com" />
+                        <Input id="contactEmail" name="contactEmail" type="email" value={formData.contactEmail} onChange={handleInputChange} {...v('contactEmail')} placeholder="chairperson@example.com" />
+                        <FieldError id="contactEmail" message={fieldError('contactEmail')} />
                       </div>
                     </div>
                   </div>
@@ -565,11 +595,13 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
                   <div className="space-y-4">
                     <div className="space-y-1.5">
                       <Label htmlFor="address">Edir Address / Location <span className="text-destructive">*</span></Label>
-                      <Textarea id="address" name="address" value={formData.address} onChange={handleInputChange} placeholder="Street, building, neighborhood" rows={2} />
+                      <Textarea id="address" name="address" maxLength={300} value={formData.address} onChange={handleInputChange} {...v('address')} placeholder="Street, building, neighborhood" rows={2} />
+                      <FieldError id="address" message={fieldError('address')} />
                     </div>
                     <div className="space-y-1.5">
                       <Label htmlFor="contactAddress">Chairperson Contact Address</Label>
-                      <Textarea id="contactAddress" name="contactAddress" value={formData.contactAddress} onChange={handleInputChange} placeholder="Street, building, neighborhood" rows={2} />
+                      <Textarea id="contactAddress" name="contactAddress" maxLength={300} value={formData.contactAddress} onChange={handleInputChange} {...v('contactAddress')} placeholder="Street, building, neighborhood" rows={2} />
+                      <FieldError id="contactAddress" message={fieldError('contactAddress')} />
                     </div>
                   </div>
                 )}
@@ -619,16 +651,19 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
                     </div>
                     <div className="space-y-1.5">
                       <Label htmlFor="adminName">Full Name <span className="text-destructive">*</span></Label>
-                      <Input id="adminName" name="adminName" value={formData.adminName} onChange={handleInputChange} placeholder="Full name" />
+                      <Input id="adminName" name="adminName" maxLength={120} value={formData.adminName} onChange={handleInputChange} {...v('adminName')} placeholder="Full name" />
+                      <FieldError id="adminName" message={fieldError('adminName')} />
                     </div>
                     <div className="grid gap-4 sm:grid-cols-2">
                       <div className="space-y-1.5">
                         <Label htmlFor="adminEmail">Email Address <span className="text-destructive">*</span></Label>
-                        <Input id="adminEmail" name="adminEmail" type="email" value={formData.adminEmail} onChange={handleInputChange} placeholder="admin@example.com" />
+                        <Input id="adminEmail" name="adminEmail" type="email" value={formData.adminEmail} onChange={handleInputChange} {...v('adminEmail')} placeholder="admin@example.com" />
+                        <FieldError id="adminEmail" message={fieldError('adminEmail')} />
                       </div>
                       <div className="space-y-1.5">
                         <Label htmlFor="adminPhone">Phone <span className="text-destructive">*</span></Label>
-                        <Input id="adminPhone" name="adminPhone" type="tel" allow="phone" value={formData.adminPhone} onChange={handleInputChange} placeholder="0912345678" />
+                        <Input id="adminPhone" name="adminPhone" type="tel" allow="phone" maxLength={16} value={formData.adminPhone} onChange={handleInputChange} {...v('adminPhone')} placeholder="0912345678" />
+                        <FieldError id="adminPhone" message={fieldError('adminPhone')} />
                       </div>
                     </div>
                   </div>
@@ -686,7 +721,7 @@ export default function RegistrationClient({ actor }: { actor: Actor }) {
                     {submitting ? 'Submitting…' : <>Submit Registration <Check className="h-4 w-4" /></>}
                   </Button>
                 ) : (
-                  <Button onClick={() => setCurrentStep(s => Math.min(FORM_STEPS.length - 1, s + 1))} className="gap-1">
+                  <Button onClick={() => goToStep(Math.min(FORM_STEPS.length - 1, currentStep + 1))} className="gap-1">
                     Next <ChevronRight className="h-4 w-4" />
                   </Button>
                 )}
@@ -884,6 +919,11 @@ function EditEdirDialog({ edir, branches, onClose, onDone }: { edir: EdirItem; b
       </DialogContent>
     </Dialog>
   );
+}
+
+function FieldError({ id, message }: { id: string; message?: string }) {
+  if (!message) return null;
+  return <p id={`${id}-error`} role="alert" className="text-xs text-destructive">{message}</p>;
 }
 
 function ReviewSection({ title, rows }: { title: string; rows: [string, string][] }) {

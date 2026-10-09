@@ -12,7 +12,7 @@ import { pagePermissions } from '@/lib/permissions';
 import { IMPLEMENTED_PAGES } from '@/lib/nav';
 import { normalizeNibEmail } from '@/lib/utils';
 import { sendPasswordChangedNotificationEmail } from '@/lib/email';
-import { issueSetPasswordLink } from '@/lib/set-password-link';
+import { issueSetPasswordLink, hashResetToken } from '@/lib/set-password-link';
 import { validatePassword } from '@/lib/password-policy';
 import { getCurrentSessionId, revokeAllUserSessions } from '@/lib/sessions';
 import { enforceServerActionCsrf } from '@/lib/csrf';
@@ -134,7 +134,7 @@ export async function verifyPasswordResetToken(token: string) {
         return { valid: false, error: "Invalid or expired token" };
     }
     const resetToken = await prisma.passwordResetToken.findUnique({
-        where: { token }
+        where: { token: hashResetToken(token) } // only the hash is stored
     });
 
     if (!resetToken) {
@@ -200,7 +200,7 @@ export async function setPassword(token: string, newPassword: string) {
     // end every existing session on every device (and bump tokenVersion).
     await revokeAllUserSessions(user.id, 'password_reset');
 
-    await prisma.passwordResetToken.delete({ where: { token } });
+    await prisma.passwordResetToken.delete({ where: { token: hashResetToken(token) } });
 
     await logSecurityEvent({
         event: SecurityEvent.PASSWORD_CHANGE_SUCCESS,

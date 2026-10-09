@@ -8,7 +8,9 @@ import { writeAudit } from '@/lib/audit';
 import { isValidEthiopianPhone, normalizeEthiopianPhone } from '@/lib/utils';
 import { failure } from '@/lib/action-result';
 import { z } from 'zod';
-import { zId, zName, zEmail, zEthiopianPhone, zOptionalText, zOptionalPhone, zOptionalEmail, zOptionalUploadPath, zOptionalAccountNumber, zInt, parseArgs } from '@/lib/validation';
+import { zId, zInt, parseArgs } from '@/lib/validation';
+import { edirRegistrationSchema } from '@/lib/edir-registration-schema';
+import { claimUpload } from '@/lib/uploads';
 
 export interface EdirRegistrationInput {
   name: string;
@@ -31,21 +33,8 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export async function submitEdirRegistration(input: EdirRegistrationInput) {
   try {
-    input = z.object({
-      name: zName('Edir name', 160),
-      description: zOptionalText('Description', { max: 2000, multiline: true }),
-      address: zOptionalText('Address', { max: 300 }),
-      accountNumber: zOptionalAccountNumber.transform(v => v ?? undefined),
-      branchId: zId,
-      contactPersonName: zOptionalText('Contact person', { max: 120 }),
-      contactAddress: zOptionalText('Contact address', { max: 300 }),
-      contactMobile: zOptionalPhone,
-      contactEmail: zOptionalEmail,
-      agreementDocUrl: zOptionalUploadPath,
-      adminName: zName('Managing administrator name'),
-      adminEmail: zEmail,
-      adminPhone: zEthiopianPhone,
-    }).parse(input) as EdirRegistrationInput;
+    // Same rules the wizard enforces step by step (src/lib/edir-registration-schema.ts).
+    input = edirRegistrationSchema.parse(input) as unknown as EdirRegistrationInput;
     const actor = await getActor();
     await assertPermission(actor, ['register_edir', 'create_edir', 'manage_edirs', 'super_admin']);
 
@@ -84,6 +73,9 @@ export async function submitEdirRegistration(input: EdirRegistrationInput) {
       return { success: false as const, error: 'You can only register Edirs in branches within your district.' };
     }
 
+    // The agreement file must be one this user uploaded.
+    await claimUpload(actor.id, input.agreementDocUrl, { kinds: ['documents'] });
+
     // Create Edir with PENDING status
     const edir = await prisma.edir.create({
       data: {
@@ -94,7 +86,7 @@ export async function submitEdirRegistration(input: EdirRegistrationInput) {
         accountNumber: input.accountNumber ?? null,
         contactPersonName: input.contactPersonName ?? null,
         contactAddress: input.contactAddress ?? null,
-        contactMobile: input.contactMobile ?? null,
+        contactMobile: input.contactMobile ? normalizeEthiopianPhone(input.contactMobile) : null,
         contactEmail: input.contactEmail ?? null,
         agreementDocUrl: input.agreementDocUrl ?? null,
         status: 'PENDING',

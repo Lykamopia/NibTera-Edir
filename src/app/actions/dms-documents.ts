@@ -9,6 +9,7 @@ import '@/lib/approval-modules';
 import { writeAudit } from '@/lib/audit';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
+import { claimUpload } from '@/lib/uploads';
 import { dateWhere, type DateRangeParam } from '@/lib/date-range';
 import { zId, zText, zOptionalText, zUploadPath, zOptionalUploadPath, zComment, zRequiredComment, zSearch, zFilter, zDateRange, parseArgs } from '@/lib/validation';
 
@@ -40,7 +41,7 @@ const createSchema = z.object({
   tags: zOptionalText('Tags', { max: 300 }),
   purpose: zOptionalText('Purpose', { max: 1000, multiline: true }),
   fileUrl: zUploadPath,
-  fileName: zText('File name', { min: 1, max: 255 }),
+  fileName: zOptionalText('File name', { max: 255 }), // ignored — the server's upload record names the file
   visibility: z.enum(['staff', 'committee', 'all']).default('staff'),
 });
 
@@ -51,11 +52,14 @@ export async function createDmsDocument(input: z.infer<typeof createSchema>) {
     await assertPermission(actor, ['upload_document', 'super_admin']);
     const edirId = await resolveEdirId(actor);
     const data = createSchema.parse(input);
+    // The file must be one this user uploaded; its name and type come from the
+    // server's upload record — the client-sent fileName is ignored.
+    const file = (await claimUpload(actor.id, data.fileUrl, { kinds: ['documents'] }))!;
 
     const doc = await prisma.dmsDocument.create({
       data: {
         edirId, title: data.title, category: data.category, tags: data.tags || null, purpose: data.purpose || null,
-        fileUrl: data.fileUrl, fileName: data.fileName, fileType: fileTypeOf(data.fileName),
+        fileUrl: file.path, fileName: file.name, fileType: file.fileType,
         status: 'PENDING', visibility: data.visibility, pendingAction: 'upload',
         uploadedById: actor.id,
       },
@@ -107,6 +111,19 @@ export async function submitDocumentAction(input: z.infer<typeof actionSchema>) 
     if (ids && !ids.includes(doc.edirId)) return { success: false as const, error: 'Outside your scope.' };
     if (doc.pendingAction) return { success: false as const, error: 'This document already has a pending action awaiting approval.' };
     if (doc.status !== 'APPROVED' && data.action !== 'delete') return { success: false as const, error: 'Only approved documents can be modified.' };
+
+    // A replacement file must be the actor's own upload; its name/type are the
+    // server's, never the client's. Without a new file, name/type stay as-is.
+    if (data.changes) {
+      delete data.changes.fileName;
+      delete data.changes.fileType;
+      if (data.changes.fileUrl && data.changes.fileUrl !== doc.fileUrl) {
+        const file = (await claimUpload(actor.id, data.changes.fileUrl, { kinds: ['documents'] }))!;
+        Object.assign(data.changes, { fileUrl: file.path, fileName: file.name, fileType: file.fileType });
+      } else {
+        delete data.changes.fileUrl;
+      }
+    }
 
     await prisma.dmsDocument.update({
       where: { id: doc.id },

@@ -10,6 +10,7 @@ import { submitForApproval } from '@/lib/approval-engine';
 import '@/lib/approval-modules';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
+import { claimUploads } from '@/lib/uploads';
 import { dateWhere, type DateRangeParam } from '@/lib/date-range';
 import { zArray, zId, zOptionalId, zText, zOptionalText, zOptionalName, zOptionalPhone, zOptionalPastDateString, zOptionalDateString, zInt, zUploadPath, zFilter, zDateRange } from '@/lib/validation';
 import { resolveOwnMembership } from '@/lib/membership-policy';
@@ -77,6 +78,8 @@ export async function submitMemberRequest(input: z.infer<typeof submitSchema>) {
     if (data.type === 'EMERGENCY' && member.status !== 'ACTIVE') {
       return { success: false as const, error: 'Only active members can submit an emergency request.' };
     }
+    // Attachments must be files this member uploaded; names/types are the server's.
+    const files = await claimUploads(actor.id, data.attachments ?? [], { kinds: ['documents'] });
 
     const request = await prisma.memberRequest.create({
       data: {
@@ -95,8 +98,7 @@ export async function submitMemberRequest(input: z.infer<typeof submitSchema>) {
     //  • the Documents page (DMS storage),
     //  • the Approvals center (DOCUMENT_ACTION request awaiting a checker), and
     //  • the member's own "My Documents" tab (uploadedById = the member's user).
-    for (const url of data.attachments ?? []) {
-      const fileName = url.split('/').pop() || 'Document';
+    for (const { path: url, name: fileName } of files) {
       const doc = await prisma.dmsDocument.create({
         data: {
           edirId,

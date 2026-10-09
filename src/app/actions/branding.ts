@@ -6,6 +6,7 @@ import { requireActor, getActor, resolveEdirId } from '@/lib/tenant-scope';
 import { writeAudit } from '@/lib/audit';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
+import { claimUpload } from '@/lib/uploads';
 import { zOptionalUploadPath } from '@/lib/validation';
 import { submitForApproval } from '@/lib/approval-engine';
 import '@/lib/approval-modules';
@@ -33,6 +34,8 @@ export async function setEdirLogo(input: z.infer<typeof logoSchema>) {
     const edir = await prisma.edir.findUnique({ where: { id: edirId }, select: { name: true, logoUrl: true } });
     if (!edir) return { success: false as const, error: 'Edir not found.' };
     if ((edir.logoUrl ?? null) === (data.logoUrl ?? null)) return { success: true as const };
+    // A new logo must be a logo this user uploaded.
+    await claimUpload(actor.id, data.logoUrl, { kinds: ['logos'] });
 
     const mustApprove = !actor.isSuperAdmin && actor.orgScope !== 'HEAD_OFFICE';
     if (mustApprove) {

@@ -8,7 +8,7 @@ import prisma from '@/lib/prisma';
 import type { LoggedInUser } from '@/lib/types';
 import { LogSeverity } from '@/lib/types';
 import { logSecurityEvent, SecurityEvent } from '@/lib/security-logger';
-import { decryptBuffer, isAuthenticatedFormat, legacyCbcAllowed } from '@/lib/encryption';
+import { decryptBuffer, decryptFile, isAuthenticatedFormat, isEncryptedFile, legacyCbcAllowed } from '@/lib/encryption';
 import { detectFileType } from '@/lib/file-validation';
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
@@ -158,6 +158,12 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ path
         const sameTenant = !!att?.version.edirId && att.version.edirId === (user as any).edirId;
         if (isSuper || (canView && sameTenant)) isAuthorized = true;
     }
+    // The uploader may always preview their own document/rules file — e.g. right
+    // after uploading, before it is attached to any record.
+    if (!isAuthorized && (fileType === 'documents' || fileType === 'rules')) {
+        const own = await prisma.upload.findUnique({ where: { path: dbPath }, select: { ownerId: true } });
+        if (own?.ownerId && own.ownerId === user.id) isAuthorized = true;
+    }
     // --- End Authorization Check ---
 
     if (!isAuthorized) {
@@ -205,8 +211,30 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ path
             }
         }
 
+        // Documents / rules attachments are encrypted with DATA_ENCRYPTION_KEY
+        // (v2 format). A file without that header is one stored before at-rest
+        // encryption existed: serve it only if its bytes really are the type its
+        // (content-derived) extension says — never raw ciphertext or junk.
+        if (fileType === 'documents' || fileType === 'rules') {
+            if (isEncryptedFile(fileBuffer)) {
+                try {
+                    fileBuffer = decryptFile(fileBuffer);
+                } catch (decryptError) {
+                    await logSecurityEvent({
+                        event: SecurityEvent.FILE_INTEGRITY_FAILURE,
+                        severity: LogSeverity.CRITICAL,
+                        actor: user,
+                        details: `Encrypted file '${dbPath}' failed authentication and was not served: ${decryptError instanceof Error ? decryptError.message : String(decryptError)}`,
+                    });
+                    return new NextResponse('This file could not be verified and was not served.', { status: 422 });
+                }
+            } else if (detectFileType(fileBuffer)?.mime !== mime.lookup(absolutePath)) {
+                return new NextResponse('This file could not be verified and was not served.', { status: 422 });
+            }
+        }
+
         const contentType = mime.lookup(absolutePath) || 'application/octet-stream';
-        
+
         const isSignaturePreview = fileType === 'signatures';
         const isProfilePreview = fileType === 'profile';
 
@@ -232,6 +260,10 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ path
         const disposition = 'inline';
         headers.set('Content-Disposition', `${disposition}; filename="${fileNameParts.join('')}"`);
 
+        if (fileType === 'documents' || fileType === 'rules') {
+            // Decrypted personal documents must not linger in shared/browser caches.
+            headers.set('Cache-Control', 'private, no-store');
+        }
         if (fileType === 'signatures') {
             headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
             headers.set('Pragma', 'no-cache');

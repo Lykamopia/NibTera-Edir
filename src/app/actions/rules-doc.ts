@@ -10,6 +10,7 @@ import '@/lib/approval-modules';
 import { sanitizeHtml, htmlToText } from '@/lib/sanitize-html';
 import { revalidatePath } from 'next/cache';
 import { failure } from '@/lib/action-result';
+import { claimUploads } from '@/lib/uploads';
 import { zId, zText, zUploadPath, zSearch } from '@/lib/validation';
 
 const OPEN: Prisma.ApprovalRequestWhereInput['status'] = { in: ['PENDING', 'RETURNED'] };
@@ -244,8 +245,10 @@ export async function addRulesAttachment(versionId: string, input: z.infer<typeo
     const res = await loadEditableDraft(actor, versionId);
     if ('error' in res) return { success: false as const, error: res.error };
     const data = attachmentSchema.parse(input);
-    await prisma.rulesAttachment.create({ data: { versionId, name: data.name, url: data.url } });
-    await writeAudit({ edirId, userId: actor.id, action: 'RULES_ATTACHMENT_ADDED', targetType: 'RulesVersion', targetId: versionId, details: data.name });
+    // Must be the actor's own rules upload; the stored name is the server's.
+    const [file] = await claimUploads(actor.id, [data.url], { kinds: ['rules'] });
+    await prisma.rulesAttachment.create({ data: { versionId, name: file.name, url: file.path } });
+    await writeAudit({ edirId, userId: actor.id, action: 'RULES_ATTACHMENT_ADDED', targetType: 'RulesVersion', targetId: versionId, details: file.name });
     revalidatePath('/dashboard/rules');
     return { success: true as const };
   } catch (error) {
