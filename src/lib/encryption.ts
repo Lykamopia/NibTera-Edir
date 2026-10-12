@@ -17,13 +17,9 @@ import crypto from 'crypto';
  * - The header is bound as additional authenticated data (AAD), so the version
  *   byte cannot be swapped without failing verification.
  * - The GCM key is derived from SIGNATURE_ENCRYPTION_KEY with HKDF-SHA-256 over
- *   the FULL secret (the legacy scheme used only its first 32 characters).
+ *   the FULL secret.
  *
- * Legacy format — AES-256-CBC with no MAC (IV | ciphertext), written by earlier
- * releases. It is REFUSED by default. The only way to read it is the one-off
- * re-encryption `npx tsx scripts/migrate-signature-encryption.ts --apply`,
- * which enables legacy reads for its own process and rewrites every file as
- * GCM. (ENCRYPTION_ALLOW_LEGACY_CBC=true exists only as an emergency override.)
+ * Anything not in this format is refused — there is no other cipher or mode.
  */
 
 const MAGIC = Buffer.from([0x4e, 0x54, 0x45, 0x01]); // "NTE" + format version 1
@@ -31,9 +27,6 @@ const GCM_ALGORITHM = 'aes-256-gcm';
 const GCM_IV_LENGTH = 12;
 const GCM_TAG_LENGTH = 16;
 const HEADER_LENGTH = MAGIC.length + GCM_IV_LENGTH + GCM_TAG_LENGTH;
-
-const LEGACY_CBC_ALGORITHM = 'aes-256-cbc';
-const LEGACY_CBC_IV_LENGTH = 16;
 
 const HKDF_SALT = 'nibtera-edir/at-rest-encryption';
 const HKDF_INFO = 'signature-files/aes-256-gcm/v1';
@@ -73,22 +66,6 @@ function getGcmKey(): Buffer {
   return cachedGcmKey.key;
 }
 
-/** Key derivation used by the legacy CBC format (kept only to read old files). */
-function getLegacyCbcKey(): Buffer {
-  return Buffer.from(getSecret().slice(0, 32));
-}
-
-/**
- * Whether legacy (unauthenticated) CBC ciphertext may still be read.
- *
- * Secure by default: CBC without a MAC is REFUSED unless an operator explicitly
- * sets ENCRYPTION_ALLOW_LEGACY_CBC=true (only the migration script does so, for
- * its own process). Nothing in the app ever encrypts with CBC.
- */
-export function legacyCbcAllowed(): boolean {
-  return (process.env.ENCRYPTION_ALLOW_LEGACY_CBC ?? 'false').trim().toLowerCase() === 'true';
-}
-
 /** True when `buffer` is in the current authenticated (GCM v1) format. */
 export function isAuthenticatedFormat(buffer: Buffer): boolean {
   return buffer.length >= HEADER_LENGTH && buffer.subarray(0, MAGIC.length).equals(MAGIC);
@@ -121,42 +98,14 @@ function decryptGcm(buffer: Buffer): Buffer {
   }
 }
 
-function decryptLegacyCbc(buffer: Buffer): Buffer {
-  if (buffer.length < LEGACY_CBC_IV_LENGTH * 2 || (buffer.length - LEGACY_CBC_IV_LENGTH) % 16 !== 0) {
-    throw new DecryptionError('Not a valid encrypted file.');
-  }
-  const iv = buffer.subarray(0, LEGACY_CBC_IV_LENGTH);
-  const decipher = crypto.createDecipheriv(LEGACY_CBC_ALGORITHM, getLegacyCbcKey(), iv);
-  try {
-    return Buffer.concat([decipher.update(buffer.subarray(LEGACY_CBC_IV_LENGTH)), decipher.final()]);
-  } catch {
-    throw new DecryptionError('Not a valid encrypted file.');
-  }
-}
-
-export interface DecryptResult {
-  data: Buffer;
-  /** true when the data came from the unauthenticated legacy CBC format. */
-  legacy: boolean;
-}
-
 /**
- * Decrypts and authenticates. GCM data is returned only after its tag verifies.
- * Legacy CBC data is accepted only while legacy reads are enabled.
- * Throws DecryptionError otherwise — callers must NOT fall back to serving the
- * raw bytes.
+ * Decrypts and authenticates. Data is returned only after its GCM tag verifies;
+ * anything else throws DecryptionError — callers must NOT fall back to serving
+ * the raw bytes.
  */
-export function decryptBufferDetailed(buffer: Buffer): DecryptResult {
-  if (isAuthenticatedFormat(buffer)) return { data: decryptGcm(buffer), legacy: false };
-  if (!legacyCbcAllowed()) {
-    throw new DecryptionError('Unauthenticated (legacy CBC) ciphertext is not accepted.');
-  }
-  return { data: decryptLegacyCbc(buffer), legacy: true };
-}
-
-/** Decrypts and authenticates; see decryptBufferDetailed. */
 export function decryptBuffer(buffer: Buffer): Buffer {
-  return decryptBufferDetailed(buffer).data;
+  if (!isAuthenticatedFormat(buffer)) throw new DecryptionError('Not a valid encrypted file.');
+  return decryptGcm(buffer);
 }
 
 // ─── Application data encryption (uploaded documents + sensitive DB fields) ───

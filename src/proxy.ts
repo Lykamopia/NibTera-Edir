@@ -214,8 +214,8 @@ const authMiddleware = withAuth(
 );
 
 // Public paths (no NextAuth session): embedded Super App routes, bank/cron
-// webhooks and token-link auth pages. Same prefixes the matcher used to exclude.
-const PUBLIC_PATH = /^\/(?:api\/nib-callback|api\/cron|login|forgot-password|set-password|verify-email|portal|pay)/;
+// webhooks, the secret-protected health probe and token-link auth pages.
+const PUBLIC_PATH = /^\/(?:api\/nib-callback|api\/cron|api\/health$|login|forgot-password|set-password|verify-email|portal|pay)/;
 
 export default function proxy(req: NextRequest, event: NextFetchEvent) {
   // ── Host / X-Forwarded-Host allowlist ───────────────────────────────────────

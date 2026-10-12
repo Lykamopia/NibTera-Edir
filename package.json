@@ -7,7 +7,7 @@
     "dev": "next dev --turbopack -p 3020",
     "prebuild": "node scripts/strip-framework-version.cjs",
     "build": "next build",
-    "start": "next start -p 3020",
+    "start": "node --max-old-space-size=1536 node_modules/next/dist/bin/next start -p 3020",
     "cron": "node scripts/cron-service.cjs",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit"

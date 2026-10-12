@@ -5,3 +5,16 @@ runConfig:
   # Increase this value if you'd like to automatically spin up
   # more instances in response to increased traffic.
   maxInstances: 1
+  # Resource limits per instance (DoS hardening): bounded CPU and memory, and a
+  # cap on concurrent requests so one instance can't be driven into exhaustion.
+  cpu: 1
+  memoryMiB: 2048
+  concurrency: 80
+
+env:
+  # Keep the V8 heap below the container memory so the process fails fast (and
+  # is restarted) instead of the container being OOM-killed mid-request.
+  - variable: NODE_OPTIONS
+    value: --max-old-space-size=1536
+    availability:
+      - RUNTIME

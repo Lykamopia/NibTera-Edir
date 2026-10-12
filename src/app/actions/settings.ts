@@ -5,6 +5,7 @@ import { readdir, stat, mkdir, writeFile, unlink } from 'fs/promises';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { UPLOAD_POLICIES, buildStoredFilename, validateUpload } from '@/lib/file-validation';
+import { CapacityError, assertUploadCapacity, noteUploadWritten } from '@/lib/resource-limits';
 import { LogSeverity } from '@/lib/types';
 import { logSecurityEvent, SecurityEvent } from '@/lib/security-logger';
 import { revalidatePath } from 'next/cache';
@@ -107,6 +108,14 @@ export async function uploadBackgroundImage(formData: FormData): Promise<{ succe
     // Filename sanitization — the extension comes from the verified content.
     const sanitizedName = buildStoredFilename(`ad_${randomUUID()}`, file.name, validation.type);
 
+    // Disk limits (staff-only action, so no per-user daily quota).
+    try {
+        await assertUploadCapacity(buffer.length, null);
+    } catch (e) {
+        if (e instanceof CapacityError) return { success: false, error: e.message };
+        throw e;
+    }
+
     try {
         const bgDir = join(process.cwd(), 'uploads', 'bg');
         
@@ -124,7 +133,8 @@ export async function uploadBackgroundImage(formData: FormData): Promise<{ succe
         // Write the exact bytes that were validated above — never re-read the
         // stream, so what is inspected is what lands on disk.
         await writeFile(absolutePath, buffer);
-        
+        noteUploadWritten(buffer.length);
+
         return { 
             success: true, 
             url: `/uploads/bg/${sanitizedName}` 

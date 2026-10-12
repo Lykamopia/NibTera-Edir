@@ -8,5 +8,8 @@ export async function register() {
   if (process.env.NEXT_RUNTIME === 'nodejs' && process.env.NODE_ENV === 'production') {
     const { installUpgradeGuard } = await import('./lib/upgrade-guard');
     installUpgradeGuard();
+    // Warn in the logs when memory, CPU load or disk cross their thresholds.
+    const { startResourceMonitor } = await import('./lib/resource-limits');
+    startResourceMonitor();
   }
 }

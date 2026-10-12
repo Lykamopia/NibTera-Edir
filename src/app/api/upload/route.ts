@@ -19,15 +19,7 @@ import {
   isApiUploadKind,
   validateUpload,
 } from '@/lib/file-validation';
-
-// Set a body size limit for file uploads to 10MB
-export const config = {
-    api: {
-        bodyParser: {
-            sizeLimit: '10mb',
-        },
-    },
-};
+import { CapacityError, assertUploadCapacity, noteUploadWritten } from '@/lib/resource-limits';
 
 /** 403 response when the request lacks a valid session-bound CSRF token, else null. */
 async function csrfRejection(req: NextRequest, user: { id: string; name?: string | null }): Promise<NextResponse | null> {
@@ -137,6 +129,22 @@ export async function POST(req: NextRequest) {
     buffer = encryptFile(buffer);
   }
 
+  // Disk limits: total store cap, free-space floor, per-user daily allowance.
+  try {
+    await assertUploadCapacity(buffer.length, sessionUser.id);
+  } catch (e) {
+    if (e instanceof CapacityError) {
+      await logSecurityEvent({
+        event: SecurityEvent.FILE_UPLOAD_REJECTED,
+        severity: LogSeverity.WARN,
+        actor: { id: sessionUser.id, name: sessionUser.name ?? null },
+        details: `Rejected upload '${file.name}' (category=${type}, ${file.size} bytes): ${e.message}`,
+      });
+      return NextResponse.json({ success: false, error: e.message }, { status: e.status });
+    }
+    throw e;
+  }
+
   // Define the upload directory path at the root level
   const uploadDir = join(process.cwd(), 'uploads', type);
 
@@ -162,6 +170,7 @@ export async function POST(req: NextRequest) {
   // Write the file to the server
   try {
     await writeFile(path, buffer);
+    noteUploadWritten(buffer.length);
   } catch (error) {
     console.error('Error writing file:', error);
     return NextResponse.json({ success: false, error: 'Failed to save file' }, { status: 500 });
