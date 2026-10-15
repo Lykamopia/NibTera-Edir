@@ -29,7 +29,7 @@ import {
 // "male" / "FEMALE" → "Male" / "Female" so imports and legacy values normalize.
 const zGender = z.preprocess(
   v => (typeof v === 'string' && v.trim() ? v.trim().charAt(0).toUpperCase() + v.trim().slice(1).toLowerCase() : null),
-  z.enum(['Male', 'Female', 'Other'], { errorMap: () => ({ message: 'Gender must be Male, Female or Other.' }) }).nullable().optional(),
+  z.enum(['Male', 'Female', 'Other'], { error: 'Gender must be Male, Female or Other.' }).nullable().optional(),
 );
 const zNationalId = z.preprocess(
   v => (typeof v === 'string' && v.trim() === '' ? null : v),
@@ -1022,7 +1022,7 @@ export async function bulkImportMembers(input: { edirId?: string | null; rows: B
       edirId: zOptionalId,
       // Every cell is coerced to a string, then each row is validated below with
       // the same field rules as createMember.
-      rows: zArray(z.record(z.unknown()), { max: 500, maxMessage: 'Import is limited to 500 rows at a time.' })
+      rows: zArray(z.record(z.string(), z.unknown()), { max: 500, maxMessage: 'Import is limited to 500 rows at a time.' })
         .transform(rows => rows.map(r => Object.fromEntries(Object.entries(r).map(([k, v]) => [k, v == null ? '' : String(v)])))),
     }).parse(input) as typeof input;
     const actor = await getActor();

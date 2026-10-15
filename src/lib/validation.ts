@@ -46,8 +46,15 @@ const MARKUP = /[<>]/;
 /** Treat '' / whitespace-only as "not provided" for optional fields. */
 const emptyToNull = (v: unknown) => (typeof v === 'string' && v.trim() === '' ? null : v);
 
+/**
+ * zod v3 `invalid_type_error` equivalent: use `message` for a wrong-typed value
+ * but keep zod's default for a missing one (src/lib/errors.ts prefixes that
+ * with the field name).
+ */
+const typeError = (message: string) => (iss: { input?: unknown }) => (iss.input === undefined ? undefined : message);
+
 /** Database identifier (cuid / uuid): opaque, URL-safe, bounded. */
-export const zId = z.string({ invalid_type_error: 'Invalid identifier.' })
+export const zId = z.string({ error: typeError('Invalid identifier.') })
   .trim()
   .min(1, 'An identifier is required.')
   .max(64, 'Invalid identifier.')
@@ -59,10 +66,11 @@ export const zOptionalId = z.preprocess(emptyToNull, zId.nullable().optional());
 /**
  * Length-bounded array. ALWAYS use this instead of `z.array(...)` for input.
  *
- * zod (SNYK-JS-ZOD-20510278, no fixed version) validates EVERY element before
- * applying `.max()`, collecting one issue per bad element — a 2MB request of a
- * million bad items allocates ~300MB. Here the length is checked first and, if
- * it is over the limit, the element schema never runs.
+ * zod < 4.6.6 (SNYK-JS-ZOD-20510278) validated EVERY element before applying
+ * `.max()`, collecting one issue per bad element — a 2MB request of a million
+ * bad items allocated ~300MB. We're on a fixed zod now, but keep this as
+ * defense in depth: the length is checked first and, if it is over the limit,
+ * the element schema never runs.
  */
 export function zArray<T extends z.ZodTypeAny>(
   item: T,
@@ -86,13 +94,13 @@ type TextOpts = { min?: number; max: number; multiline?: boolean; allowMarkup?: 
  * that is never meant to carry markup.
  */
 export function zText(label: string, { min = 0, max, multiline = false, allowMarkup = false }: TextOpts) {
-  let s = z.string({ invalid_type_error: `${label} must be text.` })
+  let s = z.string({ error: typeError(`${label} must be text.`) })
     .trim()
     .max(max, `${label} must be at most ${max} characters.`);
   if (min > 0) s = s.min(min, min === 1 ? `${label} is required.` : `${label} must be at least ${min} characters.`);
   s = s.refine(v => !(multiline ? CONTROL_CHARS : LINE_BREAKS_OR_CONTROL).test(v), `${label} contains invalid characters.`) as any;
   if (!allowMarkup) s = s.refine(v => !MARKUP.test(v), `${label} must not contain < or > characters.`) as any;
-  return s as unknown as z.ZodEffects<z.ZodString, string, string>;
+  return s as unknown as z.ZodType<string, string>;
 }
 
 /** Optional plain text: '' → null. */
@@ -117,7 +125,7 @@ export function zCode(label = 'Code', max = 32) {
   return zText(label, { min: 1, max }).refine(v => /^[\p{L}\p{N}_./-]+$/u.test(v), `${label} may only contain letters, digits and - _ . /`);
 }
 
-export const zEmail = z.string({ invalid_type_error: 'Email must be text.' })
+export const zEmail = z.string({ error: typeError('Email must be text.') })
   .trim()
   .toLowerCase()
   .max(254, 'Email is too long.')
@@ -125,7 +133,7 @@ export const zEmail = z.string({ invalid_type_error: 'Email must be text.' })
 export const zOptionalEmail = z.preprocess(emptyToNull, zEmail.nullable().optional());
 
 /** Bank account number: digits only, 6–20 long (no letters, spaces or symbols). */
-export const zAccountNumber = z.string({ invalid_type_error: 'Account number must be text.' })
+export const zAccountNumber = z.string({ error: typeError('Account number must be text.') })
   .trim()
   .max(20, 'Account number must be at most 20 digits.')
   .regex(/^[0-9]+$/, 'Account number may contain digits only.')
@@ -134,7 +142,7 @@ export const zAccountNumber = z.string({ invalid_type_error: 'Account number mus
 export const zOptionalAccountNumber = z.preprocess(emptyToNull, zAccountNumber.nullable().optional());
 
 /** Ethiopian mobile (09…, 07…, +2519…, 2517…) — stored/normalized by the caller. */
-export const zEthiopianPhone = z.string({ invalid_type_error: 'Phone must be text.' })
+export const zEthiopianPhone = z.string({ error: typeError('Phone must be text.') })
   .trim()
   .max(20, 'Phone number is too long.')
   .refine(v => /^\+?[0-9 ()-]+$/.test(v), 'Phone number may only contain digits, spaces, + ( ) -')
@@ -142,7 +150,7 @@ export const zEthiopianPhone = z.string({ invalid_type_error: 'Phone must be tex
 export const zOptionalEthiopianPhone = z.preprocess(emptyToNull, zEthiopianPhone.nullable().optional());
 
 /** Any phone (e.g. a relative abroad): 7–15 digits, formatting chars allowed. */
-export const zPhone = z.string({ invalid_type_error: 'Phone must be text.' })
+export const zPhone = z.string({ error: typeError('Phone must be text.') })
   .trim()
   .max(20, 'Phone number is too long.')
   .refine(v => /^\+?[0-9 ()-]+$/.test(v), 'Phone number may only contain digits, spaces, + ( ) -')
@@ -151,7 +159,7 @@ export const zOptionalPhone = z.preprocess(emptyToNull, zPhone.nullable().option
 
 /** Money: finite, non-negative, ≤ 1 billion, at most 2 decimals. */
 export function zMoney(label = 'Amount', max = 1_000_000_000) {
-  return z.coerce.number({ invalid_type_error: `${label} must be a number.` })
+  return z.coerce.number({ error: typeError(`${label} must be a number.`) })
     .finite(`${label} must be a number.`)
     .min(0, `${label} cannot be negative.`)
     .max(max, `${label} is too large.`)
@@ -161,7 +169,7 @@ export function zMoney(label = 'Amount', max = 1_000_000_000) {
 
 /** Integer in [min, max]. */
 export function zInt(label: string, min: number, max: number) {
-  return z.coerce.number({ invalid_type_error: `${label} must be a number.` })
+  return z.coerce.number({ error: typeError(`${label} must be a number.`) })
     .int(`${label} must be a whole number.`)
     .min(min, `${label} must be at least ${min}.`)
     .max(max, `${label} must be at most ${max}.`);
@@ -169,11 +177,11 @@ export function zInt(label: string, min: number, max: number) {
 
 /** Percentage 0–100 (up to 2 decimals). */
 export const zPercent = (label = 'Percentage') =>
-  z.coerce.number({ invalid_type_error: `${label} must be a number.` }).finite().min(0, `${label} cannot be negative.`).max(100, `${label} cannot exceed 100.`);
+  z.coerce.number({ error: typeError(`${label} must be a number.`) }).finite().min(0, `${label} cannot be negative.`).max(100, `${label} cannot exceed 100.`);
 
 /** ISO-ish date/datetime string that parses to a real date between 1900 and 2100. */
 export function zDateString(label = 'Date') {
-  return z.string({ invalid_type_error: `${label} must be a date.` })
+  return z.string({ error: typeError(`${label} must be a date.`) })
     .trim()
     .max(40, `${label} is invalid.`)
     .refine(v => { const d = new Date(v); const y = d.getFullYear(); return !Number.isNaN(d.getTime()) && y >= 1900 && y <= 2100; }, `${label} is not a valid date.`);
@@ -193,7 +201,7 @@ export const zOptionalPastDateString = (label = 'Date') => z.preprocess(emptyToN
  * <img> or <iframe> source.
  */
 const UPLOAD_PATH = /^\/uploads\/[A-Za-z0-9_-]+\/[A-Za-z0-9._-]+$/;
-export const zUploadPath = z.string({ invalid_type_error: 'Invalid file reference.' })
+export const zUploadPath = z.string({ error: typeError('Invalid file reference.') })
   .trim()
   .min(1, 'A file is required.')
   .max(300, 'Invalid file reference.')

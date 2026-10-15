@@ -32,7 +32,7 @@ const passwordSchema = z
   .string()
   .superRefine((p, ctx) => {
     const failed = PASSWORD_REQUIREMENTS.find((r) => !r.test(p));
-    if (failed) ctx.addIssue({ code: z.ZodIssueCode.custom, message: failed.error });
+    if (failed) ctx.addIssue({ code: 'custom', message: failed.error });
   });
 
 const setPasswordSchema = z.object({
